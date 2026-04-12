@@ -20,7 +20,8 @@ export default function App() {
         </div>
       </header>
       <main className="app-main">
-        {activeTab === 'Stats' ? <StatsView /> : <ChatView />}
+        <div hidden={activeTab !== 'Stats'}><StatsView /></div>
+        <div hidden={activeTab !== 'Chat'}><ChatView /></div>
       </main>
     </div>
   )
