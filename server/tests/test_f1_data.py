@@ -571,3 +571,161 @@ def test_get_lap_telemetry():
     assert 'brake' in first
     assert 'gear' in first
     assert 'drs_open' in first
+
+
+# ─── Telemetry comparison + circuit context tests ───────────
+
+
+def _make_tel_df(n_points=6, circuit_length_m=500,
+                 base_speed=150.0, speed_boost=0.0):
+    distances = [i * circuit_length_m / (n_points - 1) for i in range(n_points)]
+    return pd.DataFrame({
+        'Distance': distances,
+        'Speed': [base_speed + speed_boost + i * 10 for i in range(n_points)],
+        'Throttle': [50.0 + i * 5 for i in range(n_points)],
+        'Brake': [i == 0 for i in range(n_points)],
+        'nGear': [4 + min(i, 4) for i in range(n_points)],
+        'DRS': [12 if i > 3 else 0 for i in range(n_points)],
+    })
+
+
+def test_get_telemetry_comparison():
+    nor_lap_series = _make_mock_fastest_lap("NOR")
+    lec_lap_series = _make_mock_fastest_lap("LEC", "Ferrari")
+
+    tel_nor = _make_tel_df(base_speed=150.0, speed_boost=5.0)
+    tel_lec = _make_tel_df(base_speed=150.0, speed_boost=0.0)
+
+    mock_lap_nor = MagicMock()
+    mock_lap_nor.__getitem__.side_effect = lambda k: nor_lap_series[k]
+    mock_lap_nor.get.side_effect = lambda k, d=None: nor_lap_series.get(k, d)
+    mock_lap_nor.get_telemetry.return_value.add_distance.return_value = tel_nor
+
+    mock_lap_lec = MagicMock()
+    mock_lap_lec.__getitem__.side_effect = lambda k: lec_lap_series[k]
+    mock_lap_lec.get.side_effect = lambda k, d=None: lec_lap_series.get(k, d)
+    mock_lap_lec.get_telemetry.return_value.add_distance.return_value = tel_lec
+
+    def pick_driver_tel(code):
+        mock_laps = MagicMock()
+        mock_laps.empty = False
+        mock_laps.pick_fastest.return_value = mock_lap_nor if code.upper() == "NOR" else mock_lap_lec
+        return mock_laps
+
+    mock_session = MagicMock()
+    mock_session.event = {'EventName': 'Monaco Grand Prix'}
+    mock_session.laps.pick_driver.side_effect = pick_driver_tel
+
+    with patch('f1_data.fastf1.get_session', return_value=mock_session):
+        import f1_data
+        result = f1_data.get_telemetry_comparison(8, 'Q', 'NOR', 'LEC')
+
+    assert result['driver_a'] == 'NOR'
+    assert result['driver_b'] == 'LEC'
+    assert result['circuit_length_m'] == 500
+    assert len(result['comparison']) > 0
+    first = result['comparison'][0]
+    assert first['delta_speed'] == pytest.approx(5.0, abs=0.5)
+    assert 'brake_a' in first
+    assert 'drs_a' in first
+    assert 'gear_a' in first
+
+
+def test_get_telemetry_comparison_driver_not_found():
+    mock_session = MagicMock()
+    mock_session.event = {'EventName': 'Monaco Grand Prix'}
+
+    def pick_empty(code):
+        m = MagicMock()
+        m.empty = True
+        return m
+
+    mock_session.laps.pick_driver.side_effect = pick_empty
+
+    with patch('f1_data.fastf1.get_session', return_value=mock_session):
+        import f1_data
+        with pytest.raises(ValueError, match="No data"):
+            f1_data.get_telemetry_comparison(8, 'Q', 'NOR', 'ZZZ')
+
+
+def test_get_circuit_corners():
+    mock_corners_df = pd.DataFrame({
+        'Number': [1, 2, 3],
+        'Letter': ['', 'A', ''],
+        'X': [100.0, 200.0, 300.0],
+        'Y': [50.0, 60.0, 70.0],
+        'Angle': [45.0, 90.0, 135.0],
+        'Distance': [150.5, 800.2, 2200.7],
+    })
+    mock_circuit_info = MagicMock()
+    mock_circuit_info.corners = mock_corners_df
+
+    with patch('f1_data.fastf1.get_circuit_info', return_value=mock_circuit_info):
+        import f1_data
+        result = f1_data.get_circuit_corners(8)
+
+    assert len(result) == 3
+    assert result[0]['number'] == 1
+    assert result[0]['distance_m'] == 151
+    assert result[0]['label'] is None
+    assert result[1]['label'] == 'A'
+    assert result[2]['distance_m'] == 2201
+
+
+def test_get_historical_circuit_performance():
+    def _circuit_lookup():
+        m = MagicMock()
+        m.raise_for_status.return_value = None
+        m.json.return_value = {
+            "MRData": {"RaceTable": {"Races": [{
+                "raceName": "Monaco Grand Prix",
+                "Circuit": {"circuitId": "monaco", "circuitName": "Circuit de Monaco"},
+                "Results": [],
+            }]}}
+        }
+        return m
+
+    def _quali_resp():
+        m = MagicMock()
+        m.raise_for_status.return_value = None
+        m.json.return_value = {
+            "MRData": {"RaceTable": {"Races": [{"QualifyingResults": [{
+                "position": "1",
+                "Driver": {"driverId": "norris", "givenName": "Lando",
+                           "familyName": "Norris", "code": "NOR"},
+                "Constructor": {"name": "McLaren"},
+                "Q1": "1:10.000", "Q2": "1:09.500", "Q3": "1:09.100",
+            }]}]}}
+        }
+        return m
+
+    def _race_resp():
+        m = MagicMock()
+        m.raise_for_status.return_value = None
+        m.json.return_value = {
+            "MRData": {"RaceTable": {"Races": [{"Results": [{
+                "position": "1",
+                "Driver": {"driverId": "norris", "givenName": "Lando",
+                           "familyName": "Norris", "code": "NOR"},
+                "Constructor": {"name": "McLaren"},
+                "FastestLap": {"rank": "1"},
+            }]}]}}
+        }
+        return m
+
+    with patch('f1_data.requests.get', side_effect=[
+        _circuit_lookup(),
+        _quali_resp(), _race_resp(),
+        _quali_resp(), _race_resp(),
+    ]):
+        import f1_data
+        result = f1_data.get_historical_circuit_performance(8, years=[2024, 2025])
+
+    assert result['circuit_id'] == 'monaco'
+    assert result['circuit_name'] == 'Circuit de Monaco'
+    assert len(result['history']) == 2
+    assert result['history'][0]['year'] == 2024
+    assert result['history'][0]['qualifying_top5'][0]['code'] == 'NOR'
+    assert result['history'][0]['qualifying_top5'][0]['q3'] == '1:09.100'
+    assert result['history'][0]['race_top5'][0]['fastest_lap'] is True
+    assert result['history'][1]['year'] == 2025

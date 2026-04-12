@@ -481,3 +481,179 @@ def get_lap_telemetry(round_number: int, session_type: str,
         "circuit_length_m": int(total_dist),
         "telemetry": samples,
     }
+
+
+def get_telemetry_comparison(round_number: int, session_type: str,
+                              driver_a: str, driver_b: str,
+                              lap_number_a: int | None = None,
+                              lap_number_b: int | None = None) -> dict:
+    """
+    Overlay two drivers' telemetry traces aligned by distance.
+    Returns delta_speed (positive = driver_a faster) and delta_throttle at every 100m.
+    Use this to pinpoint exactly where and why one driver gains time over another.
+    """
+    session = fastf1.get_session(CURRENT_YEAR, round_number, session_type)
+    session.load(laps=True, telemetry=True, weather=False, messages=False)
+
+    def _get_lap(code: str, lap_num: int | None):
+        laps = session.laps.pick_driver(code.upper())
+        if laps.empty:
+            raise ValueError(f"No data for driver {code!r}")
+        if lap_num is not None:
+            matching = laps[laps['LapNumber'] == lap_num]
+            if matching.empty:
+                raise ValueError(f"Lap {lap_num} not found for {code!r}")
+            return matching.iloc[0]
+        return laps.pick_fastest()
+
+    lap_a = _get_lap(driver_a, lap_number_a)
+    lap_b = _get_lap(driver_b, lap_number_b)
+
+    tel_a = lap_a.get_telemetry().add_distance()
+    tel_b = lap_b.get_telemetry().add_distance()
+
+    total_dist = min(float(tel_a['Distance'].max()), float(tel_b['Distance'].max()))
+
+    INTERVAL_M = 100
+    samples = []
+    dist = 0.0
+    while dist <= total_dist:
+        idx_a = (tel_a['Distance'] - dist).abs().idxmin()
+        idx_b = (tel_b['Distance'] - dist).abs().idxmin()
+        row_a = tel_a.loc[idx_a]
+        row_b = tel_b.loc[idx_b]
+
+        spd_a = round(float(row_a['Speed']), 1)
+        spd_b = round(float(row_b['Speed']), 1)
+        thr_a = round(float(row_a['Throttle']), 1)
+        thr_b = round(float(row_b['Throttle']), 1)
+
+        samples.append({
+            "distance_m": int(dist),
+            "speed_a": spd_a,
+            "speed_b": spd_b,
+            "delta_speed": round(spd_a - spd_b, 1),
+            "throttle_a": thr_a,
+            "throttle_b": thr_b,
+            "delta_throttle": round(thr_a - thr_b, 1),
+            "brake_a": bool(row_a['Brake']),
+            "brake_b": bool(row_b['Brake']),
+            "gear_a": int(row_a['nGear']) if pd.notna(row_a['nGear']) else None,
+            "gear_b": int(row_b['nGear']) if pd.notna(row_b['nGear']) else None,
+            "drs_a": int(row_a['DRS']) >= 10 if pd.notna(row_a['DRS']) else False,
+            "drs_b": int(row_b['DRS']) >= 10 if pd.notna(row_b['DRS']) else False,
+        })
+        dist += INTERVAL_M
+
+    return {
+        "event": session.event['EventName'],
+        "session": session_type.upper(),
+        "driver_a": driver_a.upper(),
+        "driver_b": driver_b.upper(),
+        "lap_time_a": _fmt_td(lap_a['LapTime']),
+        "lap_time_b": _fmt_td(lap_b['LapTime']),
+        "lap_number_a": int(lap_a['LapNumber']),
+        "lap_number_b": int(lap_b['LapNumber']),
+        "circuit_length_m": int(total_dist),
+        "comparison": samples,
+    }
+
+
+def get_circuit_corners(round_number: int) -> list[dict]:
+    """
+    Corner positions (distance along track in metres) for a circuit.
+    Use alongside telemetry tools to map speed/brake differences to named corners.
+    """
+    circuit_info = fastf1.get_circuit_info(CURRENT_YEAR, round_number)
+    corners = []
+    for _, row in circuit_info.corners.iterrows():
+        raw_label = str(row.get('Letter', '')).strip()
+        corners.append({
+            "number": int(row['Number']),
+            "label": raw_label if raw_label else None,
+            "distance_m": int(float(row['Distance']) + 0.5),
+        })
+    return corners
+
+
+def get_historical_circuit_performance(round_number: int,
+                                        years: list[int] | None = None) -> dict:
+    """
+    Qualifying top-5 and race top-5 for the same circuit across multiple seasons.
+    Reveals which teams/drivers historically perform well or poorly at this venue.
+    Default years: [2023, 2024, 2025].
+    """
+    if years is None:
+        years = [2023, 2024, 2025]
+
+    resp = requests.get(
+        f"{JOLPICA_BASE}/{CURRENT_YEAR}/{round_number}/results.json?limit=1",
+        timeout=15,
+    )
+    resp.raise_for_status()
+    races = resp.json()["MRData"]["RaceTable"]["Races"]
+    if not races:
+        raise ValueError(f"Round {round_number} not found in {CURRENT_YEAR}")
+
+    circuit_id = races[0]["Circuit"]["circuitId"]
+    circuit_name = races[0]["Circuit"]["circuitName"]
+    race_name = races[0]["raceName"]
+
+    history = []
+    for year in years:
+        year_data: dict = {"year": year}
+
+        try:
+            r = requests.get(
+                f"{JOLPICA_BASE}/{year}/circuits/{circuit_id}/qualifying.json?limit=5",
+                timeout=15,
+            )
+            r.raise_for_status()
+            quali_races = r.json()["MRData"]["RaceTable"]["Races"]
+            if quali_races:
+                year_data["qualifying_top5"] = [
+                    {
+                        "position": int(q["position"]),
+                        "driver": f"{q['Driver']['givenName']} {q['Driver']['familyName']}",
+                        "code": q["Driver"].get("code", ""),
+                        "team": q["Constructor"]["name"],
+                        "q3": q.get("Q3") or q.get("Q2") or q.get("Q1", ""),
+                    }
+                    for q in quali_races[0].get("QualifyingResults", [])
+                ]
+            else:
+                year_data["qualifying_top5"] = None
+        except Exception:
+            year_data["qualifying_top5"] = None
+
+        try:
+            r = requests.get(
+                f"{JOLPICA_BASE}/{year}/circuits/{circuit_id}/results.json?limit=5",
+                timeout=15,
+            )
+            r.raise_for_status()
+            race_races = r.json()["MRData"]["RaceTable"]["Races"]
+            if race_races:
+                year_data["race_top5"] = [
+                    {
+                        "position": int(res["position"]) if res["position"].isdigit() else None,
+                        "driver": f"{res['Driver']['givenName']} {res['Driver']['familyName']}",
+                        "code": res["Driver"].get("code", ""),
+                        "team": res["Constructor"]["name"],
+                        "fastest_lap": res.get("FastestLap", {}).get("rank") == "1",
+                    }
+                    for res in race_races[0].get("Results", [])
+                ]
+            else:
+                year_data["race_top5"] = None
+        except Exception:
+            year_data["race_top5"] = None
+
+        history.append(year_data)
+
+    return {
+        "circuit_id": circuit_id,
+        "circuit_name": circuit_name,
+        "race_name": race_name,
+        "history": history,
+    }
