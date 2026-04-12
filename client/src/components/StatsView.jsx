@@ -21,7 +21,7 @@ export default function StatsView() {
         .catch(e => setError(e.message))
         .finally(() => setLoading(false))
     }
-  }, [mode])
+  }, [mode, circuits.length])
 
   const handleSearch = async (e) => {
     e.preventDefault()
@@ -89,6 +89,9 @@ export default function StatsView() {
 
       {mode === 'circuits' && !loading && circuits.length > 0 && (
         <CircuitList circuits={circuits} />
+      )}
+      {mode === 'circuits' && !loading && circuits.length === 0 && !error && (
+        <p className="loading-hint">No circuits found.</p>
       )}
 
       {mode === 'driver' && !driverStats && !error && !loading && (

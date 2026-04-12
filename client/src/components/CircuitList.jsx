@@ -2,11 +2,12 @@
 export default function CircuitList({ circuits }) {
   if (!circuits?.length) return null
   const today = new Date().toISOString().split('T')[0]
+  const year = circuits[0]?.date?.slice(0, 4) ?? new Date().getFullYear()
 
   return (
     <div>
       <p className="section-label" style={{ marginBottom: '1rem' }}>
-        2025 Season — {circuits.length} Rounds
+        {year} Season — {circuits.length} Rounds
       </p>
       <div className="circuit-grid">
         {circuits.map((c, i) => {

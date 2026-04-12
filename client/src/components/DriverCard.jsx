@@ -8,13 +8,15 @@ function useCountUp(value, duration = 750) {
     if (!el) return
     const to = Number(value) || 0
     const start = performance.now()
+    let raf
     const step = (now) => {
       const t = Math.min((now - start) / duration, 1)
       const eased = 1 - Math.pow(1 - t, 3)
       el.textContent = Math.round(to * eased)
-      if (t < 1) requestAnimationFrame(step)
+      if (t < 1) raf = requestAnimationFrame(step)
     }
-    requestAnimationFrame(step)
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
   }, [value, duration])
   return ref
 }
@@ -73,7 +75,7 @@ export default function DriverCard({ stats }) {
             const rColor = POS_COLOR[race.position] ?? 'var(--text-primary)'
             return (
               <div
-                key={i}
+                key={race.race}
                 className="race-row animate-in"
                 style={{ animationDelay: `${0.08 + i * 0.05}s` }}
               >
