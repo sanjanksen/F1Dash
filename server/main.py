@@ -40,10 +40,15 @@ async def drivers_endpoint():
 
 @app.get("/api/driver/{name}/stats")
 async def driver_stats_endpoint(name: str):
-    stats = get_driver_stats(name)
-    if stats is None:
-        raise HTTPException(status_code=404, detail=f"Driver '{name}' not found")
-    return stats
+    try:
+        stats = get_driver_stats(name)
+        if stats is None:
+            raise HTTPException(status_code=404, detail=f"Driver '{name}' not found")
+        return stats
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/circuits")
