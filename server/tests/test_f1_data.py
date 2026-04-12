@@ -1,6 +1,7 @@
 # server/tests/test_f1_data.py
 import pytest
 from unittest.mock import patch, MagicMock
+import f1_data
 
 
 def _make_standings_response():
@@ -47,8 +48,6 @@ def _make_standings_response():
 
 def test_get_drivers_returns_list_of_dicts():
     with patch('f1_data.requests.get', return_value=_make_standings_response()):
-        import importlib, f1_data
-        importlib.reload(f1_data)
         result = f1_data.get_drivers()
 
     assert isinstance(result, list)
@@ -68,8 +67,6 @@ def test_get_drivers_empty_standings():
     mock.raise_for_status.return_value = None
 
     with patch('f1_data.requests.get', return_value=mock):
-        import importlib, f1_data
-        importlib.reload(f1_data)
         result = f1_data.get_drivers()
 
     assert result == []
@@ -111,8 +108,6 @@ def test_get_driver_stats_wins_podiums():
     results_mock = _make_results_response('verstappen')
 
     with patch('f1_data.requests.get', side_effect=[standings_mock, results_mock]):
-        import importlib, f1_data
-        importlib.reload(f1_data)
         result = f1_data.get_driver_stats('verstappen')
 
     assert result is not None
@@ -127,8 +122,6 @@ def test_get_driver_stats_not_found():
     standings_mock = _make_standings_response()
 
     with patch('f1_data.requests.get', return_value=standings_mock):
-        import importlib, f1_data
-        importlib.reload(f1_data)
         result = f1_data.get_driver_stats('nobody')
 
     assert result is None
@@ -148,8 +141,6 @@ def test_get_circuits_returns_list():
     ])
 
     with patch('f1_data.fastf1.get_event_schedule', return_value=mock_schedule):
-        import importlib, f1_data
-        importlib.reload(f1_data)
         result = f1_data.get_circuits()
 
     assert len(result) == 1

@@ -1,5 +1,6 @@
 # server/f1_data.py
 import os
+from datetime import date
 import fastf1
 import requests
 
@@ -78,13 +79,13 @@ def get_driver_stats(driver_name: str) -> dict | None:
         if not results:
             continue
         r = results[0]
-        pos_str = r.get("position", "0")
-        pos = int(pos_str) if pos_str.isdigit() else 0
+        pos_str = r.get("position", "")
+        pos = int(pos_str) if pos_str.isdigit() else None
         points = float(r.get("points", 0))
 
         if pos == 1:
             wins += 1
-        if 1 <= pos <= 3:
+        if pos is not None and 1 <= pos <= 3:
             podiums += 1
 
         fl = r.get("FastestLap", {})
@@ -141,7 +142,7 @@ def get_f1_context(message: str) -> str:
 
     try:
         circuits = get_circuits()
-        upcoming = [c for c in circuits if c["date"] >= "2025-04-11"][:3]
+        upcoming = [c for c in circuits if c["date"] >= str(date.today())][:3]
         lines = [f"  Round {c['round']}: {c['event_name']} ({c['country']}) — {c['date']}"
                  for c in upcoming]
         parts.append("=== Upcoming Races ===\n" + "\n".join(lines))
