@@ -21,6 +21,4 @@ def test_cors_header_present():
         "/api/drivers",
         headers={"Origin": "http://localhost:5173", "Access-Control-Request-Method": "GET"},
     )
-    assert response.headers.get("access-control-allow-origin") in (
-        "http://localhost:5173", "*"
-    )
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
