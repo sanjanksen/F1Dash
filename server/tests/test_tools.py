@@ -129,6 +129,27 @@ def test_execute_tool_analyze_qualifying_battle():
     assert result["decisive_sector"] == "Sector 1"
 
 
+def test_execute_tool_get_team_radio():
+    mock = {"messages": [{"recording_url": "https://example.test/radio.mp3"}]}
+    with patch('tools.get_team_radio', return_value=mock):
+        result = tools.execute_tool("get_team_radio", {"round_number": 3, "session_type": "Q", "driver_ref": "NOR"})
+    assert result["messages"][0]["recording_url"].endswith(".mp3")
+
+
+def test_execute_tool_get_intervals():
+    mock = {"intervals": [{"gap_to_leader": "+3.2"}]}
+    with patch('tools.get_intervals', return_value=mock):
+        result = tools.execute_tool("get_intervals", {"round_number": 3})
+    assert result["intervals"][0]["gap_to_leader"] == "+3.2"
+
+
+def test_execute_tool_get_live_position_timeline():
+    mock = {"positions": [{"position": 4}]}
+    with patch('tools.get_live_position_timeline', return_value=mock):
+        result = tools.execute_tool("get_live_position_timeline", {"round_number": 3, "session_type": "R"})
+    assert result["positions"][0]["position"] == 4
+
+
 def test_execute_tool_unknown_raises_value_error():
     with pytest.raises(ValueError, match="Unknown tool"):
         tools.execute_tool("launch_rocket", {})

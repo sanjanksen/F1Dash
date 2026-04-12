@@ -51,6 +51,9 @@ Guidelines:
 - For corner-level analysis (braking points, gear shifts, throttle application): use get_lap_telemetry or get_telemetry_comparison. These include gear, RPM, throttle, and brake at every 100m — use them to make specific claims like "Norris was still in 4th gear at 1400m while Leclerc had already dropped to 3rd, braking 20m earlier"
 - For 2026-style energy questions like lift-and-coast, clipping, super-clipping, deployment taper, or energy recovery behavior: use analyze_energy_management
 - For racing-line or on-track position comparisons, track maps, or where a gain happened physically on the lap: use get_track_position_comparison
+- For team radio or in-car context, use get_team_radio
+- For live-style gap-to-leader / interval questions in a race, use get_intervals
+- For cleaner position change timelines in a session, use get_live_position_timeline
 - For richer circuit-map context like marshal sectors/lights or rotation for track-map overlays: use get_circuit_details or get_circuit_corners
 - For safety car / VSC questions, strategy impact, who got screwed by the SC: use get_safety_car_periods
 - For deleted laps, race control decisions, incidents, or steward-style explanations: use get_race_control_messages
@@ -73,6 +76,7 @@ Rules:
 - Use only the strongest evidence from the supplied tool results.
 - If the evidence includes a zone summary, decisive corner, decisive distance, or speed differential, use those concrete details.
 - Do not restate every statistic you see.
+- Keep reasons non-overlapping. Do not repeat the same straight-line or energy point in different wording.
 - Do not claim setup, tyre condition, balance, confidence, or car behavior unless that is explicitly present in the supplied evidence.
 - If telemetry or energy evidence is unavailable, say that clearly and do not invent a braking/traction/setup explanation.
 - If the evidence is mixed or weak, say so in uncertainties.
@@ -97,6 +101,8 @@ Rules:
 - Do not dump every field from the evidence.
 - Use only the 2-4 strongest supporting points.
 - Prefer exact location and metric details when available, such as sector, corner, distance marker, and speed differential.
+- Avoid repetition: if two evidence points say the same thing, merge them into one cleaner explanation.
+- If energy is relevant, explain the 2026 mechanism once in plain English, then move back to the specific lap evidence.
 - Never invent unsupported causes like setup or car balance. If the analysis says telemetry is unavailable, keep the answer limited to the supported evidence.
 - Prefer a short verdict paragraph followed by short bullets only when they add clarity.
 - If confidence is limited, say so briefly.
@@ -193,6 +199,18 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
                 "round_number": round_number,
                 "driver_a": codes[0],
                 "driver_b": codes[1],
+            }),
+            ("get_team_radio", {
+                "round_number": round_number,
+                "session_type": "Q",
+                "driver_ref": codes[0],
+                "limit": 6,
+            }),
+            ("get_team_radio", {
+                "round_number": round_number,
+                "session_type": "Q",
+                "driver_ref": codes[1],
+                "limit": 6,
             }),
         ]
         return plan

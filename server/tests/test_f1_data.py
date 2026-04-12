@@ -798,6 +798,7 @@ def test_analyze_qualifying_battle_derives_causal_summary():
     assert result["cause_type"] in ("straight_line_speed", "straight_line_speed_energy_limited")
     assert result["decisive_corner"] == "Turn 1"
     assert result["energy_relevant"] is True
+    assert "2026 rules" in result["energy_context_explanation"]
     assert result["telemetry_summary"]["distance_m"] == 1400
     assert "12.0 kph" in result["zone_summary"]
 
@@ -1188,7 +1189,13 @@ def test_get_driver_weekend_overview():
     }), \
     patch('f1_data.get_session_results', return_value={
         "results": [{"abbreviation": "RUS", "driver_number": "63", "grid_position": 5}]
-    }):
+    }), \
+    patch('openf1.get_team_radio', side_effect=[
+        {"messages": [{"recording_url": "https://example.test/qradio.mp3"}]},
+        {"messages": [{"recording_url": "https://example.test/rradio.mp3"}]},
+    ]), \
+    patch('openf1.get_intervals', return_value={"intervals": [{"gap_to_leader": "+4.1", "interval": "+1.2"}]}), \
+    patch('openf1.get_live_position_timeline', return_value={"positions": [{"position": 3}, {"position": 5}]}):
         result = f1_data.get_driver_weekend_overview(3, 'Russell')
 
     assert result["driver"] == "George Russell"
@@ -1198,6 +1205,9 @@ def test_get_driver_weekend_overview():
     assert result["pit_stops"][0]["pit_window_after_lap"] == 17
     assert result["safety_car_impact"]["sc_count"] == 1
     assert result["nearby_rivals"][0]["driver"] == "Charles Leclerc"
+    assert result["openf1"]["qualifying_radio"]["messages"][0]["recording_url"].endswith("qradio.mp3")
+    assert result["openf1"]["race_radio"]["messages"][0]["recording_url"].endswith("rradio.mp3")
+    assert result["openf1"]["race_intervals"]["intervals"][0]["gap_to_leader"] == "+4.1"
 
 
 def test_get_driver_race_story():
@@ -1213,6 +1223,11 @@ def test_get_driver_race_story():
         "safety_car_impact": {"sc_count": 1, "vsc_count": 0, "pitted_just_before_sc": [], "pitted_during_sc": [{"type": "SafetyCar", "lap": 20}]},
         "teammate": {"name": "Kimi Antonelli", "finish_position": 6},
         "nearby_rivals": [{"driver": "Charles Leclerc", "team": "Ferrari", "position": 2}],
+        "openf1": {
+            "race_radio": {"messages": [{"date": "2026-04-05T06:30:00Z", "recording_url": "https://example.test/radio.mp3"}]},
+            "race_intervals": {"intervals": [{"gap_to_leader": "+4.1", "interval": "+1.2"}]},
+            "race_positions": {"positions": [{"position": 3}, {"position": 5}]},
+        },
     }), \
     patch('f1_data.get_session_results', return_value={"results": [{"abbreviation": "RUS", "driver_number": "63"}]}), \
     patch('f1_data.get_race_control_messages', return_value={"messages": [{"lap": 20, "category": "Incident", "message": "Car 63 noted"}]}):
@@ -1223,6 +1238,9 @@ def test_get_driver_race_story():
     assert any("Pit strategy" in point for point in result["story_points"])
     assert result["race_control_highlights"][0]["message"] == "Car 63 noted"
     assert result["rivalry_story"][0].startswith("Finished near Charles Leclerc")
+    assert result["radio_highlights"][0]["recording_url"].endswith(".mp3")
+    assert result["interval_summary"]["latest_gap_to_leader"] == "+4.1"
+    assert result["position_timeline_summary"]["latest_position"] == 3
 
 
 def test_get_team_weekend_overview():

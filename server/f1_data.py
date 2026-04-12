@@ -904,6 +904,34 @@ def get_driver_weekend_overview(round_number: int, driver_name: str) -> dict:
     except Exception:
         energy_management = None
 
+    openf1_qualifying_radio = None
+    if driver_quali:
+        try:
+            from openf1 import get_team_radio
+            openf1_qualifying_radio = get_team_radio(round_number, 'Q', code, limit=6)
+        except Exception:
+            openf1_qualifying_radio = None
+
+    openf1_race_intervals = None
+    openf1_race_positions = None
+    openf1_race_radio = None
+    if driver_race:
+        try:
+            from openf1 import get_intervals
+            openf1_race_intervals = get_intervals(round_number, code, limit=20)
+        except Exception:
+            openf1_race_intervals = None
+        try:
+            from openf1 import get_live_position_timeline
+            openf1_race_positions = get_live_position_timeline(round_number, 'R', code, limit=30)
+        except Exception:
+            openf1_race_positions = None
+        try:
+            from openf1 import get_team_radio
+            openf1_race_radio = get_team_radio(round_number, 'R', code, limit=8)
+        except Exception:
+            openf1_race_radio = None
+
     return {
         "driver": matched["full_name"],
         "code": code.upper(),
@@ -927,6 +955,12 @@ def get_driver_weekend_overview(round_number: int, driver_name: str) -> dict:
         "strategy": strategy_summary,
         "energy_management": energy_management,
         "safety_car_impact": safety_car_summary,
+        "openf1": {
+            "qualifying_radio": openf1_qualifying_radio,
+            "race_intervals": openf1_race_intervals,
+            "race_positions": openf1_race_positions,
+            "race_radio": openf1_race_radio,
+        },
         "teammate": {
             "name": teammate_race.get("driver") if teammate_race else teammate_quali.get("driver") if teammate_quali else None,
             "qualifying_position": teammate_quali.get("position") if teammate_quali else None,
@@ -1040,6 +1074,38 @@ def get_driver_race_story(round_number: int, driver_name: str) -> dict:
             f"Finished near {rival['driver']} ({rival['team']}) in P{rival['position']}."
         )
 
+    openf1 = overview.get("openf1") or {}
+    radio_highlights = []
+    race_radio = (openf1.get("race_radio") or {}).get("messages") or []
+    for message in race_radio[:3]:
+        url = message.get("recording_url")
+        if url:
+            radio_highlights.append({
+                "date": message.get("date"),
+                "recording_url": url,
+            })
+
+    interval_summary = None
+    intervals = (openf1.get("race_intervals") or {}).get("intervals") or []
+    if intervals:
+        latest = intervals[0]
+        interval_summary = {
+            "latest_gap_to_leader": latest.get("gap_to_leader"),
+            "latest_interval": latest.get("interval"),
+            "sample_count": len(intervals),
+        }
+
+    position_timeline_summary = None
+    positions = (openf1.get("race_positions") or {}).get("positions") or []
+    if positions:
+        first_pos = positions[-1].get("position")
+        latest_pos = positions[0].get("position")
+        position_timeline_summary = {
+            "latest_position": latest_pos,
+            "earliest_sample_position": first_pos,
+            "sample_count": len(positions),
+        }
+
     return {
         "driver": overview["driver"],
         "code": overview["code"],
@@ -1054,6 +1120,9 @@ def get_driver_race_story(round_number: int, driver_name: str) -> dict:
         "teammate": overview["teammate"],
         "nearby_rivals": overview["nearby_rivals"],
         "race_control_highlights": control_highlights,
+        "radio_highlights": radio_highlights,
+        "interval_summary": interval_summary,
+        "position_timeline_summary": position_timeline_summary,
         "story_points": summary_points,
         "rivalry_story": rivalry_story,
     }
@@ -1717,6 +1786,11 @@ def analyze_energy_management(round_number: int, session_type: str,
             inferences.append("No strong energy-management signature stands out from the available telemetry window.")
 
         confidence = "medium" if strongest_fade or lico_a or lico_b else "low"
+        harvest_inference = "indeterminate"
+        if lico_a or lico_b:
+            harvest_inference = "lift_and_coast_assisted_harvesting_likely"
+        elif strongest_fade:
+            harvest_inference = "deployment_taper_likely_but_harvest_type_indeterminate"
         return {
             "event": comparison["event"],
             "session": comparison["session"],
@@ -1741,6 +1815,7 @@ def analyze_energy_management(round_number: int, session_type: str,
             "comparative_signal": {
                 "strongest_full_throttle_speed_fade": strongest_fade,
             },
+            "harvesting_inference": harvest_inference,
             "inference_summary": inferences,
             "confidence": confidence,
         }
@@ -1758,6 +1833,11 @@ def analyze_energy_management(round_number: int, session_type: str,
         inferences.append("No strong lift-and-coast or clipping signature stands out on this lap from the available channels.")
 
     confidence = "medium" if lico or clip else "low"
+    harvest_inference = "indeterminate"
+    if lico:
+        harvest_inference = "lift_and_coast_assisted_harvesting_likely"
+    elif clip:
+        harvest_inference = "deployment_taper_likely_but_harvest_type_indeterminate"
     return {
         "event": telemetry["event"],
         "session": telemetry["session"],
@@ -1773,6 +1853,7 @@ def analyze_energy_management(round_number: int, session_type: str,
                 "possible_clipping_windows": clip[:5],
             }
         ],
+        "harvesting_inference": harvest_inference,
         "inference_summary": inferences,
         "confidence": confidence,
     }
@@ -2035,6 +2116,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
 
     energy_relevant = False
     energy_reason = None
+    energy_context_explanation = None
     strongest_fade = ((energy.get("comparative_signal") or {}) if energy else {}).get("strongest_full_throttle_speed_fade")
     if strongest_fade:
         delta_speed = strongest_fade.get("delta_speed_kph") or 0
@@ -2045,6 +2127,10 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
             energy_reason = (
                 f"{slower_driver} shows the strongest late-straight full-throttle speed fade around "
                 f"{strongest_fade.get('distance_m')}m, which is consistent with clipping or running out of deployment earlier."
+            )
+            energy_context_explanation = (
+                "Under the 2026 rules the electrical contribution is much larger, so if one car reaches the taper in deployment earlier, "
+                "it can remain flat-out but stop accelerating as hard late on the straight."
             )
             if cause_type == "straight_line_speed":
                 cause_type = "straight_line_speed_energy_limited"
@@ -2062,6 +2148,8 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
         )
     if energy_reason:
         strongest_evidence.append(energy_reason)
+    if energy_context_explanation:
+        strongest_evidence.append(energy_context_explanation)
 
     zone_summary = None
     if telemetry_summary:
@@ -2098,6 +2186,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
         "telemetry_summary": telemetry_summary,
         "energy_relevant": energy_relevant,
         "energy_reason": energy_reason,
+        "energy_context_explanation": energy_context_explanation,
         "telemetry_available": telemetry is not None,
         "energy_available": energy is not None,
         "caveats": caveats,

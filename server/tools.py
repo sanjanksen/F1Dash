@@ -40,6 +40,7 @@ from f1_data import (
     get_telemetry_comparison,
     get_track_position_comparison,
 )
+from openf1 import get_intervals, get_live_position_timeline, get_team_radio
 
 
 def _tool(name: str, description: str, properties: dict, required: list[str]) -> dict:
@@ -283,6 +284,41 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
         ["round_number", "driver_a", "driver_b"],
     ),
     _tool(
+        "get_team_radio",
+        "DEEP ANALYSIS PRIMITIVE. OpenF1 team radio metadata for a session, optionally filtered to one driver. "
+        "Use this for questions about what was said on the radio or to add in-car context to a race story.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
+            "driver_ref": {"type": "string", "description": "Optional driver name, surname, or 3-letter code."},
+            "limit": {"type": "integer", "description": "Maximum radio entries to return. Defaults to 10."},
+        },
+        ["round_number", "session_type"],
+    ),
+    _tool(
+        "get_intervals",
+        "DEEP ANALYSIS PRIMITIVE. OpenF1 race intervals and gap-to-leader timeline, optionally for one driver. "
+        "Use this for race-story questions about who was closing, dropping back, or sitting in undercut range.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "driver_ref": {"type": "string", "description": "Optional driver name, surname, or 3-letter code."},
+            "limit": {"type": "integer", "description": "Maximum interval entries to return. Defaults to 25."},
+        },
+        ["round_number"],
+    ),
+    _tool(
+        "get_live_position_timeline",
+        "DEEP ANALYSIS PRIMITIVE. OpenF1 position timeline for a session, optionally for one driver. "
+        "Use this for cleaner live-style position changes and race-shape reconstruction.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
+            "driver_ref": {"type": "string", "description": "Optional driver name, surname, or 3-letter code."},
+            "limit": {"type": "integer", "description": "Maximum position entries to return. Defaults to 50."},
+        },
+        ["round_number", "session_type"],
+    ),
+    _tool(
         "analyze_energy_management",
         "DEEP ANALYSIS PRIMITIVE. Analyze likely 2026-style energy management patterns such as lift-and-coast and possible late-straight clipping. "
         "This tool uses telemetry heuristics and explicitly distinguishes measured signals from inferred energy behavior.",
@@ -368,6 +404,12 @@ OPENAI_TOOL_DEFINITIONS = [
 
 
 def execute_tool(name: str, args: dict):
+    if name == "get_team_radio":
+        return get_team_radio(args["round_number"], args["session_type"], args.get("driver_ref"), args.get("limit", 10))
+    if name == "get_intervals":
+        return get_intervals(args["round_number"], args.get("driver_ref"), args.get("limit", 25))
+    if name == "get_live_position_timeline":
+        return get_live_position_timeline(args["round_number"], args["session_type"], args.get("driver_ref"), args.get("limit", 50))
     if name == "analyze_qualifying_battle":
         return analyze_qualifying_battle(args["round_number"], args["driver_a"], args["driver_b"])
     if name == "get_driver_standings":

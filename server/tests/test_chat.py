@@ -287,6 +287,7 @@ def test_build_analysis_plan_uses_qualifying_battle_tool_for_qualifying_comparis
     tool_names = [tool for tool, _ in plan["tool_calls"]]
     assert "analyze_qualifying_battle" in tool_names
     assert "get_qualifying_results" in tool_names
+    assert tool_names.count("get_team_radio") == 2
 
 
 def test_try_deterministic_analysis_falls_back_on_analysis_failure():
