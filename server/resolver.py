@@ -17,7 +17,13 @@ def _has_reference_language(normalized: str) -> bool:
 
 def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
     session_type = None
-    if "qualifying" in normalized or re.search(r"\bq\d\b", normalized):
+    if (
+        "qualifying" in normalized
+        or re.search(r"\bq\d\b", normalized)
+        or re.search(r"\bquali\b", normalized)
+        or "pole lap" in normalized
+        or "pole run" in normalized
+    ):
         session_type = "Q"
     elif "sprint qualifying" in normalized or "sprint shootout" in normalized:
         session_type = "SQ"
@@ -37,13 +43,17 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
         scope = "safety_car"
     if "strategy" in normalized or "pit" in normalized:
         scope = "strategy"
-    if "qualifying" in normalized:
+    if any(term in normalized for term in ("lift and coast", "lift-and-coast", "lico", "clipping", "super clipping", "super-clipping", "energy recovery", "deployment")):
+        scope = "energy"
+    if "qualifying" in normalized or re.search(r"\bquali\b", normalized) or "pole lap" in normalized or "pole run" in normalized:
         scope = scope or "qualifying"
 
     return session_type, scope
 
 
-def _match_driver(normalized: str) -> dict | None:
+def _match_drivers(normalized: str) -> list[dict]:
+    matches = []
+    seen = set()
     for driver in get_drivers():
         names = {
             _normalize(driver.get("full_name", "")),
@@ -53,9 +63,24 @@ def _match_driver(normalized: str) -> dict | None:
         family = _normalize(driver.get("full_name", "").split()[-1] if driver.get("full_name") else "")
         given = _normalize(driver.get("full_name", "").split()[0] if driver.get("full_name") else "")
         names.update({family, given})
-        if any(name and re.search(rf"\b{re.escape(name)}\b", normalized) for name in names):
-            return driver
-    return None
+        positions = [
+            match.start()
+            for name in names if name
+            for match in [re.search(rf"\b{re.escape(name)}\b", normalized)]
+            if match
+        ]
+        if positions:
+            code = (driver.get("code") or driver.get("driver_id") or driver.get("full_name") or "").upper()
+            if code and code not in seen:
+                seen.add(code)
+                matches.append((min(positions), driver))
+    matches.sort(key=lambda item: item[0])
+    return [driver for _, driver in matches]
+
+
+def _match_driver(normalized: str) -> dict | None:
+    matches = _match_drivers(normalized)
+    return matches[0] if matches else None
 
 
 def _match_team(normalized: str) -> str | None:
@@ -99,12 +124,21 @@ def _match_event(normalized: str) -> dict | None:
         "cota": "united states",
         "imola": "emilia romagna",
     }
-    search_terms = {normalized}
+    search_terms = set()
     for alias, mapped in alias_map.items():
         if alias in normalized:
+            search_terms.add(alias)
             search_terms.add(mapped)
 
+    token_terms = set()
+    for token in normalized.split():
+        if len(token) >= 4:
+            token_terms.add(token)
+    search_terms.update(token_terms)
+
     circuits = get_circuits()
+    best_match = None
+    best_score = 0
     for circuit in circuits:
         haystacks = [
             _normalize(circuit.get("event_name", "")),
@@ -119,14 +153,29 @@ def _match_event(normalized: str) -> dict | None:
             haystacks.append(f"{country} grand prix")
             if country.endswith("n"):
                 haystacks.append(country[:-1])
+        score = 0
+        for hay in [hay for hay in haystacks if hay]:
+            if hay and re.search(rf"\b{re.escape(hay)}\b", normalized):
+                score = max(score, len(hay) + 10)
+
         for term in list(search_terms):
-            term = term.replace("gp", "grand prix").strip()
-            if any(term and (term in hay or hay in term or hay in normalized or term in normalized) for hay in haystacks if hay):
-                return circuit
-    return None
+            normalized_term = term.replace("gp", "grand prix").strip()
+            if not normalized_term:
+                continue
+            for hay in [hay for hay in haystacks if hay]:
+                if re.search(rf"\b{re.escape(normalized_term)}\b", hay):
+                    score = max(score, len(normalized_term))
+
+        if score > best_score:
+            best_score = score
+            best_match = circuit
+
+    return best_match if best_score > 0 else None
 
 
 def _suggest_tool(entity_type: str | None, scope: str | None) -> str | None:
+    if scope == "energy":
+        return "analyze_energy_management"
     if entity_type == "driver":
         if scope in ("overview", "strategy", "safety_car"):
             return "get_driver_race_story"
@@ -140,17 +189,40 @@ def _suggest_tool(entity_type: str | None, scope: str | None) -> str | None:
     return None
 
 
+def _detect_analysis_mode(normalized: str, matched_drivers: list[dict], session_type: str | None) -> tuple[str | None, str | None]:
+    if len(matched_drivers) < 2:
+        return None, None
+
+    comparison_language = any(phrase in normalized for phrase in (
+        "compare", "compared", "comparison", "vs", "versus", "faster than", "slower than",
+        "beat", "ahead of", "edge", "advantage", "where did", "how did", "why did",
+        "gain time", "lose time", "quicker than", "better than"
+    ))
+    if not comparison_language:
+        return None, None
+
+    if session_type == "Q" or "qualifying" in normalized or re.search(r"\bquali\b", normalized) or "pole lap" in normalized:
+        return "driver_comparison", "qualifying"
+    if session_type == "R" or "race" in normalized or "grand prix" in normalized:
+        return "driver_comparison", "race"
+    return "driver_comparison", "session"
+
+
 def _base_context(message: str) -> dict:
     normalized = _normalize(message)
     session_type, scope = _detect_session_scope(normalized)
-    driver = _match_driver(normalized)
+    matched_drivers = _match_drivers(normalized)
+    driver = matched_drivers[0] if len(matched_drivers) == 1 else None
     team = None if driver else _match_team(normalized)
     event = _match_event(normalized)
+    analysis_mode, analysis_focus = _detect_analysis_mode(normalized, matched_drivers, session_type)
 
     entity_type = None
     entity_name = None
     entity_code = None
-    if driver:
+    if len(matched_drivers) >= 2:
+        entity_type = "multi_driver"
+    elif driver:
         entity_type = "driver"
         entity_name = driver.get("full_name")
         entity_code = driver.get("code")
@@ -164,11 +236,15 @@ def _base_context(message: str) -> dict:
         "entity_type": entity_type,
         "entity_name": entity_name,
         "entity_code": entity_code,
+        "entity_names": [driver.get("full_name") for driver in matched_drivers],
+        "entity_codes": [driver.get("code") or driver.get("driver_id", "").upper() for driver in matched_drivers],
         "event_name": event.get("event_name") if event else None,
         "round_number": event.get("round") if event else None,
         "country": event.get("country") if event else None,
         "session_type": session_type,
         "scope": scope,
+        "analysis_mode": analysis_mode,
+        "analysis_focus": analysis_focus,
         "suggested_tool": _suggest_tool(entity_type, scope),
         "has_reference_language": _has_reference_language(normalized),
         "has_explicit_context": any([
@@ -176,6 +252,7 @@ def _base_context(message: str) -> dict:
             event is not None,
             session_type is not None,
             scope is not None,
+            analysis_mode is not None,
         ]),
     }
 
@@ -192,11 +269,14 @@ def _merge_with_previous_context(current: dict, previous: dict | None) -> dict:
 
     fallback_fields = (
         "event_name", "round_number", "country", "session_type",
-        "entity_type", "entity_name", "entity_code", "scope"
+        "entity_type", "entity_name", "entity_code", "scope",
+        "entity_names", "entity_codes", "analysis_mode", "analysis_focus"
     )
 
     for field in fallback_fields:
-        if merged.get(field) is None and previous.get(field) is not None:
+        current_value = merged.get(field)
+        is_missing = current_value is None or current_value == []
+        if is_missing and previous.get(field) is not None:
             if field in ("entity_type", "entity_name", "entity_code") and not merged.get("has_reference_language"):
                 continue
             merged[field] = previous[field]
@@ -204,6 +284,9 @@ def _merge_with_previous_context(current: dict, previous: dict | None) -> dict:
 
     if merged.get("suggested_tool") is None:
         merged["suggested_tool"] = _suggest_tool(merged.get("entity_type"), merged.get("scope"))
+
+    if current.get("analysis_mode") is None and previous.get("analysis_mode") is not None and merged.get("has_reference_language"):
+        used_previous = True
 
     explicit_parts = sum(1 for field in ("entity_name", "event_name", "session_type", "scope") if current.get(field) is not None)
     if explicit_parts >= 2:

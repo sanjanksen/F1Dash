@@ -1,9 +1,13 @@
 # server/f1_data.py
 import os
+import logging
+import threading
+import numbers
 import fastf1
 import requests
 import pandas as pd
 from pandas.api.types import is_numeric_dtype
+from energy_2026 import get_energy_2026_knowledge
 
 # Enable FastF1 disk cache
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), 'cache')
@@ -12,6 +16,10 @@ fastf1.Cache.enable_cache(_CACHE_DIR)
 
 JOLPICA_BASE = "https://api.jolpi.ca/ergast/f1"
 CURRENT_YEAR = __import__('datetime').date.today().year
+logger = logging.getLogger(__name__)
+
+_SESSION_CACHE: dict[tuple[int, int, str], dict] = {}
+_SESSION_CACHE_LOCK = threading.Lock()
 
 
 def _fmt_td(td) -> str | None:
@@ -28,9 +36,55 @@ def _load_session(round_number: int, session_type: str, *,
                   laps: bool = True, telemetry: bool = False,
                   weather: bool = False, messages: bool = False):
     _validate_session_availability(round_number, session_type, telemetry=telemetry or laps or messages)
-    session = fastf1.get_session(CURRENT_YEAR, round_number, session_type)
-    session.load(laps=laps, telemetry=telemetry, weather=weather, messages=messages)
-    return session
+    normalized_session = str(session_type).strip().upper()
+    cache_key = (CURRENT_YEAR, round_number, normalized_session)
+
+    with _SESSION_CACHE_LOCK:
+        entry = _SESSION_CACHE.get(cache_key)
+        if entry is None:
+            entry = {
+                "session": fastf1.get_session(CURRENT_YEAR, round_number, normalized_session),
+                "laps": False,
+                "telemetry": False,
+                "weather": False,
+                "messages": False,
+                "lock": threading.Lock(),
+            }
+            _SESSION_CACHE[cache_key] = entry
+
+    session = entry["session"]
+    entry_lock = entry["lock"]
+
+    with entry_lock:
+        target_flags = {
+            "laps": entry["laps"] or laps,
+            "telemetry": entry["telemetry"] or telemetry,
+            "weather": entry["weather"] or weather,
+            "messages": entry["messages"] or messages,
+        }
+        needs_load = any(target_flags[name] and not entry[name] for name in target_flags)
+
+        if not needs_load:
+            logger.debug(
+                "Reusing in-memory FastF1 session cache for round=%s session=%s",
+                round_number,
+                normalized_session,
+            )
+            return session
+
+        session.load(
+            laps=target_flags["laps"],
+            telemetry=target_flags["telemetry"],
+            weather=target_flags["weather"],
+            messages=target_flags["messages"],
+        )
+        entry.update(target_flags)
+        return session
+
+
+def _clear_session_cache() -> None:
+    with _SESSION_CACHE_LOCK:
+        _SESSION_CACHE.clear()
 
 
 def _normalize_session_name(session_type: str) -> set[str]:
@@ -46,6 +100,10 @@ def _normalize_session_name(session_type: str) -> set[str]:
         "SS": {"SS", "SPRINT SHOOTOUT"},
     }
     return mapping.get(upper, {upper})
+
+
+def _session_needs_race_control_messages(session_type: str) -> bool:
+    return str(session_type).strip().upper() in {"Q", "SQ", "SS"}
 
 
 def _find_session_column(event_row, session_type: str) -> tuple[str | None, pd.Timestamp | None]:
@@ -116,6 +174,83 @@ def _normalize_position(value):
 def _normalize_float(value):
     if value is None or pd.isna(value):
         return None
+    if isinstance(value, numbers.Real):
+        return round(float(value), 3)
+    if isinstance(value, str):
+        try:
+            return round(float(value), 3)
+        except ValueError:
+            return None
+    try:
+        return round(float(value), 3)
+    except (TypeError, ValueError):
+        return None
+
+
+def _infer_lift_and_coast_samples(samples: list[dict]) -> list[dict]:
+    events = []
+    for idx in range(1, len(samples) - 1):
+        sample = samples[idx]
+        next_sample = samples[idx + 1]
+        if sample.get("brake") or next_sample.get("brake"):
+            continue
+        throttle = sample.get("throttle_pct")
+        speed = sample.get("speed_kph")
+        next_speed = next_sample.get("speed_kph")
+        if throttle is None or speed is None or next_speed is None:
+            continue
+        if throttle <= 20 and speed >= 180 and next_speed < speed:
+            events.append({
+                "distance_m": sample.get("distance_m"),
+                "speed_kph": speed,
+                "throttle_pct": throttle,
+            })
+    return events
+
+
+def _find_full_throttle_straight_windows(samples: list[dict]) -> list[list[dict]]:
+    windows = []
+    current = []
+    for sample in samples:
+        gear = sample.get("gear")
+        if (
+            sample.get("brake") is False
+            and (sample.get("throttle_pct") or 0) >= 95
+            and (gear is None or gear >= 6)
+        ):
+            current.append(sample)
+        else:
+            if len(current) >= 4:
+                windows.append(current)
+            current = []
+    if len(current) >= 4:
+        windows.append(current)
+    return windows
+
+
+def _infer_clipping_windows(samples: list[dict], speed_key: str = "speed_kph") -> list[dict]:
+    windows = []
+    for window in _find_full_throttle_straight_windows(samples):
+        start = window[0]
+        end = window[-1]
+        start_speed = start.get(speed_key)
+        end_speed = end.get(speed_key)
+        if start_speed is None or end_speed is None:
+            continue
+        mid = window[len(window) // 2]
+        mid_speed = mid.get(speed_key)
+        gain = round(end_speed - start_speed, 1)
+        if gain < 12 or (mid_speed is not None and end_speed < mid_speed):
+            windows.append({
+                "start_distance_m": start.get("distance_m"),
+                "end_distance_m": end.get("distance_m"),
+                "start_speed_kph": start_speed,
+                "end_speed_kph": end_speed,
+                "mid_speed_kph": mid_speed,
+                "speed_gain_kph": gain,
+                "late_straight_drop_kph": round(end_speed - mid_speed, 1) if mid_speed is not None else None,
+            })
+    return windows
     try:
         return round(float(value), 3)
     except (TypeError, ValueError):
@@ -411,7 +546,14 @@ def get_session_results(round_number: int, session_type: str) -> dict:
     Rich session classification from FastF1 results metadata.
     Includes grid position, classified position, team color, and qualifying times when available.
     """
-    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    session = _load_session(
+        round_number,
+        session_type,
+        laps=True,
+        telemetry=False,
+        weather=False,
+        messages=_session_needs_race_control_messages(session_type),
+    )
     rows = _session_results_rows(session)
     return {
         "event": session.event['EventName'],
@@ -494,7 +636,14 @@ def get_session_fastest_laps(round_number: int, session_type: str) -> list[dict]
     Includes sector times (S1/S2/S3) and speed trap values (SpeedI1/I2/FL/ST).
     session_type: 'Q', 'R', 'FP1', 'FP2', 'FP3', 'S', 'SQ', 'SS'
     """
-    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    session = _load_session(
+        round_number,
+        session_type,
+        laps=True,
+        telemetry=False,
+        weather=False,
+        messages=_session_needs_race_control_messages(session_type),
+    )
 
     results = []
     for driver_code in session.drivers:
@@ -533,7 +682,14 @@ def get_driver_lap_times(round_number: int, session_type: str, driver_code: str)
     speed traps, tyre compound, and pit stop flags.
     Answers: "how did Norris's pace evolve across his qualifying runs?"
     """
-    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    session = _load_session(
+        round_number,
+        session_type,
+        laps=True,
+        telemetry=False,
+        weather=False,
+        messages=_session_needs_race_control_messages(session_type),
+    )
 
     driver_laps = session.laps.pick_driver(driver_code.upper())
     if driver_laps.empty:
@@ -741,6 +897,13 @@ def get_driver_weekend_overview(round_number: int, driver_name: str) -> dict:
         except Exception:
             grid_position = None
 
+    energy_management = None
+    preferred_session = 'Q' if driver_quali else 'R'
+    try:
+        energy_management = analyze_energy_management(round_number, preferred_session, code)
+    except Exception:
+        energy_management = None
+
     return {
         "driver": matched["full_name"],
         "code": code.upper(),
@@ -762,6 +925,7 @@ def get_driver_weekend_overview(round_number: int, driver_name: str) -> dict:
         },
         "pit_stops": pit_stops,
         "strategy": strategy_summary,
+        "energy_management": energy_management,
         "safety_car_impact": safety_car_summary,
         "teammate": {
             "name": teammate_race.get("driver") if teammate_race else teammate_quali.get("driver") if teammate_quali else None,
@@ -834,6 +998,20 @@ def get_driver_race_story(round_number: int, driver_name: str) -> dict:
             summary_points.append(f"Potentially unlucky timing before neutralisation: {periods}.")
         elif sc.get("sc_count", 0) == 0 and sc.get("vsc_count", 0) == 0:
             summary_points.append("No Safety Car or VSC interruptions affected the race.")
+
+    energy = overview.get("energy_management")
+    if energy:
+        if energy.get("drivers"):
+            driver_energy = energy["drivers"][0]
+            clipping = driver_energy.get("possible_clipping_windows") or []
+            lico = driver_energy.get("likely_lift_and_coast_events") or []
+            if clipping:
+                first = clipping[0]
+                summary_points.append(
+                    f"Possible energy limitation: late-straight clipping signal from {first.get('start_distance_m')}m to {first.get('end_distance_m')}m."
+                )
+            if lico:
+                summary_points.append("There are telemetry signs of lift-and-coast style energy management on the representative lap.")
 
     teammate = overview.get("teammate", {})
     if teammate.get("name") and teammate.get("finish_position") is not None and race.get("finish_position") is not None:
@@ -1136,7 +1314,14 @@ def get_clean_pace_summary(round_number: int, session_type: str,
     """
     Compare representative clean laps only, excluding deleted, inaccurate and pit laps.
     """
-    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    session = _load_session(
+        round_number,
+        session_type,
+        laps=True,
+        telemetry=False,
+        weather=False,
+        messages=_session_needs_race_control_messages(session_type),
+    )
     driver_info = _driver_lookup(session)
     drivers = [code.upper() for code in driver_codes] if driver_codes else [str(code).upper() for code in session.drivers]
     summaries = []
@@ -1215,7 +1400,14 @@ def get_sector_comparison(round_number: int, session_type: str,
     Positive gap_s = driver_a is SLOWER. Positive speed_delta = driver_a is FASTER.
     Answers: "why was Norris 0.3s faster than Leclerc in sector 2?"
     """
-    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    session = _load_session(
+        round_number,
+        session_type,
+        laps=True,
+        telemetry=False,
+        weather=False,
+        messages=_session_needs_race_control_messages(session_type),
+    )
 
     def _fastest(code: str):
         laps = session.laps.pick_driver(code.upper())
@@ -1294,7 +1486,14 @@ def get_lap_telemetry(round_number: int, session_type: str,
     This is the deepest data level — use it to explain corner-specific pace differences.
     Requires session.load(telemetry=True); first load is slow, subsequent are cached.
     """
-    session = _load_session(round_number, session_type, laps=True, telemetry=True, weather=False, messages=False)
+    session = _load_session(
+        round_number,
+        session_type,
+        laps=True,
+        telemetry=True,
+        weather=False,
+        messages=_session_needs_race_control_messages(session_type),
+    )
 
     driver_laps = session.laps.pick_driver(driver_code.upper())
     if driver_laps.empty:
@@ -1358,7 +1557,14 @@ def get_telemetry_comparison(round_number: int, session_type: str,
     Returns delta_speed (positive = driver_a faster) and delta_throttle at every 100m.
     Use this to pinpoint exactly where and why one driver gains time over another.
     """
-    session = _load_session(round_number, session_type, laps=True, telemetry=True, weather=False, messages=False)
+    session = _load_session(
+        round_number,
+        session_type,
+        laps=True,
+        telemetry=True,
+        weather=False,
+        messages=_session_needs_race_control_messages(session_type),
+    )
 
     def _get_lap(code: str, lap_num: int | None):
         laps = session.laps.pick_driver(code.upper())
@@ -1435,6 +1641,469 @@ def get_telemetry_comparison(round_number: int, session_type: str,
         "lap_number_b": int(lap_b['LapNumber']),
         "circuit_length_m": int(total_dist),
         "comparison": samples,
+    }
+
+
+def analyze_energy_management(round_number: int, session_type: str,
+                              driver_a: str,
+                              driver_b: str | None = None,
+                              lap_number_a: int | None = None,
+                              lap_number_b: int | None = None) -> dict:
+    """
+    Analyze likely 2026-style energy management behavior.
+    This does NOT measure ERS state directly. It infers likely lift-and-coast and
+    possible late-straight clipping from FastF1 telemetry patterns.
+    """
+    knowledge = get_energy_2026_knowledge()
+
+    if driver_b:
+        comparison = get_telemetry_comparison(
+            round_number, session_type, driver_a, driver_b, lap_number_a, lap_number_b
+        )
+        samples = comparison["comparison"]
+
+        driver_a_samples = [{
+            "distance_m": s["distance_m"],
+            "speed_kph": s["speed_a"],
+            "throttle_pct": s["throttle_a"],
+            "brake": s["brake_a"],
+            "gear": s["gear_a"],
+            "rpm": s["rpm_a"],
+            "drs_open": s["drs_a"],
+        } for s in samples]
+        driver_b_samples = [{
+            "distance_m": s["distance_m"],
+            "speed_kph": s["speed_b"],
+            "throttle_pct": s["throttle_b"],
+            "brake": s["brake_b"],
+            "gear": s["gear_b"],
+            "rpm": s["rpm_b"],
+            "drs_open": s["drs_b"],
+        } for s in samples]
+
+        lico_a = _infer_lift_and_coast_samples(driver_a_samples)
+        lico_b = _infer_lift_and_coast_samples(driver_b_samples)
+        clip_a = _infer_clipping_windows(driver_a_samples)
+        clip_b = _infer_clipping_windows(driver_b_samples)
+
+        fade_candidates = []
+        for sample in samples:
+            if (
+                (sample.get("throttle_a") or 0) >= 95
+                and (sample.get("throttle_b") or 0) >= 95
+                and not sample.get("brake_a")
+                and not sample.get("brake_b")
+                and abs((sample.get("delta_speed") or 0)) >= 8
+            ):
+                fade_candidates.append({
+                    "distance_m": sample.get("distance_m"),
+                    "delta_speed_kph": sample.get("delta_speed"),
+                    "speed_a": sample.get("speed_a"),
+                    "speed_b": sample.get("speed_b"),
+                })
+
+        strongest_fade = max(fade_candidates, key=lambda row: abs(row["delta_speed_kph"]), default=None)
+        inferences = []
+        if lico_a:
+            inferences.append(f"{driver_a.upper()} shows likely lift-and-coast style early lifts before braking zones.")
+        if lico_b:
+            inferences.append(f"{driver_b.upper()} shows likely lift-and-coast style early lifts before braking zones.")
+        if strongest_fade:
+            slower = driver_a.upper() if strongest_fade["delta_speed_kph"] < 0 else driver_b.upper()
+            inferences.append(
+                f"Late-straight full-throttle speed fade is strongest around {strongest_fade['distance_m']}m, where {slower} is likely clipping earlier."
+            )
+        if not inferences:
+            inferences.append("No strong energy-management signature stands out from the available telemetry window.")
+
+        confidence = "medium" if strongest_fade or lico_a or lico_b else "low"
+        return {
+            "event": comparison["event"],
+            "session": comparison["session"],
+            "mode": "comparison",
+            "knowledge": knowledge,
+            "measured_channels": ["Speed", "RPM", "nGear", "Throttle", "Brake", "DRS"],
+            "not_directly_measured": ["ERS state of charge", "deployment map", "harvest mode"],
+            "drivers": [
+                {
+                    "driver": driver_a.upper(),
+                    "lap_number": comparison["lap_number_a"],
+                    "likely_lift_and_coast_events": lico_a[:5],
+                    "possible_clipping_windows": clip_a[:5],
+                },
+                {
+                    "driver": driver_b.upper(),
+                    "lap_number": comparison["lap_number_b"],
+                    "likely_lift_and_coast_events": lico_b[:5],
+                    "possible_clipping_windows": clip_b[:5],
+                },
+            ],
+            "comparative_signal": {
+                "strongest_full_throttle_speed_fade": strongest_fade,
+            },
+            "inference_summary": inferences,
+            "confidence": confidence,
+        }
+
+    telemetry = get_lap_telemetry(round_number, session_type, driver_a, lap_number_a)
+    samples = telemetry["telemetry"]
+    lico = _infer_lift_and_coast_samples(samples)
+    clip = _infer_clipping_windows(samples)
+    inferences = []
+    if lico:
+        inferences.append("There are likely lift-and-coast style early lifts before braking on this lap.")
+    if clip:
+        inferences.append("There are possible late-straight clipping windows where speed gain is muted despite sustained high throttle.")
+    if not inferences:
+        inferences.append("No strong lift-and-coast or clipping signature stands out on this lap from the available channels.")
+
+    confidence = "medium" if lico or clip else "low"
+    return {
+        "event": telemetry["event"],
+        "session": telemetry["session"],
+        "mode": "single_driver",
+        "knowledge": knowledge,
+        "measured_channels": ["Speed", "RPM", "nGear", "Throttle", "Brake", "DRS"],
+        "not_directly_measured": ["ERS state of charge", "deployment map", "harvest mode"],
+        "drivers": [
+            {
+                "driver": telemetry["driver"],
+                "lap_number": telemetry["lap_number"],
+                "likely_lift_and_coast_events": lico[:5],
+                "possible_clipping_windows": clip[:5],
+            }
+        ],
+        "inference_summary": inferences,
+        "confidence": confidence,
+    }
+
+
+def _nearest_corner_label(round_number: int, distance_m: int | None) -> str | None:
+    if distance_m is None:
+        return None
+    try:
+        corners = get_circuit_corners(round_number)
+    except Exception:
+        return None
+    valid_corners = [corner for corner in corners if corner.get("distance_m") is not None]
+    if not valid_corners:
+        return None
+    nearest = min(valid_corners, key=lambda corner: abs(corner["distance_m"] - distance_m))
+    label = f"Turn {nearest['number']}"
+    if nearest.get("label"):
+        label += nearest["label"]
+    return label
+
+
+def _get_comparable_qualifying_laps(round_number: int, driver_codes: list[str]):
+    session = _load_session(round_number, 'Q', laps=True, telemetry=False, weather=False, messages=True)
+    split = session.laps.split_qualifying_sessions()
+    segments = [("Q3", split[2]), ("Q2", split[1]), ("Q1", split[0])]
+
+    def _fastest_valid_lap(segment_laps, code: str):
+        driver_laps = segment_laps.pick_driver(code.upper())
+        if driver_laps.empty:
+            return None
+        fastest = _pick_fastest_lap(driver_laps)
+        if pd.isna(fastest.get('LapTime')):
+            return None
+        return fastest
+
+    for segment_name, segment_laps in segments:
+        if segment_laps is None:
+            continue
+        chosen = {}
+        valid = True
+        for code in driver_codes:
+            lap = _fastest_valid_lap(segment_laps, code)
+            if lap is None:
+                valid = False
+                break
+            chosen[code.upper()] = lap
+        if valid:
+            return session, segment_name, chosen
+
+    raise ValueError("No comparable qualifying segment found for both drivers.")
+
+
+def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_a: str, driver_b: str) -> dict | None:
+    if not samples:
+        return None
+
+    faster_is_a = faster_driver == driver_a
+
+    def sample_favors_faster(sample) -> bool:
+        delta_speed = sample.get("delta_speed") or 0
+        return (delta_speed > 0) if faster_is_a else (delta_speed < 0)
+
+    speed_candidates = [s for s in samples if sample_favors_faster(s) and abs(s.get("delta_speed") or 0) >= 5]
+    braking_candidates = [
+        s for s in samples
+        if sample_favors_faster(s)
+        and (
+            (faster_is_a and s.get("brake_b") and not s.get("brake_a"))
+            or ((not faster_is_a) and s.get("brake_a") and not s.get("brake_b"))
+        )
+    ]
+    min_speed_candidates = [
+        s for s in samples
+        if sample_favors_faster(s)
+        and (
+            ((s.get("throttle_a") or 0) < 40 and not s.get("brake_a"))
+            or ((s.get("throttle_b") or 0) < 40 and not s.get("brake_b"))
+        )
+    ]
+    traction_candidates = [
+        s for s in samples
+        if sample_favors_faster(s)
+        and (
+            ((s.get("throttle_a") or 0) >= 70 and not s.get("brake_a"))
+            or ((s.get("throttle_b") or 0) >= 70 and not s.get("brake_b"))
+        )
+    ]
+
+    strongest_speed = max(speed_candidates, key=lambda s: abs(s.get("delta_speed") or 0), default=None)
+    strongest_braking = max(braking_candidates, key=lambda s: abs(s.get("delta_speed") or 0), default=None)
+    strongest_min_speed = max(min_speed_candidates, key=lambda s: abs(s.get("delta_speed") or 0), default=None)
+    strongest_traction = max(traction_candidates, key=lambda s: abs(s.get("delta_speed") or 0), default=None)
+
+    best = None
+    for cause_type, sample in (
+        ("straight_line_speed", strongest_speed),
+        ("braking", strongest_braking),
+        ("minimum_speed", strongest_min_speed),
+        ("traction", strongest_traction),
+    ):
+        if sample is None:
+            continue
+        magnitude = abs(sample.get("delta_speed") or 0)
+        if best is None or magnitude > best["magnitude"]:
+            best = {"cause_type": cause_type, "sample": sample, "magnitude": magnitude}
+
+    if not best:
+        return None
+
+    sample = best["sample"]
+    return {
+        "cause_type": best["cause_type"],
+        "distance_m": sample.get("distance_m"),
+        "delta_speed_kph": sample.get("delta_speed"),
+        "throttle_a": sample.get("throttle_a"),
+        "throttle_b": sample.get("throttle_b"),
+        "brake_a": sample.get("brake_a"),
+        "brake_b": sample.get("brake_b"),
+        "gear_a": sample.get("gear_a"),
+        "gear_b": sample.get("gear_b"),
+    }
+
+
+def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -> dict:
+    """
+    Backend-derived causal summary for a qualifying battle.
+    Explains where the time was gained and the most likely mechanism.
+    """
+    session, compared_segment, chosen_laps = _get_comparable_qualifying_laps(round_number, [driver_a, driver_b])
+    lap_a = chosen_laps[driver_a.upper()]
+    lap_b = chosen_laps[driver_b.upper()]
+
+    def _s(td) -> float | None:
+        return round(td.total_seconds(), 3) if pd.notna(td) else None
+
+    def _gap(a, b) -> float | None:
+        return round(a - b, 3) if a is not None and b is not None else None
+
+    def _spd(lap, key) -> float | None:
+        value = lap.get(key)
+        return round(float(value), 1) if value is not None and pd.notna(value) else None
+
+    sector = {
+        "event": session.event['EventName'],
+        "session": "Q",
+        "compared_segment": compared_segment,
+        "driver_a": driver_a.upper(),
+        "driver_b": driver_b.upper(),
+        "lap_time_a": _fmt_td(lap_a['LapTime']),
+        "lap_time_b": _fmt_td(lap_b['LapTime']),
+        "lap_number_a": int(lap_a['LapNumber']) if pd.notna(lap_a.get('LapNumber')) else None,
+        "lap_number_b": int(lap_b['LapNumber']) if pd.notna(lap_b.get('LapNumber')) else None,
+        "overall_gap_s": _gap(_s(lap_a['LapTime']), _s(lap_b['LapTime'])),
+        "sector1": {
+            "time_a": _fmt_td(lap_a['Sector1Time']),
+            "time_b": _fmt_td(lap_b['Sector1Time']),
+            "gap_s": _gap(_s(lap_a['Sector1Time']), _s(lap_b['Sector1Time'])),
+            "speed_i1_a": _spd(lap_a, 'SpeedI1'),
+            "speed_i1_b": _spd(lap_b, 'SpeedI1'),
+            "speed_i1_delta": _gap(_spd(lap_a, 'SpeedI1'), _spd(lap_b, 'SpeedI1')),
+        },
+        "sector2": {
+            "time_a": _fmt_td(lap_a['Sector2Time']),
+            "time_b": _fmt_td(lap_b['Sector2Time']),
+            "gap_s": _gap(_s(lap_a['Sector2Time']), _s(lap_b['Sector2Time'])),
+            "speed_i2_a": _spd(lap_a, 'SpeedI2'),
+            "speed_i2_b": _spd(lap_b, 'SpeedI2'),
+            "speed_i2_delta": _gap(_spd(lap_a, 'SpeedI2'), _spd(lap_b, 'SpeedI2')),
+        },
+        "sector3": {
+            "time_a": _fmt_td(lap_a['Sector3Time']),
+            "time_b": _fmt_td(lap_b['Sector3Time']),
+            "gap_s": _gap(_s(lap_a['Sector3Time']), _s(lap_b['Sector3Time'])),
+            "speed_fl_a": _spd(lap_a, 'SpeedFL'),
+            "speed_fl_b": _spd(lap_b, 'SpeedFL'),
+            "speed_fl_delta": _gap(_spd(lap_a, 'SpeedFL'), _spd(lap_b, 'SpeedFL')),
+        },
+        "speed_trap_a": _spd(lap_a, 'SpeedST'),
+        "speed_trap_b": _spd(lap_b, 'SpeedST'),
+        "speed_trap_delta": _gap(_spd(lap_a, 'SpeedST'), _spd(lap_b, 'SpeedST')),
+    }
+    telemetry = None
+    energy = None
+    caveats = []
+    try:
+        telemetry = get_telemetry_comparison(
+            round_number,
+            'Q',
+            driver_a,
+            driver_b,
+            lap_number_a=sector["lap_number_a"],
+            lap_number_b=sector["lap_number_b"],
+        )
+    except Exception as exc:
+        caveats.append(f"Telemetry comparison unavailable: {exc}")
+    try:
+        energy = analyze_energy_management(
+            round_number,
+            'Q',
+            driver_a,
+            driver_b,
+            lap_number_a=sector["lap_number_a"],
+            lap_number_b=sector["lap_number_b"],
+        )
+    except Exception as exc:
+        caveats.append(f"Energy analysis unavailable: {exc}")
+
+    overall_gap = sector.get("overall_gap_s")
+    if overall_gap is None:
+        raise ValueError("Overall qualifying gap is unavailable.")
+
+    driver_a_code = sector["driver_a"]
+    driver_b_code = sector["driver_b"]
+    faster_driver = driver_a_code if overall_gap < 0 else driver_b_code
+    slower_driver = driver_b_code if faster_driver == driver_a_code else driver_a_code
+
+    sector_rows = [
+        ("Sector 1", sector.get("sector1", {}).get("gap_s")),
+        ("Sector 2", sector.get("sector2", {}).get("gap_s")),
+        ("Sector 3", sector.get("sector3", {}).get("gap_s")),
+    ]
+    decisive_sector, decisive_sector_gap = max(
+        sector_rows,
+        key=lambda item: abs(item[1]) if item[1] is not None else -1,
+    )
+
+    comparison_samples = telemetry.get("comparison", []) if telemetry else []
+    telemetry_summary = _summarize_telemetry_battle(comparison_samples, faster_driver, driver_a_code, driver_b_code)
+    strongest_sample = None
+    decisive_distance = telemetry_summary.get("distance_m") if telemetry_summary else None
+
+    cause_type = "mixed"
+    cause_explanation = "The gap comes from a blend of smaller advantages rather than one clean mechanism."
+
+    if telemetry_summary:
+        cause_type = telemetry_summary["cause_type"]
+        strongest_sample = telemetry_summary
+        if cause_type == "straight_line_speed":
+            cause_explanation = (
+                f"{faster_driver} is still carrying more speed at full throttle late in the straight, "
+                f"so the lap-time gain opens before the braking zone."
+            )
+        elif cause_type == "braking":
+            earlier_braker = driver_b_code if faster_driver == driver_a_code else driver_a_code
+            cause_explanation = (
+                f"The main gain comes on corner entry: {earlier_braker} is already on the brake while "
+                f"{faster_driver} is still carrying speed into the zone."
+            )
+        elif cause_type == "minimum_speed":
+            cause_explanation = (
+                f"The gap looks like minimum-speed performance through the direction change, with {faster_driver} "
+                f"giving up less speed mid-corner and exiting with more momentum."
+            )
+        elif cause_type == "traction":
+            cause_explanation = (
+                f"The gain looks like traction on exit: {faster_driver} gets back to speed earlier and carries "
+                f"that advantage down the following section."
+            )
+
+    energy_relevant = False
+    energy_reason = None
+    strongest_fade = ((energy.get("comparative_signal") or {}) if energy else {}).get("strongest_full_throttle_speed_fade")
+    if strongest_fade:
+        delta_speed = strongest_fade.get("delta_speed_kph") or 0
+        faded_driver = driver_a_code if delta_speed < 0 else driver_b_code
+        if faded_driver == slower_driver:
+            energy_relevant = True
+            decisive_distance = strongest_fade.get("distance_m") or decisive_distance
+            energy_reason = (
+                f"{slower_driver} shows the strongest late-straight full-throttle speed fade around "
+                f"{strongest_fade.get('distance_m')}m, which is consistent with clipping or running out of deployment earlier."
+            )
+            if cause_type == "straight_line_speed":
+                cause_type = "straight_line_speed_energy_limited"
+
+    decisive_corner = _nearest_corner_label(round_number, decisive_distance)
+
+    strongest_evidence = [
+        f"Overall qualifying gap: {abs(overall_gap):.3f}s in favour of {faster_driver}.",
+    ]
+    if decisive_sector_gap is not None:
+        strongest_evidence.append(f"{decisive_sector} accounts for {abs(decisive_sector_gap):.3f}s of the gap.")
+    if strongest_sample and strongest_sample.get("delta_speed") is not None:
+        strongest_evidence.append(
+            f"Strongest speed separation is {abs(strongest_sample['delta_speed']):.1f} kph around {strongest_sample.get('distance_m')}m."
+        )
+    if energy_reason:
+        strongest_evidence.append(energy_reason)
+
+    zone_summary = None
+    if telemetry_summary:
+        location_bits = []
+        if decisive_sector:
+            location_bits.append(decisive_sector)
+        if decisive_corner:
+            location_bits.append(f"near {decisive_corner}")
+        elif decisive_distance is not None:
+            location_bits.append(f"around {decisive_distance}m")
+        zone_summary = (
+            f"{' '.join(location_bits) if location_bits else 'Key zone'}: "
+            f"{faster_driver} has a {abs(telemetry_summary['delta_speed_kph']):.1f} kph speed advantage "
+            f"at roughly {telemetry_summary['distance_m']}m."
+        )
+        strongest_evidence.append(zone_summary)
+
+    return {
+        "event": sector.get("event"),
+        "session": "Q",
+        "driver_a": driver_a_code,
+        "driver_b": driver_b_code,
+        "faster_driver": faster_driver,
+        "slower_driver": slower_driver,
+        "compared_segment": compared_segment,
+        "overall_gap_s": overall_gap,
+        "decisive_sector": decisive_sector,
+        "decisive_sector_gap_s": decisive_sector_gap,
+        "decisive_distance_m": decisive_distance,
+        "decisive_corner": decisive_corner,
+        "zone_summary": zone_summary,
+        "cause_type": cause_type,
+        "cause_explanation": cause_explanation,
+        "telemetry_summary": telemetry_summary,
+        "energy_relevant": energy_relevant,
+        "energy_reason": energy_reason,
+        "telemetry_available": telemetry is not None,
+        "energy_available": energy is not None,
+        "caveats": caveats,
+        "strongest_evidence": strongest_evidence,
+        "sector_comparison": sector,
+        "energy_analysis": energy,
     }
 
 

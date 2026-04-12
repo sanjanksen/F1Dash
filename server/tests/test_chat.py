@@ -230,3 +230,84 @@ def test_prepare_resolved_context_preloads_high_confidence():
     assert preloaded["tool"] == "get_driver_race_story"
     assert preloaded["result"]["driver"] == "George Russell"
     exec_mock.assert_called_once_with("get_driver_race_story", {"round_number": 3, "driver_name": "George Russell"})
+
+
+def test_try_deterministic_analysis_uses_analysis_and_writer_stages():
+    import chat
+
+    resolved = {
+        "analysis_mode": "driver_comparison",
+        "analysis_focus": "qualifying",
+        "round_number": 3,
+        "entity_names": ["Charles Leclerc", "Lando Norris"],
+        "entity_codes": ["LEC", "NOR"],
+        "session_type": "Q",
+    }
+    plan = {
+        "analysis_mode": "driver_comparison",
+        "focus": "qualifying",
+        "tool_calls": [],
+    }
+    evidence = [{"tool": "get_sector_comparison", "result": {"overall_gap_s": -0.106}}]
+    analysis = {
+        "direct_answer": "Leclerc beat Norris mainly in sector 1.",
+        "primary_reason": "Sector 1 pace",
+        "secondary_reasons": [],
+        "strongest_evidence": ["Sector 1 gap: -0.271s"],
+        "caveats": [],
+        "confidence": "high",
+    }
+
+    with patch.object(chat, '_prepare_resolved_context', return_value=(resolved, None)), \
+         patch.object(chat, '_build_analysis_plan', return_value=plan), \
+         patch.object(chat, '_retrieve_analysis_evidence', return_value=evidence), \
+         patch.object(chat, '_run_anthropic_analysis', return_value=analysis) as analysis_mock, \
+         patch.object(chat, '_run_anthropic_answer_writer', return_value="Leclerc beat Norris mainly through sector 1.") as writer_mock:
+        result = chat._try_deterministic_analysis("How did Leclerc beat Lando in qualifying at Suzuka?", [], provider="anthropic")
+
+    assert "sector 1" in result.lower()
+    analysis_mock.assert_called_once()
+    writer_mock.assert_called_once()
+
+
+def test_build_analysis_plan_uses_qualifying_battle_tool_for_qualifying_comparison():
+    import chat
+
+    resolved = {
+        "analysis_mode": "driver_comparison",
+        "analysis_focus": "qualifying",
+        "round_number": 3,
+        "entity_names": ["Charles Leclerc", "Lando Norris"],
+        "entity_codes": ["LEC", "NOR"],
+        "session_type": "Q",
+    }
+
+    plan = chat._build_analysis_plan("How did Leclerc beat Lando in qualifying at Suzuka?", resolved)
+
+    tool_names = [tool for tool, _ in plan["tool_calls"]]
+    assert "analyze_qualifying_battle" in tool_names
+    assert "get_qualifying_results" in tool_names
+
+
+def test_try_deterministic_analysis_falls_back_on_analysis_failure():
+    import chat
+
+    resolved = {
+        "analysis_mode": "driver_comparison",
+        "analysis_focus": "qualifying",
+        "round_number": 3,
+        "entity_names": ["Charles Leclerc", "Lando Norris"],
+        "entity_codes": ["LEC", "NOR"],
+        "session_type": "Q",
+    }
+    plan = {"analysis_mode": "driver_comparison", "focus": "qualifying", "tool_calls": []}
+    evidence = [{"tool": "get_sector_comparison", "result": {"overall_gap_s": -0.106}}]
+
+    with patch('chat.resolve_context_from_history', return_value=None), \
+         patch('chat.resolve_query_context', return_value=resolved), \
+         patch.object(chat, '_build_analysis_plan', return_value=plan), \
+         patch.object(chat, '_retrieve_analysis_evidence', return_value=evidence), \
+         patch.object(chat, '_run_anthropic_analysis', side_effect=ValueError("bad json")):
+        result = chat._try_deterministic_analysis("How did Leclerc beat Lando in qualifying at Suzuka?", [], provider="anthropic")
+
+    assert result is None

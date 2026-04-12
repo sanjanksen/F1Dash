@@ -99,3 +99,99 @@ def test_resolve_context_from_history(mock_circuits, mock_drivers):
     assert result["entity_name"] == "George Russell"
     assert result["round_number"] == 3
     assert result["used_previous_context"] is True
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_resolve_query_context_multi_driver_qualifying_analysis(mock_circuits, mock_drivers):
+    mock_drivers.return_value = [
+        {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
+        {"full_name": "Charles Leclerc", "code": "LEC", "driver_id": "leclerc", "team": "Ferrari"},
+    ]
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+
+    result = resolver.resolve_query_context("Can you explain how Leclerc beat Lando in qualifying at Suzuka?")
+
+    assert result["entity_type"] == "multi_driver"
+    assert result["entity_names"] == ["Charles Leclerc", "Lando Norris"]
+    assert result["entity_codes"] == ["LEC", "NOR"]
+    assert result["round_number"] == 3
+    assert result["analysis_mode"] == "driver_comparison"
+    assert result["analysis_focus"] == "qualifying"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_resolve_query_context_inherits_multi_driver_analysis_context(mock_circuits, mock_drivers):
+    mock_drivers.return_value = [
+        {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
+        {"full_name": "Charles Leclerc", "code": "LEC", "driver_id": "leclerc", "team": "Ferrari"},
+    ]
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+
+    previous = resolver.resolve_query_context("How did Leclerc beat Lando in qualifying at Suzuka?")
+    result = resolver.resolve_query_context("Where exactly did he get the edge there?", previous)
+
+    assert result["round_number"] == 3
+    assert result["used_previous_context"] is True
+    assert result["analysis_mode"] == "driver_comparison"
+    assert result["entity_names"] == ["Charles Leclerc", "Lando Norris"]
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_resolve_query_context_energy_scope(mock_circuits, mock_drivers):
+    mock_drivers.return_value = [
+        {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
+    ]
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+
+    result = resolver.resolve_query_context("Was Norris clipping at Suzuka qualifying?")
+
+    assert result["entity_type"] == "driver"
+    assert result["entity_code"] == "NOR"
+    assert result["scope"] == "energy"
+    assert result["suggested_tool"] == "analyze_energy_management"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_resolve_query_context_prefers_explicit_japan_over_other_rounds(mock_circuits, mock_drivers):
+    mock_drivers.return_value = [
+        {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
+        {"full_name": "Charles Leclerc", "code": "LEC", "driver_id": "leclerc", "team": "Ferrari"},
+    ]
+    mock_circuits.return_value = [
+        {"round": 1, "event_name": "Australian Grand Prix", "circuit_name": "Albert Park", "country": "Australia"},
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+
+    result = resolver.resolve_query_context("Why was Leclerc faster than Lando in qualifying at Suzuka?")
+
+    assert result["round_number"] == 3
+    assert result["event_name"] == "Japanese Grand Prix"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_resolve_query_context_detects_quali_shorthand(mock_circuits, mock_drivers):
+    mock_drivers.return_value = [
+        {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
+        {"full_name": "Charles Leclerc", "code": "LEC", "driver_id": "leclerc", "team": "Ferrari"},
+    ]
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+
+    result = resolver.resolve_query_context("Why was Leclerc faster than Lando in quali at Suzuka?")
+
+    assert result["session_type"] == "Q"
+    assert result["scope"] == "qualifying"
+    assert result["analysis_mode"] == "driver_comparison"
+    assert result["analysis_focus"] == "qualifying"

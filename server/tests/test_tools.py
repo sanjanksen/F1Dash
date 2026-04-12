@@ -109,6 +109,26 @@ def test_execute_tool_get_lap_telemetry():
     assert result["driver"] == "NOR"
 
 
+def test_execute_tool_analyze_energy_management():
+    mock = {"mode": "comparison", "confidence": "medium", "inference_summary": ["Likely clipping signal."]}
+    with patch('tools.analyze_energy_management', return_value=mock):
+        result = tools.execute_tool("analyze_energy_management", {
+            "round_number": 3, "session_type": "Q", "driver_a": "LEC", "driver_b": "NOR"
+        })
+    assert result["mode"] == "comparison"
+    assert result["confidence"] == "medium"
+
+
+def test_execute_tool_analyze_qualifying_battle():
+    mock = {"faster_driver": "LEC", "cause_type": "straight_line_speed", "decisive_sector": "Sector 1"}
+    with patch('tools.analyze_qualifying_battle', return_value=mock):
+        result = tools.execute_tool("analyze_qualifying_battle", {
+            "round_number": 3, "driver_a": "LEC", "driver_b": "NOR"
+        })
+    assert result["faster_driver"] == "LEC"
+    assert result["decisive_sector"] == "Sector 1"
+
+
 def test_execute_tool_unknown_raises_value_error():
     with pytest.raises(ValueError, match="Unknown tool"):
         tools.execute_tool("launch_rocket", {})

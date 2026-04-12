@@ -10,6 +10,7 @@ The model should prefer composite recap tools for broad "tell me about..."
 questions and use primitives for focused follow-ups.
 """
 from f1_data import (
+    analyze_qualifying_battle,
     get_circuit_corners,
     get_circuit_details,
     get_circuits,
@@ -23,6 +24,7 @@ from f1_data import (
     get_drivers,
     get_head_to_head,
     get_historical_circuit_performance,
+    analyze_energy_management,
     get_lap_telemetry,
     get_qualifying_progression,
     get_qualifying_results,
@@ -270,6 +272,31 @@ PRIMITIVE_TOOL_DEFINITIONS = [
 
 DEEP_ANALYSIS_TOOL_DEFINITIONS = [
     _tool(
+        "analyze_qualifying_battle",
+        "DEEP ANALYSIS PRIMITIVE. Backend-derived causal summary for a qualifying battle between two drivers. "
+        "Use this for questions like 'why was Leclerc faster than Norris in quali?' when you need where and why the gap happened, not just the final times.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "driver_a": {"type": "string", "description": "First driver's 3-letter code."},
+            "driver_b": {"type": "string", "description": "Second driver's 3-letter code."},
+        },
+        ["round_number", "driver_a", "driver_b"],
+    ),
+    _tool(
+        "analyze_energy_management",
+        "DEEP ANALYSIS PRIMITIVE. Analyze likely 2026-style energy management patterns such as lift-and-coast and possible late-straight clipping. "
+        "This tool uses telemetry heuristics and explicitly distinguishes measured signals from inferred energy behavior.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
+            "driver_a": {"type": "string", "description": "Primary driver's 3-letter code."},
+            "driver_b": {"type": "string", "description": "Optional comparison driver's 3-letter code."},
+            "lap_number_a": {"type": "integer", "description": "Optional lap number for driver_a."},
+            "lap_number_b": {"type": "integer", "description": "Optional lap number for driver_b."},
+        },
+        ["round_number", "session_type", "driver_a"],
+    ),
+    _tool(
         "get_lap_telemetry",
         "DEEP ANALYSIS PRIMITIVE. Full telemetry for one driver's lap with speed, throttle, brake, gear, RPM, and DRS.",
         {
@@ -341,6 +368,8 @@ OPENAI_TOOL_DEFINITIONS = [
 
 
 def execute_tool(name: str, args: dict):
+    if name == "analyze_qualifying_battle":
+        return analyze_qualifying_battle(args["round_number"], args["driver_a"], args["driver_b"])
     if name == "get_driver_standings":
         return get_drivers()[:args.get("limit", 20)]
     if name == "get_constructor_standings":
@@ -398,6 +427,15 @@ def execute_tool(name: str, args: dict):
         return get_historical_circuit_performance(args["round_number"], args.get("years"))
     if name == "get_lap_telemetry":
         return get_lap_telemetry(args["round_number"], args["session_type"], args["driver_code"], args.get("lap_number"))
+    if name == "analyze_energy_management":
+        return analyze_energy_management(
+            args["round_number"],
+            args["session_type"],
+            args["driver_a"],
+            args.get("driver_b"),
+            args.get("lap_number_a"),
+            args.get("lap_number_b"),
+        )
     if name == "get_telemetry_comparison":
         return get_telemetry_comparison(
             args["round_number"],

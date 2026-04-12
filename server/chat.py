@@ -8,6 +8,7 @@ The corresponding API key (ANTHROPIC_API_KEY / OPENAI_API_KEY) must also be set.
 import json
 import os
 import logging
+import re
 import anthropic
 import openai as openai_sdk
 from tools import TOOL_DEFINITIONS, OPENAI_TOOL_DEFINITIONS, execute_tool
@@ -45,18 +46,61 @@ Guidelines:
 - For qualifying storylines like who improved through Q1/Q2/Q3: use get_qualifying_progression
 - For trustworthy pace rankings, especially when traffic, deleted laps, or yellows matter: use get_clean_pace_summary
 - For sector-by-sector pace: use get_sector_comparison
+- For causal qualifying battle questions like "why was Leclerc faster than Norris in quali?" use analyze_qualifying_battle
 - For lap-by-lap pace: use get_driver_lap_times
 - For corner-level analysis (braking points, gear shifts, throttle application): use get_lap_telemetry or get_telemetry_comparison. These include gear, RPM, throttle, and brake at every 100m — use them to make specific claims like "Norris was still in 4th gear at 1400m while Leclerc had already dropped to 3rd, braking 20m earlier"
+- For 2026-style energy questions like lift-and-coast, clipping, super-clipping, deployment taper, or energy recovery behavior: use analyze_energy_management
 - For racing-line or on-track position comparisons, track maps, or where a gain happened physically on the lap: use get_track_position_comparison
 - For richer circuit-map context like marshal sectors/lights or rotation for track-map overlays: use get_circuit_details or get_circuit_corners
 - For safety car / VSC questions, strategy impact, who got screwed by the SC: use get_safety_car_periods
 - For deleted laps, race control decisions, incidents, or steward-style explanations: use get_race_control_messages
 - For weather conditions, rain timing, temperature impact on tyres/pace: use get_session_weather
+- FastF1 does not provide direct ERS state of charge, harvest maps, or deployment maps. For energy questions, clearly distinguish measured telemetry from inference.
 
 Answer quality rules:
 - Stay focused on exactly what was asked. If asked about one driver, lead with that driver — don't pad the answer with other drivers' results unless directly relevant.
 - Use the conversation history to understand follow-up questions. "where did he finish" or "what about Lando" refers to the race or context already discussed.
 - Be concise. Lead with the key fact, then support with numbers."""
+
+ANALYSIS_SYSTEM_PROMPT = """You are the analysis stage for an F1 product.
+
+You do not answer like a chatbot. You read retrieved evidence and produce a JSON analysis object.
+
+Rules:
+- Focus on causal explanation, not data recap.
+- Lead with the direct answer to the user's question.
+- Identify the single biggest factor first.
+- Use only the strongest evidence from the supplied tool results.
+- If the evidence includes a zone summary, decisive corner, decisive distance, or speed differential, use those concrete details.
+- Do not restate every statistic you see.
+- Do not claim setup, tyre condition, balance, confidence, or car behavior unless that is explicitly present in the supplied evidence.
+- If telemetry or energy evidence is unavailable, say that clearly and do not invent a braking/traction/setup explanation.
+- If the evidence is mixed or weak, say so in uncertainties.
+- Output valid JSON only.
+
+Required JSON keys:
+- direct_answer: string
+- primary_reason: string
+- secondary_reasons: array of strings
+- strongest_evidence: array of strings
+- caveats: array of strings
+- confidence: one of high, medium, low
+"""
+
+ANSWER_WRITER_SYSTEM_PROMPT = """You are the final answer writer for an F1 analysis product.
+
+You will receive a structured analysis JSON object. Write the final user-facing answer.
+
+Rules:
+- Answer the exact question first, in plain English.
+- Sound like an analyst, not a database.
+- Do not dump every field from the evidence.
+- Use only the 2-4 strongest supporting points.
+- Prefer exact location and metric details when available, such as sector, corner, distance marker, and speed differential.
+- Never invent unsupported causes like setup or car balance. If the analysis says telemetry is unavailable, keep the answer limited to the supported evidence.
+- Prefer a short verdict paragraph followed by short bullets only when they add clarity.
+- If confidence is limited, say so briefly.
+"""
 
 
 # ── Anthropic ────────────────────────────────────────────────────────────────
@@ -87,11 +131,114 @@ def _suggested_tool_args(resolved: dict) -> dict | None:
         session_type = resolved.get("session_type") or "R"
         return {"round_number": round_number, "session_type": session_type}
 
+    if tool == "analyze_energy_management":
+        session_type = resolved.get("session_type") or "Q"
+        if resolved.get("entity_type") == "driver" and resolved.get("entity_code"):
+            return {
+                "round_number": round_number,
+                "session_type": session_type,
+                "driver_a": resolved["entity_code"],
+            }
+        if resolved.get("entity_type") == "multi_driver" and len(resolved.get("entity_codes") or []) >= 2:
+            codes = resolved["entity_codes"]
+            return {
+                "round_number": round_number,
+                "session_type": session_type,
+                "driver_a": codes[0],
+                "driver_b": codes[1],
+            }
+
     return None
+
+
+def _extract_json_object(text: str) -> dict:
+    try:
+        return json.loads(text)
+    except Exception:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise
+        return json.loads(match.group(0))
+
+
+def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
+    if resolved.get("analysis_mode") != "driver_comparison":
+        return None
+
+    round_number = resolved.get("round_number")
+    codes = resolved.get("entity_codes") or []
+    names = resolved.get("entity_names") or []
+    if round_number is None or len(codes) < 2 or len(names) < 2:
+        return None
+
+    focus = resolved.get("analysis_focus") or ("qualifying" if resolved.get("session_type") == "Q" else "race")
+    session_type = "Q" if focus == "qualifying" else (resolved.get("session_type") or "R")
+
+    plan = {
+        "analysis_mode": "driver_comparison",
+        "focus": focus,
+        "question": message,
+        "round_number": round_number,
+        "drivers": [
+            {"name": names[0], "code": codes[0]},
+            {"name": names[1], "code": codes[1]},
+        ],
+        "tool_calls": [],
+    }
+
+    if focus == "qualifying":
+        plan["tool_calls"] = [
+            ("get_qualifying_results", {"round_number": round_number}),
+            ("analyze_qualifying_battle", {
+                "round_number": round_number,
+                "driver_a": codes[0],
+                "driver_b": codes[1],
+            }),
+        ]
+        return plan
+
+    if focus in ("race", "session"):
+        plan["tool_calls"] = [
+            ("get_driver_race_story", {"round_number": round_number, "driver_name": names[0]}),
+            ("get_driver_race_story", {"round_number": round_number, "driver_name": names[1]}),
+            ("get_safety_car_periods", {"round_number": round_number, "session_type": "R"}),
+            ("analyze_energy_management", {
+                "round_number": round_number,
+                "session_type": resolved.get("session_type") or "R",
+                "driver_a": codes[0],
+                "driver_b": codes[1],
+            }),
+        ]
+        return plan
+
+    return None
+
+
+def _retrieve_analysis_evidence(plan: dict) -> list[dict]:
+    evidence = []
+    for tool_name, args in plan.get("tool_calls", []):
+        try:
+            logger.info("Deterministic analysis tool call: %s args=%s", tool_name, args)
+            evidence.append({
+                "tool": tool_name,
+                "args": args,
+                "result": execute_tool(tool_name, args),
+            })
+        except Exception as exc:
+            evidence.append({
+                "tool": tool_name,
+                "args": args,
+                "error": str(exc),
+            })
+    return evidence
 
 
 def _prepare_resolved_context(message: str, history: list[dict]) -> tuple[dict, dict | None]:
     previous_context = resolve_context_from_history(history)
+    return _prepare_resolved_context_from_previous(message, previous_context)
+
+
+def _prepare_resolved_context_from_previous(message: str, previous_context: dict | None) -> tuple[dict, dict | None]:
     resolved = resolve_query_context(message, previous_context)
 
     preloaded = None
@@ -153,6 +300,54 @@ def _build_request_system_prompt(resolved: dict, preloaded: dict | None) -> str:
 
     return SYSTEM_PROMPT + "\n\n" + "\n".join(lines)
 
+
+def _build_analysis_user_prompt(question: str, resolved: dict, plan: dict, evidence: list[dict]) -> str:
+    payload = {
+        "question": question,
+        "resolved_context": {
+            "event_name": resolved.get("event_name"),
+            "round_number": resolved.get("round_number"),
+            "session_type": resolved.get("session_type"),
+            "analysis_mode": resolved.get("analysis_mode"),
+            "analysis_focus": resolved.get("analysis_focus"),
+            "entity_names": resolved.get("entity_names"),
+            "entity_codes": resolved.get("entity_codes"),
+        },
+        "plan": plan,
+        "evidence": evidence,
+    }
+    return json.dumps(payload, default=str)
+
+
+def _build_answer_writer_prompt(question: str, analysis: dict) -> str:
+    return json.dumps({
+        "question": question,
+        "analysis": analysis,
+    }, default=str)
+
+
+def _try_deterministic_analysis(question: str, history: list[dict], *, provider: str) -> str | None:
+    previous_context = resolve_context_from_history(history)
+    resolved = resolve_query_context(question, previous_context)
+    plan = _build_analysis_plan(question, resolved)
+    if not plan:
+        return None
+
+    evidence = _retrieve_analysis_evidence(plan)
+    if not evidence:
+        return None
+
+    try:
+        if provider == "openai":
+            analysis = _run_openai_analysis(question, resolved, plan, evidence)
+            return _run_openai_answer_writer(question, analysis)
+
+        analysis = _run_anthropic_analysis(question, resolved, plan, evidence)
+        return _run_anthropic_answer_writer(question, analysis)
+    except Exception as exc:
+        logger.warning("Deterministic analysis failed; falling back to normal tool loop. error=%s", exc)
+        return None
+
 def _get_anthropic_client() -> anthropic.Anthropic:
     global _anthropic_client
     if _anthropic_client is None:
@@ -160,6 +355,35 @@ def _get_anthropic_client() -> anthropic.Anthropic:
             api_key=os.environ.get("ANTHROPIC_API_KEY")
         )
     return _anthropic_client
+
+
+def _run_anthropic_analysis(question: str, resolved: dict, plan: dict, evidence: list[dict]) -> dict:
+    client = _get_anthropic_client()
+    response = client.messages.create(
+        model="claude-opus-4-5",
+        max_tokens=1200,
+        system=ANALYSIS_SYSTEM_PROMPT,
+        messages=[{
+            "role": "user",
+            "content": _build_analysis_user_prompt(question, resolved, plan, evidence),
+        }],
+    )
+    text = "".join(block.text for block in response.content if hasattr(block, "text"))
+    return _extract_json_object(text)
+
+
+def _run_anthropic_answer_writer(question: str, analysis: dict) -> str:
+    client = _get_anthropic_client()
+    response = client.messages.create(
+        model="claude-opus-4-5",
+        max_tokens=1200,
+        system=ANSWER_WRITER_SYSTEM_PROMPT,
+        messages=[{
+            "role": "user",
+            "content": _build_answer_writer_prompt(question, analysis),
+        }],
+    )
+    return "".join(block.text for block in response.content if hasattr(block, "text")).strip()
 
 
 def _answer_anthropic(message: str, history: list[dict]) -> str:
@@ -226,6 +450,31 @@ def _get_openai_client() -> openai_sdk.OpenAI:
     return _openai_client
 
 
+def _run_openai_analysis(question: str, resolved: dict, plan: dict, evidence: list[dict]) -> dict:
+    client = _get_openai_client()
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
+            {"role": "user", "content": _build_analysis_user_prompt(question, resolved, plan, evidence)},
+        ],
+        response_format={"type": "json_object"},
+    )
+    return _extract_json_object(response.choices[0].message.content)
+
+
+def _run_openai_answer_writer(question: str, analysis: dict) -> str:
+    client = _get_openai_client()
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": ANSWER_WRITER_SYSTEM_PROMPT},
+            {"role": "user", "content": _build_answer_writer_prompt(question, analysis)},
+        ],
+    )
+    return response.choices[0].message.content.strip()
+
+
 def _answer_openai(message: str, history: list[dict]) -> str:
     client = _get_openai_client()
     resolved, preloaded = _prepare_resolved_context(message, history)
@@ -286,6 +535,9 @@ def answer_f1_question(message: str, history: list[dict] | None = None) -> str:
     """
     prior = history or []
     provider = os.environ.get("LLM_PROVIDER", "anthropic").lower()
+    deterministic = _try_deterministic_analysis(message, prior, provider=provider)
+    if deterministic:
+        return deterministic
     if provider == "openai":
         return _answer_openai(message, prior)
     return _answer_anthropic(message, prior)

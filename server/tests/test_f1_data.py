@@ -4,6 +4,13 @@ from unittest.mock import patch, MagicMock
 import f1_data
 
 
+@pytest.fixture(autouse=True)
+def clear_session_cache():
+    f1_data._clear_session_cache()
+    yield
+    f1_data._clear_session_cache()
+
+
 def _make_standings_response():
     mock = MagicMock()
     mock.json.return_value = {
@@ -148,6 +155,73 @@ def test_get_circuits_returns_list():
     assert result[0]['round'] == 1
     assert result[0]['country'] == 'Bahrain'
     assert result[0]['date'] == '2025-03-02'
+
+
+def test_load_session_reuses_cached_session_and_upgrades_flags():
+    mock_session = MagicMock()
+
+    with patch('f1_data._validate_session_availability'), patch('f1_data.fastf1.get_session', return_value=mock_session) as get_session_mock:
+        f1_data._clear_session_cache()
+
+        first = f1_data._load_session(1, 'R', laps=True, telemetry=False, weather=False, messages=False)
+        second = f1_data._load_session(1, 'R', laps=True, telemetry=False, weather=False, messages=False)
+        third = f1_data._load_session(1, 'R', laps=True, telemetry=False, weather=False, messages=True)
+
+    assert first is mock_session
+    assert second is mock_session
+    assert third is mock_session
+    assert get_session_mock.call_count == 1
+    assert mock_session.load.call_count == 2
+    assert mock_session.load.call_args_list[0].kwargs == {
+        'laps': True,
+        'telemetry': False,
+        'weather': False,
+        'messages': False,
+    }
+    assert mock_session.load.call_args_list[1].kwargs == {
+        'laps': True,
+        'telemetry': False,
+        'weather': False,
+        'messages': True,
+    }
+    f1_data._clear_session_cache()
+
+
+def test_analyze_energy_management_single_driver_uses_inference_not_direct_measurement():
+    telemetry = {
+        "event": "Japanese Grand Prix",
+        "session": "Q",
+        "driver": "NOR",
+        "lap_number": 12,
+        "telemetry": [
+            {"distance_m": 0, "speed_kph": 180.0, "throttle_pct": 100.0, "brake": False, "gear": 7, "rpm": 11000, "drs_open": False},
+            {"distance_m": 100, "speed_kph": 188.0, "throttle_pct": 100.0, "brake": False, "gear": 7, "rpm": 11200, "drs_open": False},
+            {"distance_m": 200, "speed_kph": 192.0, "throttle_pct": 15.0, "brake": False, "gear": 7, "rpm": 11250, "drs_open": False},
+            {"distance_m": 300, "speed_kph": 190.0, "throttle_pct": 0.0, "brake": False, "gear": 7, "rpm": 11100, "drs_open": False},
+            {"distance_m": 400, "speed_kph": 175.0, "throttle_pct": 0.0, "brake": True, "gear": 6, "rpm": 10400, "drs_open": False},
+        ],
+    }
+
+    with patch('f1_data.get_lap_telemetry', return_value=telemetry):
+        result = f1_data.analyze_energy_management(3, 'Q', 'NOR')
+
+    assert result["mode"] == "single_driver"
+    assert "ERS state of charge" in result["not_directly_measured"][0]
+    assert result["drivers"][0]["driver"] == "NOR"
+    assert isinstance(result["inference_summary"], list)
+
+
+def test_get_driver_weekend_overview_includes_energy_management():
+    with patch('f1_data._resolve_driver', return_value={"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"}), \
+         patch('f1_data.get_qualifying_results', return_value={"race_name": "Japanese Grand Prix", "results": [{"code": "NOR", "position": 5, "team": "McLaren", "q1": "1:30.0", "q2": "1:29.5", "q3": "1:29.4"}]}), \
+         patch('f1_data.get_race_results', return_value={"race_name": "Japanese Grand Prix", "results": [{"code": "NOR", "position": 5, "points": 10.0, "status": "Finished", "team": "McLaren", "driver": "Lando Norris", "fastest_lap": False}]}), \
+         patch('f1_data.get_driver_strategy', return_value={"drivers": [{"stints": []}]}), \
+         patch('f1_data.get_safety_car_periods', return_value={"sc_count": 0, "vsc_count": 0, "periods": []}), \
+         patch('f1_data.get_session_results', return_value={"results": [{"abbreviation": "NOR", "grid_position": 5, "driver_number": "4"}]}), \
+         patch('f1_data.analyze_energy_management', return_value={"mode": "single_driver", "drivers": [{"driver": "NOR", "possible_clipping_windows": [], "likely_lift_and_coast_events": []}], "confidence": "low"}):
+        result = f1_data.get_driver_weekend_overview(3, "Norris")
+
+    assert result["energy_management"]["mode"] == "single_driver"
 
 
 # ─── Helpers ────────────────────────────────────────────────
@@ -501,6 +575,19 @@ def test_get_driver_lap_times():
     assert result['laps'][0]['speed_st'] == 315.2
 
 
+def test_get_sector_comparison_loads_messages_for_qualifying():
+    nor_lap = _make_mock_fastest_lap("NOR", lap_time_s=86.456)
+    lec_lap = _make_mock_fastest_lap("LEC", "Ferrari", lap_time_s=86.712)
+    mock_session = _make_mock_session({"NOR": nor_lap, "LEC": lec_lap})
+
+    with patch('f1_data.fastf1.get_session', return_value=mock_session):
+        import f1_data
+        f1_data._clear_session_cache()
+        f1_data.get_sector_comparison(8, 'Q', 'NOR', 'LEC')
+
+    mock_session.load.assert_called_once_with(laps=True, telemetry=False, weather=False, messages=True)
+
+
 def test_get_driver_lap_times_driver_not_found():
     mock_session = _make_mock_session({})
 
@@ -646,6 +733,101 @@ def test_get_telemetry_comparison_driver_not_found():
         import f1_data
         with pytest.raises(ValueError, match="No data"):
             f1_data.get_telemetry_comparison(8, 'Q', 'NOR', 'ZZZ')
+
+
+def test_analyze_qualifying_battle_derives_causal_summary():
+    import f1_data
+    telemetry = {
+        "comparison": [
+            {
+                "distance_m": 300,
+                "delta_speed": 4.0,
+                "throttle_a": 100.0,
+                "throttle_b": 100.0,
+                "brake_a": False,
+                "brake_b": False,
+                "gear_a": 8,
+                "gear_b": 8,
+            },
+            {
+                "distance_m": 1400,
+                "delta_speed": 12.0,
+                "throttle_a": 100.0,
+                "throttle_b": 100.0,
+                "brake_a": False,
+                "brake_b": False,
+                "gear_a": 8,
+                "gear_b": 8,
+            },
+        ]
+    }
+    energy = {
+        "comparative_signal": {
+            "strongest_full_throttle_speed_fade": {
+                "distance_m": 1400,
+                "delta_speed_kph": 12.0,
+            }
+        }
+    }
+
+    lec_lap = _make_mock_fastest_lap("LEC", "Ferrari", lap_time_s=89.303, s1=31.778, s2=39.855, s3=17.670, speed_i1=284.0, speed_i2=326.0, speed_st=283.0)
+    nor_lap = _make_mock_fastest_lap("NOR", lap_time_s=89.409, s1=32.049, s2=39.716, s3=17.644, speed_i1=272.0, speed_i2=320.0, speed_st=281.0)
+    mock_session = _make_mock_session({"LEC": lec_lap, "NOR": nor_lap})
+    q1 = MagicMock()
+    q2 = MagicMock()
+    q3 = MagicMock()
+    q1.pick_driver.side_effect = lambda code: MagicMock(empty=True)
+    q2.pick_driver.side_effect = lambda code: MagicMock(empty=True)
+    def pick_driver_q3(code):
+        mock_laps = MagicMock()
+        mock_laps.empty = False
+        mock_laps.pick_fastest.return_value = lec_lap if code.upper() == "LEC" else nor_lap
+        return mock_laps
+    q3.pick_driver.side_effect = pick_driver_q3
+    mock_session.laps.split_qualifying_sessions.return_value = [q1, q2, q3]
+
+    with patch('f1_data._load_session', return_value=mock_session), \
+         patch('f1_data.get_telemetry_comparison', return_value=telemetry), \
+         patch('f1_data.analyze_energy_management', return_value=energy), \
+         patch('f1_data.get_circuit_corners', return_value=[{"number": 1, "label": None, "distance_m": 1500}]):
+        result = f1_data.analyze_qualifying_battle(3, 'LEC', 'NOR')
+
+    assert result["faster_driver"] == "LEC"
+    assert result["decisive_sector"] == "Sector 1"
+    assert result["compared_segment"] == "Q3"
+    assert result["cause_type"] in ("straight_line_speed", "straight_line_speed_energy_limited")
+    assert result["decisive_corner"] == "Turn 1"
+    assert result["energy_relevant"] is True
+    assert result["telemetry_summary"]["distance_m"] == 1400
+    assert "12.0 kph" in result["zone_summary"]
+
+
+def test_analyze_qualifying_battle_gracefully_handles_missing_telemetry():
+    import f1_data
+    lec_lap = _make_mock_fastest_lap("LEC", "Ferrari", lap_time_s=89.303, s1=31.778, s2=39.855, s3=17.670, speed_i1=284.0, speed_i2=326.0, speed_st=283.0)
+    nor_lap = _make_mock_fastest_lap("NOR", lap_time_s=89.409, s1=32.049, s2=39.716, s3=17.644, speed_i1=272.0, speed_i2=320.0, speed_st=281.0)
+    mock_session = _make_mock_session({"LEC": lec_lap, "NOR": nor_lap})
+    q1 = MagicMock()
+    q2 = MagicMock()
+    q3 = MagicMock()
+    q1.pick_driver.side_effect = lambda code: MagicMock(empty=True)
+    q2.pick_driver.side_effect = lambda code: MagicMock(empty=True)
+    def pick_driver_q3(code):
+        mock_laps = MagicMock()
+        mock_laps.empty = False
+        mock_laps.pick_fastest.return_value = lec_lap if code.upper() == "LEC" else nor_lap
+        return mock_laps
+    q3.pick_driver.side_effect = pick_driver_q3
+    mock_session.laps.split_qualifying_sessions.return_value = [q1, q2, q3]
+
+    with patch('f1_data._load_session', return_value=mock_session), \
+         patch('f1_data.get_telemetry_comparison', side_effect=ValueError("telemetry unavailable")), \
+         patch('f1_data.analyze_energy_management', side_effect=ValueError("energy unavailable")):
+        result = f1_data.analyze_qualifying_battle(3, 'LEC', 'NOR')
+
+    assert result["telemetry_available"] is False
+    assert result["energy_available"] is False
+    assert result["caveats"]
 
 
 def test_get_circuit_corners():
