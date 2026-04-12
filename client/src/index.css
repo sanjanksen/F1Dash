@@ -21,6 +21,8 @@
   --accent: #E10600;
   --accent-hover: #C70000;
   --accent-dim: rgba(225, 6, 0, 0.08);
+  --error-bg: #FFF4F4;
+  --white: #fff;
 
   /* Borders */
   --border: #EAEAEA;

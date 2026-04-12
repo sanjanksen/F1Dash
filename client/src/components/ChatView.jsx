@@ -12,12 +12,14 @@ const SUGGESTIONS = [
 export default function ChatView() {
   const [messages, setMessages] = useState([
     {
+      id: 'welcome',
       role: 'assistant',
       text: "Ask me anything about the 2025 Formula 1 season — driver performance, standings, race results, or circuit comparisons.",
     },
   ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [hasStarted, setHasStarted] = useState(false)
   const bottomRef = useRef(null)
   const inputRef  = useRef(null)
 
@@ -25,29 +27,33 @@ export default function ChatView() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
 
+  useEffect(() => {
+    if (!loading) inputRef.current?.focus()
+  }, [loading])
+
   const send = async (text) => {
     const msg = text.trim()
     if (!msg || loading) return
 
-    setMessages(prev => [...prev, { role: 'user', text: msg }])
+    setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'user', text: msg }])
+    setHasStarted(true)
     setInput('')
     setLoading(true)
 
     try {
       const { response } = await sendChatMessage(msg)
-      setMessages(prev => [...prev, { role: 'assistant', text: response }])
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'assistant', text: response }])
     } catch (e) {
       setMessages(prev => [
         ...prev,
-        { role: 'assistant', text: `Something went wrong: ${e.message}`, isError: true },
+        { id: crypto.randomUUID(), role: 'assistant', text: `Something went wrong: ${e.message}`, isError: true },
       ])
     } finally {
       setLoading(false)
-      setTimeout(() => inputRef.current?.focus(), 60)
     }
   }
 
-  const isIntro = messages.length === 1
+  const isIntro = !hasStarted
 
   return (
     <div className="chat-container">
@@ -72,7 +78,7 @@ export default function ChatView() {
       <div className="chat-messages">
         {messages.map((msg, i) => (
           <div
-            key={i}
+            key={msg.id}
             className={`bubble-row ${msg.role} animate-in`}
             style={{ animationDelay: `${i * 0.025}s` }}
           >
@@ -89,9 +95,9 @@ export default function ChatView() {
           <div className="bubble-row assistant animate-in">
             <div className="chat-avatar">F<span>1</span></div>
             <div className="chat-bubble assistant typing">
-              <span className="dot" />
-              <span className="dot" />
-              <span className="dot" />
+              <span className="typing-dot" />
+              <span className="typing-dot" />
+              <span className="typing-dot" />
             </div>
           </div>
         )}
@@ -111,7 +117,6 @@ export default function ChatView() {
           value={input}
           onChange={e => setInput(e.target.value)}
           disabled={loading}
-          autoFocus
         />
         <button
           className="send-btn"
