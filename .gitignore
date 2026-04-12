@@ -16,3 +16,14 @@ client/dist/
 # IDE
 .vscode/
 .idea/
+
+# Root-level stale Vite scaffold (superseded by client/)
+/index.html
+/eslint.config.js
+/vite.config.js
+/package.json
+/package-lock.json
+/src/
+/public/
+/node_modules/
+/dist/
