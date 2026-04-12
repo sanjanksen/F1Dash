@@ -23,6 +23,7 @@ app.add_middleware(
 
 class ChatRequest(BaseModel):
     message: str
+    history: list[dict] = []
 
 
 @app.get("/health")
@@ -64,7 +65,7 @@ async def chat_endpoint(request: ChatRequest):
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="message cannot be empty")
     try:
-        response = answer_f1_question(request.message)
+        response = answer_f1_question(request.message, request.history)
         return {"response": response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

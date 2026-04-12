@@ -1,5 +1,6 @@
 # server/tests/test_chat.py
 import json
+import os
 import pytest
 from unittest.mock import patch, MagicMock, call
 import importlib
@@ -53,6 +54,15 @@ def _two_tool_use_response():
     return resp
 
 
+def _load_chat_with_client(mock_client):
+    import chat
+    importlib.reload(chat)
+    chat.os.environ["LLM_PROVIDER"] = "anthropic"
+    chat._anthropic_client = mock_client
+    chat._openai_client = None
+    return chat
+
+
 # ─── Tests ──────────────────────────────────────────────────
 
 def test_answer_f1_question_direct_answer():
@@ -60,10 +70,8 @@ def test_answer_f1_question_direct_answer():
     mock_client = MagicMock()
     mock_client.messages.create.return_value = _end_turn_response("F1 started in 1950.")
 
-    with patch('chat.anthropic.Anthropic', return_value=mock_client):
-        import chat
-        importlib.reload(chat)
-        result = chat.answer_f1_question("When did F1 start?")
+    chat = _load_chat_with_client(mock_client)
+    result = chat.answer_f1_question("When did F1 start?")
 
     assert result == "F1 started in 1950."
     assert mock_client.messages.create.call_count == 1
@@ -77,10 +85,8 @@ def test_answer_f1_question_single_tool_call():
         _end_turn_response("Verstappen leads with 150 points."),
     ]
 
-    with patch('chat.anthropic.Anthropic', return_value=mock_client), \
-         patch('chat.execute_tool', return_value=[{"standing": 1, "full_name": "Max Verstappen"}]):
-        import chat
-        importlib.reload(chat)
+    chat = _load_chat_with_client(mock_client)
+    with patch.object(chat, 'execute_tool', return_value=[{"standing": 1, "full_name": "Max Verstappen"}]):
         result = chat.answer_f1_question("Who leads the championship?")
 
     assert result == "Verstappen leads with 150 points."
@@ -100,10 +106,8 @@ def test_answer_f1_question_parallel_tool_calls():
         "get_constructor_standings": [{"position": 1, "team": "Red Bull Racing"}],
     }
 
-    with patch('chat.anthropic.Anthropic', return_value=mock_client), \
-         patch('chat.execute_tool', side_effect=lambda n, a: execute_tool_results[n]):
-        import chat
-        importlib.reload(chat)
+    chat = _load_chat_with_client(mock_client)
+    with patch.object(chat, 'execute_tool', side_effect=lambda n, a: execute_tool_results[n]):
         result = chat.answer_f1_question("Who leads drivers and constructors?")
 
     assert "Verstappen" in result
@@ -123,10 +127,8 @@ def test_answer_f1_question_tool_error_uses_is_error_flag():
         _end_turn_response("I couldn't find that driver."),
     ]
 
-    with patch('chat.anthropic.Anthropic', return_value=mock_client), \
-         patch('chat.execute_tool', side_effect=ValueError("Driver not found: 'nobody'")):
-        import chat
-        importlib.reload(chat)
+    chat = _load_chat_with_client(mock_client)
+    with patch.object(chat, 'execute_tool', side_effect=ValueError("Driver not found: 'nobody'")):
         result = chat.answer_f1_question("Tell me about nobody")
 
     assert mock_client.messages.create.call_count == 2
@@ -141,10 +143,8 @@ def test_answer_f1_question_exceeds_max_rounds():
     mock_client = MagicMock()
     mock_client.messages.create.return_value = _tool_use_response()
 
-    with patch('chat.anthropic.Anthropic', return_value=mock_client), \
-         patch('chat.execute_tool', return_value=[]):
-        import chat
-        importlib.reload(chat)
+    chat = _load_chat_with_client(mock_client)
+    with patch.object(chat, 'execute_tool', return_value=[]):
         with pytest.raises(ValueError, match="Exceeded"):
             chat.answer_f1_question("A question Claude never stops trying to answer")
 
@@ -156,10 +156,8 @@ def test_answer_f1_question_passes_system_prompt():
     mock_client = MagicMock()
     mock_client.messages.create.return_value = _end_turn_response("Answer.")
 
-    with patch('chat.anthropic.Anthropic', return_value=mock_client):
-        import chat
-        importlib.reload(chat)
-        chat.answer_f1_question("Any question")
+    chat = _load_chat_with_client(mock_client)
+    chat.answer_f1_question("Any question")
 
     call_kwargs = mock_client.messages.create.call_args[1]
     assert "system" in call_kwargs
@@ -171,11 +169,64 @@ def test_answer_f1_question_passes_tool_definitions():
     mock_client = MagicMock()
     mock_client.messages.create.return_value = _end_turn_response("Answer.")
 
-    with patch('chat.anthropic.Anthropic', return_value=mock_client):
-        import chat
-        importlib.reload(chat)
-        chat.answer_f1_question("Any question")
+    chat = _load_chat_with_client(mock_client)
+    chat.answer_f1_question("Any question")
 
     call_kwargs = mock_client.messages.create.call_args[1]
     assert "tools" in call_kwargs
-    assert len(call_kwargs["tools"]) == 14
+    assert len(call_kwargs["tools"]) == len(chat.TOOL_DEFINITIONS)
+
+
+def test_build_request_system_prompt_uses_previous_context():
+    import chat
+    resolved = {
+        "has_explicit_context": False,
+        "used_previous_context": True,
+        "entity_type": "driver",
+        "entity_name": "George Russell",
+        "entity_code": "RUS",
+        "event_name": "Japanese Grand Prix",
+        "round_number": 3,
+        "session_type": None,
+        "scope": "overview",
+        "suggested_tool": "get_driver_race_story",
+        "resolution_confidence": "medium",
+        "routing_confidence": "medium",
+    }
+    prompt = chat._build_request_system_prompt(resolved, None)
+
+    assert "George Russell" in prompt
+    assert "Japanese Grand Prix" in prompt
+    assert "used_previous_context: True" in prompt
+    assert "Routing directive: start with get_driver_race_story" in prompt
+
+
+def test_suggested_tool_args_driver_story():
+    import chat
+    resolved = {
+        "suggested_tool": "get_driver_race_story",
+        "round_number": 3,
+        "entity_name": "George Russell",
+    }
+    assert chat._suggested_tool_args(resolved) == {"round_number": 3, "driver_name": "George Russell"}
+
+
+def test_prepare_resolved_context_preloads_high_confidence():
+    import chat
+    resolved = {
+        "suggested_tool": "get_driver_race_story",
+        "round_number": 3,
+        "entity_name": "George Russell",
+        "routing_confidence": "high",
+        "has_explicit_context": True,
+        "used_previous_context": False,
+    }
+    with patch('chat.resolve_context_from_history', return_value=None), \
+         patch('chat.resolve_query_context', return_value=resolved), \
+         patch.object(chat, 'execute_tool', return_value={"driver": "George Russell"}) as exec_mock:
+        merged, preloaded = chat._prepare_resolved_context("How did Russell do at Suzuka?", [])
+
+    assert merged is resolved
+    assert preloaded["tool"] == "get_driver_race_story"
+    assert preloaded["result"]["driver"] == "George Russell"
+    exec_mock.assert_called_once_with("get_driver_race_story", {"round_number": 3, "driver_name": "George Russell"})

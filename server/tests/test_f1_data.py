@@ -729,3 +729,377 @@ def test_get_historical_circuit_performance():
     assert result['history'][0]['qualifying_top5'][0]['q3'] == '1:09.100'
     assert result['history'][0]['race_top5'][0]['fastest_lap'] is True
     assert result['history'][1]['year'] == 2025
+
+
+def test_get_session_results():
+    mock_session = MagicMock()
+    mock_session.event = {'EventName': 'Bahrain Grand Prix'}
+    mock_session.total_laps = 57
+    mock_session.results = pd.DataFrame([
+        {
+            "Position": 1,
+            "ClassifiedPosition": "1",
+            "GridPosition": 2,
+            "Status": "Finished",
+            "Points": 25.0,
+            "FullName": "Max Verstappen",
+            "BroadcastName": "M VERSTAPPEN",
+            "Abbreviation": "VER",
+            "DriverNumber": "1",
+            "TeamName": "Red Bull Racing",
+            "TeamColor": "3671C6",
+            "CountryCode": "NLD",
+            "HeadshotUrl": "https://example.com/ver.png",
+            "Q1": pd.Timedelta(seconds=89.8),
+            "Q2": pd.Timedelta(seconds=89.1),
+            "Q3": pd.Timedelta(seconds=88.7),
+        }
+    ])
+
+    with patch('f1_data.fastf1.get_session', return_value=mock_session):
+        result = f1_data.get_session_results(1, 'R')
+
+    assert result['event'] == 'Bahrain Grand Prix'
+    assert result['total_laps'] == 57
+    assert result['results'][0]['grid_position'] == 2
+    assert result['results'][0]['q3'] == '1:28.700'
+
+
+def test_get_driver_strategy_single_driver():
+    lap_df = pd.DataFrame([
+        {
+            'Driver': 'NOR', 'LapNumber': 1.0, 'LapTime': pd.Timedelta(seconds=91.0),
+            'Compound': 'MEDIUM', 'TyreLife': 1.0, 'Stint': 1.0, 'FreshTyre': True,
+            'PitInTime': pd.NaT, 'PitOutTime': pd.NaT, 'Position': 3.0, 'Team': 'McLaren'
+        },
+        {
+            'Driver': 'NOR', 'LapNumber': 2.0, 'LapTime': pd.Timedelta(seconds=91.5),
+            'Compound': 'MEDIUM', 'TyreLife': 2.0, 'Stint': 1.0, 'FreshTyre': True,
+            'PitInTime': pd.Timedelta(seconds=180), 'PitOutTime': pd.NaT, 'Position': 2.0, 'Team': 'McLaren'
+        },
+        {
+            'Driver': 'NOR', 'LapNumber': 3.0, 'LapTime': pd.Timedelta(seconds=90.0),
+            'Compound': 'SOFT', 'TyreLife': 1.0, 'Stint': 2.0, 'FreshTyre': True,
+            'PitInTime': pd.NaT, 'PitOutTime': pd.Timedelta(seconds=250), 'Position': 2.0, 'Team': 'McLaren'
+        },
+    ])
+    mock_session = MagicMock()
+    mock_session.event = {'EventName': 'Bahrain Grand Prix'}
+    mock_session.results = pd.DataFrame([{"Abbreviation": "NOR", "FullName": "Lando Norris", "TeamName": "McLaren", "GridPosition": 4, "Position": 2}])
+    mock_session.laps.pick_driver.side_effect = lambda code: lap_df if code == 'NOR' else pd.DataFrame()
+
+    with patch('f1_data.fastf1.get_session', return_value=mock_session):
+        result = f1_data.get_driver_strategy(1, 'R', 'NOR')
+
+    assert result['drivers'][0]['driver'] == 'Lando Norris'
+    assert result['drivers'][0]['pit_stop_count'] == 1
+    assert len(result['drivers'][0]['stints']) == 2
+    assert result['drivers'][0]['stints'][0]['compound'] == 'MEDIUM'
+
+
+def test_get_qualifying_progression():
+    def _lap_pickable(lap):
+        mock = MagicMock()
+        mock.empty = False
+        mock.pick_fastest.return_value = lap
+        return mock
+
+    q1_laps = MagicMock()
+    q2_laps = MagicMock()
+    q3_laps = MagicMock()
+    q1_laps.pick_driver.side_effect = lambda code: _lap_pickable(_make_mock_fastest_lap(code, lap_time_s=90.0))
+    q2_laps.pick_driver.side_effect = lambda code: _lap_pickable(_make_mock_fastest_lap(code, lap_time_s=89.5))
+    q3_laps.pick_driver.side_effect = lambda code: _lap_pickable(_make_mock_fastest_lap(code, lap_time_s=89.0))
+
+    mock_session = MagicMock()
+    mock_session.event = {'EventName': 'Monaco Grand Prix'}
+    mock_session.drivers = ['NOR']
+    mock_session.results = pd.DataFrame([{"Abbreviation": "NOR", "FullName": "Lando Norris", "TeamName": "McLaren"}])
+    mock_session.laps.split_qualifying_sessions.return_value = [q1_laps, q2_laps, q3_laps]
+
+    with patch('f1_data.fastf1.get_session', return_value=mock_session):
+        result = f1_data.get_qualifying_progression(8)
+
+    driver = result['drivers'][0]
+    assert driver['made_q3'] is True
+    assert driver['best_segment'] == 'q3'
+    assert driver['improvement_q2_to_q3_s'] < 0
+
+
+def test_get_clean_pace_summary():
+    class PaceFrame(pd.DataFrame):
+        @property
+        def _constructor(self):
+            return PaceFrame
+
+        def pick_accurate(self):
+            return self
+
+        def pick_not_deleted(self):
+            return self
+
+        def pick_wo_box(self):
+            return self
+
+        def pick_track_status(self, _status):
+            return self
+
+        def pick_quicklaps(self):
+            return self
+
+    laps = PaceFrame([
+        {'LapTime': pd.Timedelta(seconds=88.0), 'LapNumber': 4, 'Compound': 'SOFT', 'TyreLife': 2.0, 'TrackStatus': '1'},
+        {'LapTime': pd.Timedelta(seconds=88.2), 'LapNumber': 5, 'Compound': 'SOFT', 'TyreLife': 3.0, 'TrackStatus': '1'},
+    ])
+    mock_session = MagicMock()
+    mock_session.event = {'EventName': 'Monaco Grand Prix'}
+    mock_session.drivers = ['NOR']
+    mock_session.results = pd.DataFrame([{"Abbreviation": "NOR", "FullName": "Lando Norris", "TeamName": "McLaren"}])
+    mock_session.laps.pick_driver.side_effect = lambda code: laps if code == 'NOR' else PaceFrame()
+
+    with patch('f1_data.fastf1.get_session', return_value=mock_session):
+        result = f1_data.get_clean_pace_summary(8, 'Q', ['NOR'])
+
+    assert result['drivers'][0]['rank'] == 1
+    assert result['drivers'][0]['best_lap_time'] == '1:28.000'
+    assert result['drivers'][0]['lap_count'] == 2
+
+
+def test_get_race_control_messages():
+    mock_session = MagicMock()
+    mock_session.event = {'EventName': 'Monaco Grand Prix'}
+    mock_session.race_control_messages = pd.DataFrame([
+        {'Category': 'Track Limits', 'Flag': None, 'Scope': 'Driver', 'Message': 'Car 4 lap time deleted', 'Status': None, 'Lap': 15, 'Time': pd.Timedelta(seconds=900), 'DriverNumber': '4'},
+        {'Category': 'Incident', 'Flag': 'YELLOW', 'Scope': 'Sector', 'Message': 'Yellow flag in sector 2', 'Status': None, 'Lap': 18, 'Time': pd.Timedelta(seconds=1080), 'DriverNumber': None},
+    ])
+
+    with patch('f1_data.fastf1.get_session', return_value=mock_session):
+        result = f1_data.get_race_control_messages(8, 'Q', category='deleted')
+
+    assert len(result['messages']) == 1
+    assert result['messages'][0]['driver_number'] == '4'
+
+
+def test_get_track_position_comparison():
+    class MockLap:
+        def __init__(self, lap_number, pos_df, car_df):
+            self.data = {'LapNumber': lap_number}
+            self._pos_df = pos_df
+            self._car_df = car_df
+
+        def __getitem__(self, key):
+            return self.data[key]
+
+        def get_pos_data(self):
+            wrapper = MagicMock()
+            wrapper.add_distance.return_value = self._pos_df
+            return wrapper
+
+        def get_car_data(self):
+            wrapper = MagicMock()
+            wrapper.add_distance.return_value = self._car_df
+            return wrapper
+
+    pos_a = pd.DataFrame({'Distance': [0.0, 100.0], 'X': [1.0, 2.0], 'Y': [3.0, 4.0], 'Status': ['OnTrack', 'OnTrack']})
+    pos_b = pd.DataFrame({'Distance': [0.0, 100.0], 'X': [1.5, 2.5], 'Y': [3.5, 4.5], 'Status': ['OnTrack', 'OnTrack']})
+    car_a = pd.DataFrame({'Distance': [0.0, 100.0], 'Speed': [150.0, 160.0]})
+    car_b = pd.DataFrame({'Distance': [0.0, 100.0], 'Speed': [145.0, 158.0]})
+    lap_a = MockLap(12, pos_a, car_a)
+    lap_b = MockLap(13, pos_b, car_b)
+
+    def pick_driver(code):
+        mock = MagicMock()
+        mock.empty = False
+        mock.pick_fastest.return_value = lap_a if code == 'NOR' else lap_b
+        return mock
+
+    mock_session = MagicMock()
+    mock_session.event = {'EventName': 'Monaco Grand Prix'}
+    mock_session.laps.pick_driver.side_effect = pick_driver
+    mock_session.get_circuit_info.return_value.rotation = 90.0
+
+    with patch('f1_data.fastf1.get_session', return_value=mock_session):
+        result = f1_data.get_track_position_comparison(8, 'Q', 'NOR', 'LEC')
+
+    assert result['rotation'] == 90.0
+    assert result['comparison'][0]['delta_speed'] == 5.0
+
+
+def test_get_circuit_details():
+    mock_session = MagicMock()
+    mock_circuit_info = MagicMock()
+    mock_circuit_info.rotation = 45.0
+    marker_df = pd.DataFrame({'Number': [1], 'Letter': ['A'], 'X': [10.0], 'Y': [20.0], 'Angle': [90.0], 'Distance': [150.0]})
+    mock_circuit_info.corners = marker_df
+    mock_circuit_info.marshal_lights = marker_df
+    mock_circuit_info.marshal_sectors = marker_df
+    mock_session.get_circuit_info.return_value = mock_circuit_info
+
+    with patch('f1_data.fastf1.get_session', return_value=mock_session):
+        result = f1_data.get_circuit_details(8)
+
+    assert result['rotation'] == 45.0
+    assert result['corners'][0]['label'] == 'A'
+
+
+def test_load_session_rejects_future_session():
+    future_date = pd.Timestamp.now(tz='UTC').tz_localize(None) + pd.Timedelta(days=7)
+    schedule = pd.DataFrame([{
+        'RoundNumber': 6,
+        'EventName': 'Miami Grand Prix',
+        'Session1': 'Practice 1',
+        'Session1DateUtc': future_date,
+        'Session2': 'Sprint Qualifying',
+        'Session2DateUtc': future_date,
+        'Session3': 'Sprint',
+        'Session3DateUtc': future_date,
+        'Session4': 'Qualifying',
+        'Session4DateUtc': future_date,
+        'Session5': 'Race',
+        'Session5DateUtc': future_date,
+        'F1ApiSupport': True,
+    }])
+
+    with patch('f1_data.fastf1.get_event_schedule', return_value=schedule):
+        with pytest.raises(ValueError, match="has not happened yet"):
+            f1_data._validate_session_availability(6, 'R', telemetry=True)
+
+
+def test_get_driver_weekend_overview():
+    with patch('f1_data._resolve_driver', return_value={
+        "full_name": "George Russell",
+        "code": "RUS",
+        "driver_id": "russell",
+        "team": "Mercedes",
+    }), \
+    patch('f1_data.get_qualifying_results', return_value={
+        "race_name": "Japanese Grand Prix",
+        "results": [
+            {"position": 5, "driver": "George Russell", "code": "RUS", "team": "Mercedes", "q1": "1:28.0", "q2": "1:27.6", "q3": "1:27.3"},
+            {"position": 7, "driver": "Kimi Antonelli", "code": "ANT", "team": "Mercedes", "q1": "1:28.1", "q2": "1:27.8", "q3": "1:27.6"},
+        ],
+    }), \
+    patch('f1_data.get_race_results', return_value={
+        "race_name": "Japanese Grand Prix",
+        "results": [
+            {"position": 3, "driver": "George Russell", "code": "RUS", "team": "Mercedes", "points": 15.0, "status": "Finished", "fastest_lap": False},
+            {"position": 2, "driver": "Charles Leclerc", "code": "LEC", "team": "Ferrari", "status": "Finished"},
+            {"position": 4, "driver": "Lewis Hamilton", "code": "HAM", "team": "Ferrari", "status": "Finished"},
+            {"position": 6, "driver": "Kimi Antonelli", "code": "ANT", "team": "Mercedes", "status": "Finished"},
+        ],
+    }), \
+    patch('f1_data.get_driver_strategy', return_value={
+        "drivers": [{
+            "driver": "George Russell",
+            "stints": [
+                {"start_lap": 1, "compound": "MEDIUM"},
+                {"start_lap": 18, "compound": "HARD", "fresh_tyre": True},
+            ],
+        }]
+    }), \
+    patch('f1_data.get_safety_car_periods', return_value={
+        "sc_count": 1,
+        "vsc_count": 0,
+        "periods": [
+            {"type": "SafetyCar", "deployed_on_lap": 20, "pitted_just_before": [], "pitted_during": [{"driver": "RUS"}]}
+        ],
+    }), \
+    patch('f1_data.get_session_results', return_value={
+        "results": [{"abbreviation": "RUS", "driver_number": "63", "grid_position": 5}]
+    }):
+        result = f1_data.get_driver_weekend_overview(3, 'Russell')
+
+    assert result["driver"] == "George Russell"
+    assert result["qualifying"]["position"] == 5
+    assert result["race"]["finish_position"] == 3
+    assert result["teammate"]["finish_position"] == 6
+    assert result["pit_stops"][0]["pit_window_after_lap"] == 17
+    assert result["safety_car_impact"]["sc_count"] == 1
+    assert result["nearby_rivals"][0]["driver"] == "Charles Leclerc"
+
+
+def test_get_driver_race_story():
+    with patch('f1_data.get_driver_weekend_overview', return_value={
+        "driver": "George Russell",
+        "code": "RUS",
+        "team": "Mercedes",
+        "event": "Japanese Grand Prix",
+        "qualifying": {"position": 5},
+        "race": {"finish_position": 3},
+        "pit_stops": [{"pit_window_after_lap": 17, "new_compound": "HARD", "fresh_tyre": True}],
+        "strategy": {"stints": []},
+        "safety_car_impact": {"sc_count": 1, "vsc_count": 0, "pitted_just_before_sc": [], "pitted_during_sc": [{"type": "SafetyCar", "lap": 20}]},
+        "teammate": {"name": "Kimi Antonelli", "finish_position": 6},
+        "nearby_rivals": [{"driver": "Charles Leclerc", "team": "Ferrari", "position": 2}],
+    }), \
+    patch('f1_data.get_session_results', return_value={"results": [{"abbreviation": "RUS", "driver_number": "63"}]}), \
+    patch('f1_data.get_race_control_messages', return_value={"messages": [{"lap": 20, "category": "Incident", "message": "Car 63 noted"}]}):
+        result = f1_data.get_driver_race_story(3, 'Russell')
+
+    assert result["driver"] == "George Russell"
+    assert any("Gained" in point for point in result["story_points"])
+    assert any("Pit strategy" in point for point in result["story_points"])
+    assert result["race_control_highlights"][0]["message"] == "Car 63 noted"
+    assert result["rivalry_story"][0].startswith("Finished near Charles Leclerc")
+
+
+def test_get_team_weekend_overview():
+    with patch('f1_data._resolve_team', return_value='Mercedes'), \
+    patch('f1_data.get_drivers', return_value=[
+        {"full_name": "George Russell", "code": "RUS", "team": "Mercedes"},
+        {"full_name": "Kimi Antonelli", "code": "ANT", "team": "Mercedes"},
+    ]), \
+    patch('f1_data.get_qualifying_results', return_value={
+        "race_name": "Japanese Grand Prix",
+        "results": [
+            {"position": 5, "driver": "George Russell", "code": "RUS", "team": "Mercedes"},
+            {"position": 7, "driver": "Kimi Antonelli", "code": "ANT", "team": "Mercedes"},
+        ],
+    }), \
+    patch('f1_data.get_race_results', return_value={
+        "race_name": "Japanese Grand Prix",
+        "results": [
+            {"position": 3, "driver": "George Russell", "code": "RUS", "team": "Mercedes", "points": 15.0, "status": "Finished", "fastest_lap": False},
+            {"position": 6, "driver": "Kimi Antonelli", "code": "ANT", "team": "Mercedes", "points": 8.0, "status": "Finished", "fastest_lap": False},
+        ],
+    }), \
+    patch('f1_data.get_driver_strategy', side_effect=[
+        {"drivers": [{"stints": [{"start_lap": 1, "compound": "MEDIUM"}, {"start_lap": 18, "compound": "HARD"}]}]},
+        {"drivers": [{"stints": [{"start_lap": 1, "compound": "MEDIUM"}, {"start_lap": 24, "compound": "HARD"}]}]},
+    ]):
+        result = f1_data.get_team_weekend_overview(3, 'Mercedes')
+
+    assert result["team"] == "Mercedes"
+    assert result["total_points"] == 23.0
+    assert result["lead_driver"] == "George Russell"
+    assert result["drivers"][0]["positions_gained"] == 2
+    assert any("Scored 23.0 point(s)" in point for point in result["summary_points"])
+
+
+def test_get_race_report():
+    with patch('f1_data.get_qualifying_results', return_value={
+        "race_name": "Japanese Grand Prix",
+        "results": [
+            {"position": 2, "driver": "Lando Norris", "code": "NOR", "team": "McLaren"},
+            {"position": 1, "driver": "Max Verstappen", "code": "VER", "team": "Red Bull Racing"},
+            {"position": 5, "driver": "George Russell", "code": "RUS", "team": "Mercedes"},
+        ],
+    }), \
+    patch('f1_data.get_race_results', return_value={
+        "race_name": "Japanese Grand Prix",
+        "circuit": "Suzuka",
+        "date": "2026-04-05",
+        "results": [
+            {"position": 1, "driver": "Lando Norris", "code": "NOR", "team": "McLaren", "points": 25.0, "status": "Finished", "fastest_lap": True},
+            {"position": 2, "driver": "Max Verstappen", "code": "VER", "team": "Red Bull Racing", "points": 18.0, "status": "Finished", "fastest_lap": False},
+            {"position": 20, "driver": "George Russell", "code": "RUS", "team": "Mercedes", "points": 0.0, "status": "Accident", "fastest_lap": False},
+        ],
+    }), \
+    patch('f1_data.get_safety_car_periods', return_value={"sc_count": 1, "vsc_count": 0, "periods": []}):
+        result = f1_data.get_race_report(3)
+
+    assert result["event"] == "Japanese Grand Prix"
+    assert result["podium"][0]["driver"] == "Lando Norris"
+    assert result["fastest_lap"]["driver"] == "Lando Norris"
+    assert result["biggest_gainer"]["driver"] == "Lando Norris"
+    assert result["dnfs"][0]["driver"] == "George Russell"

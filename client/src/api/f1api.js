@@ -15,5 +15,5 @@ async function apiFetch(path, options = {}) {
 
 export const fetchDriverStats = (name) => apiFetch(`/driver/${encodeURIComponent(name)}/stats`)
 export const fetchCircuits = () => apiFetch('/circuits')
-export const sendChatMessage = (message) =>
-  apiFetch('/chat', { method: 'POST', body: JSON.stringify({ message }) })
+export const sendChatMessage = (message, history = []) =>
+  apiFetch('/chat', { method: 'POST', body: JSON.stringify({ message, history }) })

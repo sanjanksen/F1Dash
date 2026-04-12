@@ -3,6 +3,7 @@ import os
 import fastf1
 import requests
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
 
 # Enable FastF1 disk cache
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), 'cache')
@@ -10,7 +11,7 @@ os.makedirs(_CACHE_DIR, exist_ok=True)
 fastf1.Cache.enable_cache(_CACHE_DIR)
 
 JOLPICA_BASE = "https://api.jolpi.ca/ergast/f1"
-CURRENT_YEAR = 2025
+CURRENT_YEAR = __import__('datetime').date.today().year
 
 
 def _fmt_td(td) -> str | None:
@@ -21,6 +22,187 @@ def _fmt_td(td) -> str | None:
     m = int(total // 60)
     s = total % 60
     return f"{m}:{s:06.3f}"
+
+
+def _load_session(round_number: int, session_type: str, *,
+                  laps: bool = True, telemetry: bool = False,
+                  weather: bool = False, messages: bool = False):
+    _validate_session_availability(round_number, session_type, telemetry=telemetry or laps or messages)
+    session = fastf1.get_session(CURRENT_YEAR, round_number, session_type)
+    session.load(laps=laps, telemetry=telemetry, weather=weather, messages=messages)
+    return session
+
+
+def _normalize_session_name(session_type: str) -> set[str]:
+    upper = str(session_type).strip().upper()
+    mapping = {
+        "FP1": {"FP1", "PRACTICE 1"},
+        "FP2": {"FP2", "PRACTICE 2"},
+        "FP3": {"FP3", "PRACTICE 3"},
+        "Q": {"Q", "QUALIFYING"},
+        "R": {"R", "RACE"},
+        "S": {"S", "SPRINT"},
+        "SQ": {"SQ", "SPRINT QUALIFYING"},
+        "SS": {"SS", "SPRINT SHOOTOUT"},
+    }
+    return mapping.get(upper, {upper})
+
+
+def _find_session_column(event_row, session_type: str) -> tuple[str | None, pd.Timestamp | None]:
+    aliases = _normalize_session_name(session_type)
+    for idx in range(1, 6):
+        name_key = f"Session{idx}"
+        date_key = f"Session{idx}DateUtc"
+        session_name = event_row.get(name_key)
+        if session_name is None or pd.isna(session_name):
+            continue
+        normalized_name = str(session_name).strip().upper()
+        if normalized_name in aliases:
+            session_date = event_row.get(date_key)
+            return normalized_name, session_date if session_date is not None and not pd.isna(session_date) else None
+    return None, None
+
+
+def _validate_session_availability(round_number: int, session_type: str, *, telemetry: bool) -> None:
+    try:
+        schedule = fastf1.get_event_schedule(CURRENT_YEAR, include_testing=False)
+    except Exception:
+        return
+    matching = schedule[schedule["RoundNumber"] == round_number]
+    if matching.empty:
+        return
+
+    event_row = matching.iloc[0]
+    session_name, session_date = _find_session_column(event_row, session_type)
+    event_name = event_row.get("EventName", f"Round {round_number}")
+
+    if session_name is None:
+        return
+
+    if telemetry and "F1ApiSupport" in event_row and pd.notna(event_row.get("F1ApiSupport")) and not bool(event_row.get("F1ApiSupport")):
+        raise ValueError(f"{event_name} does not have official F1 timing support for session {session_name}.")
+
+    if session_date is not None:
+        now_utc = pd.Timestamp.now(tz="UTC").tz_localize(None)
+        session_date_utc = pd.Timestamp(session_date).tz_localize(None) if getattr(session_date, "tzinfo", None) is not None else pd.Timestamp(session_date)
+        if session_date_utc > now_utc:
+            raise ValueError(
+                f"{event_name} {session_name.title()} has not happened yet. "
+                f"It is scheduled for {session_date_utc.isoformat()} UTC."
+            )
+
+
+def _get_lap_attr(lap, key, default=None):
+    getter = getattr(lap, "get", None)
+    if callable(getter):
+        return getter(key, default)
+    try:
+        value = lap[key]
+    except Exception:
+        return default
+    return default if pd.isna(value) else value
+
+
+def _normalize_position(value):
+    if value is None or pd.isna(value):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        text = str(value).strip()
+        return int(text) if text.isdigit() else None
+
+
+def _normalize_float(value):
+    if value is None or pd.isna(value):
+        return None
+    try:
+        return round(float(value), 3)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_timedelta_seconds(value):
+    if value is None or pd.isna(value):
+        return None
+    if hasattr(value, "total_seconds"):
+        return round(float(value.total_seconds()), 3)
+    return _normalize_float(value)
+
+
+def _session_results_rows(session) -> list[dict]:
+    results = getattr(session, "results", None)
+    if results is None:
+        return []
+
+    rows = []
+    iterrows = getattr(results, "iterrows", None)
+    if callable(iterrows):
+        for _, row in iterrows():
+            rows.append(dict(row))
+        return rows
+
+    if isinstance(results, list):
+        return [dict(r) for r in results]
+
+    return []
+
+
+def _driver_lookup(session) -> dict[str, dict]:
+    lookup = {}
+    for row in _session_results_rows(session):
+        abbr = str(row.get("Abbreviation", "")).upper()
+        number = str(row.get("DriverNumber", "")).upper()
+        if abbr:
+            lookup[abbr] = row
+        if number:
+            lookup[number] = row
+    return lookup
+
+
+def _extract_track_markers(df) -> list[dict]:
+    markers = []
+    if df is None:
+        return markers
+    iterrows = getattr(df, "iterrows", None)
+    if not callable(iterrows):
+        return markers
+    for _, row in iterrows():
+        raw_letter = str(row.get('Letter', '')).strip()
+        markers.append({
+            "number": _normalize_position(row.get('Number')),
+            "label": raw_letter if raw_letter else None,
+            "x": _normalize_float(row.get('X')),
+            "y": _normalize_float(row.get('Y')),
+            "angle": _normalize_float(row.get('Angle')),
+            "distance_m": _normalize_position(round(float(row['Distance']))) if pd.notna(row.get('Distance')) else None,
+        })
+    return markers
+
+
+def _pick_representative_laps(laps, limit: int):
+    if limit <= 0:
+        return laps.iloc[0:0]
+    if len(laps) <= limit:
+        return laps
+    indexed = []
+    max_index = len(laps) - 1
+    for i in range(limit):
+        idx = round(i * max_index / (limit - 1)) if limit > 1 else 0
+        indexed.append(idx)
+    return laps.iloc[sorted(set(indexed))]
+
+
+def _pick_fastest_lap(driver_laps):
+    pick_fastest = getattr(driver_laps, "pick_fastest", None)
+    if callable(pick_fastest):
+        return pick_fastest()
+    if hasattr(driver_laps, "sort_values"):
+        lap_df = driver_laps.dropna(subset=['LapTime']).sort_values('LapTime')
+        if lap_df.empty:
+            raise ValueError("No valid lap time found")
+        return lap_df.iloc[0]
+    raise ValueError("No valid lap time found")
 
 
 def _fetch_all_races(driver_id: str) -> list[dict]:
@@ -47,6 +229,27 @@ def _fetch_all_races(driver_id: str) -> list[dict]:
             "fastest_lap": fl.get("rank") == "1",
         })
     return results
+
+
+def _resolve_driver(driver_name: str) -> dict | None:
+    needle = driver_name.lower()
+    for d in get_drivers():
+        if (
+            needle in d["full_name"].lower()
+            or needle == d["driver_id"].lower()
+            or needle == d["code"].lower()
+        ):
+            return d
+    return None
+
+
+def _resolve_team(team_name: str) -> str | None:
+    needle = team_name.lower()
+    teams = {d.get("team", "") for d in get_drivers() if d.get("team")}
+    for team in teams:
+        if needle in team.lower() or team.lower() in needle:
+            return team
+    return None
 
 
 def get_drivers() -> list[dict]:
@@ -81,17 +284,7 @@ def get_drivers() -> list[dict]:
 
 def get_driver_stats(driver_name: str) -> dict | None:
     """Return wins, podiums, fastest laps, recent races for a driver."""
-    all_drivers = get_drivers()
-    matched = None
-    needle = driver_name.lower()
-    for d in all_drivers:
-        if (
-            needle in d["full_name"].lower()
-            or needle == d["driver_id"].lower()
-            or needle == d["code"].lower()
-        ):
-            matched = d
-            break
+    matched = _resolve_driver(driver_name)
 
     if matched is None:
         return None
@@ -213,18 +406,50 @@ def get_qualifying_results(round_number: int) -> dict:
     }
 
 
+def get_session_results(round_number: int, session_type: str) -> dict:
+    """
+    Rich session classification from FastF1 results metadata.
+    Includes grid position, classified position, team color, and qualifying times when available.
+    """
+    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    rows = _session_results_rows(session)
+    return {
+        "event": session.event['EventName'],
+        "session": session_type.upper(),
+        "total_laps": getattr(session, "total_laps", None),
+        "results": [
+            {
+                "position": _normalize_position(row.get("Position")),
+                "classified_position": row.get("ClassifiedPosition"),
+                "grid_position": _normalize_position(row.get("GridPosition")),
+                "status": row.get("Status"),
+                "points": _normalize_float(row.get("Points")),
+                "driver": row.get("FullName") or " ".join(
+                    part for part in [row.get("FirstName"), row.get("LastName")] if part
+                ).strip(),
+                "broadcast_name": row.get("BroadcastName"),
+                "abbreviation": row.get("Abbreviation"),
+                "driver_number": str(row.get("DriverNumber")) if row.get("DriverNumber") is not None else None,
+                "team": row.get("TeamName"),
+                "team_color": row.get("TeamColor"),
+                "country_code": row.get("CountryCode"),
+                "headshot_url": row.get("HeadshotUrl"),
+                "q1": _fmt_td(row.get("Q1")) if row.get("Q1") is not None else None,
+                "q2": _fmt_td(row.get("Q2")) if row.get("Q2") is not None else None,
+                "q3": _fmt_td(row.get("Q3")) if row.get("Q3") is not None else None,
+            }
+            for row in rows
+        ],
+    }
+
+
 def get_head_to_head(driver_a_name: str, driver_b_name: str) -> dict:
     """Compare two drivers side-by-side across all 2025 races they both competed in."""
 
     def _find_and_fetch(name: str) -> tuple[dict, list[dict]]:
-        needle = name.lower()
-        for d in get_drivers():
-            if (
-                needle in d["full_name"].lower()
-                or needle == d["driver_id"].lower()
-                or needle == d["code"].lower()
-            ):
-                return d, _fetch_all_races(d["driver_id"])
+        matched = _resolve_driver(name)
+        if matched is not None:
+            return matched, _fetch_all_races(matched["driver_id"])
         raise ValueError(f"Driver not found: {name}")
 
     matched_a, races_a = _find_and_fetch(driver_a_name)
@@ -269,15 +494,14 @@ def get_session_fastest_laps(round_number: int, session_type: str) -> list[dict]
     Includes sector times (S1/S2/S3) and speed trap values (SpeedI1/I2/FL/ST).
     session_type: 'Q', 'R', 'FP1', 'FP2', 'FP3', 'S', 'SQ', 'SS'
     """
-    session = fastf1.get_session(CURRENT_YEAR, round_number, session_type)
-    session.load(laps=True, telemetry=False, weather=False, messages=False)
+    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
 
     results = []
     for driver_code in session.drivers:
         driver_laps = session.laps.pick_driver(driver_code)
         if driver_laps.empty:
             continue
-        fastest = driver_laps.pick_fastest()
+        fastest = _pick_fastest_lap(driver_laps)
         if pd.isna(fastest['LapTime']):
             continue
         results.append({
@@ -309,8 +533,7 @@ def get_driver_lap_times(round_number: int, session_type: str, driver_code: str)
     speed traps, tyre compound, and pit stop flags.
     Answers: "how did Norris's pace evolve across his qualifying runs?"
     """
-    session = fastf1.get_session(CURRENT_YEAR, round_number, session_type)
-    session.load(laps=True, telemetry=False, weather=False, messages=False)
+    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
 
     driver_laps = session.laps.pick_driver(driver_code.upper())
     if driver_laps.empty:
@@ -343,6 +566,647 @@ def get_driver_lap_times(round_number: int, session_type: str, driver_code: str)
     }
 
 
+def get_driver_strategy(round_number: int, session_type: str, driver_code: str | None = None) -> dict:
+    """
+    Summarize tyre strategy and stints for a driver or the full field.
+    """
+    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    driver_info = _driver_lookup(session)
+
+    def _summarize_driver(code: str) -> dict:
+        driver_laps = session.laps.pick_driver(code.upper())
+        if driver_laps.empty:
+            raise ValueError(f"No data for driver {code!r} in round {round_number} {session_type}")
+
+        stints = []
+        iterrows = getattr(driver_laps, "iterrows", None)
+        if callable(iterrows):
+            groups = {}
+            for _, lap in iterrows():
+                stint_key = int(lap['Stint']) if pd.notna(lap.get('Stint')) else len(groups) + 1
+                groups.setdefault(stint_key, []).append(lap)
+            for stint_no in sorted(groups):
+                laps = groups[stint_no]
+                first, last = laps[0], laps[-1]
+                lap_count = len(laps)
+                lap_times = [lt.total_seconds() for lt in (lap.get('LapTime') for lap in laps) if lt is not None and not pd.isna(lt)]
+                positions = [int(p) for p in (lap.get('Position') for lap in laps) if p is not None and not pd.isna(p)]
+                stints.append({
+                    "stint": stint_no,
+                    "compound": str(first.get('Compound')) if pd.notna(first.get('Compound')) else None,
+                    "fresh_tyre": bool(first.get('FreshTyre')) if pd.notna(first.get('FreshTyre')) else None,
+                    "start_lap": int(first['LapNumber']) if pd.notna(first.get('LapNumber')) else None,
+                    "end_lap": int(last['LapNumber']) if pd.notna(last.get('LapNumber')) else None,
+                    "laps": lap_count,
+                    "avg_lap_time_s": round(sum(lap_times) / len(lap_times), 3) if lap_times else None,
+                    "best_lap_time": _fmt_td(min((lap.get('LapTime') for lap in laps if lap.get('LapTime') is not None and not pd.isna(lap.get('LapTime'))), default=None)),
+                    "tyre_life_start": _normalize_position(first.get('TyreLife')),
+                    "tyre_life_end": _normalize_position(last.get('TyreLife')),
+                    "position_start": min(positions) if positions else None,
+                    "position_end": max(positions) if positions else None,
+                    "ended_with_pit_in": pd.notna(last.get('PitInTime')),
+                    "started_from_pit_out": pd.notna(first.get('PitOutTime')),
+                })
+
+        info = driver_info.get(code.upper(), {})
+        return {
+            "driver": info.get("FullName") or code.upper(),
+            "abbreviation": code.upper(),
+            "team": info.get("TeamName"),
+            "grid_position": _normalize_position(info.get("GridPosition")),
+            "finish_position": _normalize_position(info.get("Position")),
+            "stints": stints,
+            "pit_stop_count": max(0, len(stints) - 1),
+        }
+
+    if driver_code:
+        return {
+            "event": session.event['EventName'],
+            "session": session_type.upper(),
+            "drivers": [_summarize_driver(driver_code)],
+        }
+
+    return {
+        "event": session.event['EventName'],
+        "session": session_type.upper(),
+        "drivers": [_summarize_driver(code) for code in session.drivers],
+    }
+
+
+def get_driver_weekend_overview(round_number: int, driver_name: str) -> dict:
+    """
+    High-level weekend overview for a driver: quali, finish, teammate, strategy,
+    nearby rivals, and SC/VSC impact when available.
+    """
+    matched = _resolve_driver(driver_name)
+    if matched is None:
+        raise ValueError(f"Driver not found: {driver_name!r}. Try surname or 3-letter code.")
+
+    code = matched["code"] or matched["driver_id"].upper()
+    qualifying = get_qualifying_results(round_number)
+    race = get_race_results(round_number)
+
+    quali_results = qualifying.get("results", [])
+    race_results = race.get("results", [])
+    driver_quali = next((r for r in quali_results if r.get("code", "").upper() == code.upper()), None)
+    driver_race = next((r for r in race_results if r.get("code", "").upper() == code.upper()), None)
+
+    if driver_race is None and driver_quali is None:
+        raise ValueError(f"No weekend data found for {matched['full_name']} in round {round_number}.")
+
+    teammate_quali = None
+    teammate_race = None
+    if matched.get("team"):
+        teammate_quali = next(
+            (r for r in quali_results if r.get("team") == matched["team"] and r.get("code", "").upper() != code.upper()),
+            None,
+        )
+        teammate_race = next(
+            (r for r in race_results if r.get("team") == matched["team"] and r.get("code", "").upper() != code.upper()),
+            None,
+        )
+
+    strategy_summary = None
+    try:
+        strategy = get_driver_strategy(round_number, 'R', code)
+        strategy_summary = strategy["drivers"][0] if strategy.get("drivers") else None
+    except Exception:
+        strategy_summary = None
+
+    safety_car_summary = None
+    try:
+        sc = get_safety_car_periods(round_number, 'R')
+        driver_number = None
+        try:
+            session_results = get_session_results(round_number, 'R')
+            driver_meta = next((r for r in session_results.get("results", []) if r.get("abbreviation", "").upper() == code.upper()), None)
+            driver_number = driver_meta.get("driver_number") if driver_meta else None
+        except Exception:
+            driver_number = None
+
+        impacted_before = []
+        impacted_during = []
+        for period in sc.get("periods", []):
+            before = [p for p in period.get("pitted_just_before", []) if p.get("driver", "").upper() == code.upper()]
+            during = [p for p in period.get("pitted_during", []) if p.get("driver", "").upper() == code.upper()]
+            if before:
+                impacted_before.append({
+                    "type": period.get("type"),
+                    "lap": period.get("deployed_on_lap"),
+                    "seconds_before": before[0].get("seconds_before_sc"),
+                })
+            if during:
+                impacted_during.append({
+                    "type": period.get("type"),
+                    "lap": period.get("deployed_on_lap"),
+                })
+
+        safety_car_summary = {
+            "sc_count": sc.get("sc_count", 0),
+            "vsc_count": sc.get("vsc_count", 0),
+            "pitted_just_before_sc": impacted_before,
+            "pitted_during_sc": impacted_during,
+        }
+    except Exception:
+        safety_car_summary = None
+
+    nearby_rivals = []
+    if driver_race and driver_race.get("position") is not None:
+        pos = driver_race["position"]
+        nearby_rivals = [
+            r for r in race_results
+            if r.get("position") is not None
+            and r.get("code", "").upper() != code.upper()
+            and abs(r["position"] - pos) <= 2
+        ]
+        nearby_rivals.sort(key=lambda r: (abs(r["position"] - pos), r["position"]))
+
+    pit_stops = []
+    if strategy_summary:
+        for stint in strategy_summary.get("stints", [])[1:]:
+            pit_stops.append({
+                "pit_window_after_lap": max((stint.get("start_lap") or 1) - 1, 0),
+                "new_compound": stint.get("compound"),
+                "fresh_tyre": stint.get("fresh_tyre"),
+            })
+
+    grid_position = None
+    if driver_quali and driver_quali.get("position") is not None:
+        grid_position = driver_quali["position"]
+    elif driver_race and driver_race.get("position") is not None:
+        try:
+            session_results = get_session_results(round_number, 'R')
+            meta = next((r for r in session_results.get("results", []) if r.get("abbreviation", "").upper() == code.upper()), None)
+            grid_position = meta.get("grid_position") if meta else None
+        except Exception:
+            grid_position = None
+
+    return {
+        "driver": matched["full_name"],
+        "code": code.upper(),
+        "team": matched.get("team"),
+        "event": race.get("race_name") or qualifying.get("race_name"),
+        "round": round_number,
+        "qualifying": {
+            "position": driver_quali.get("position") if driver_quali else None,
+            "q1": driver_quali.get("q1") if driver_quali else None,
+            "q2": driver_quali.get("q2") if driver_quali else None,
+            "q3": driver_quali.get("q3") if driver_quali else None,
+        },
+        "race": {
+            "grid_position": grid_position,
+            "finish_position": driver_race.get("position") if driver_race else None,
+            "points": driver_race.get("points") if driver_race else None,
+            "status": driver_race.get("status") if driver_race else None,
+            "fastest_lap": driver_race.get("fastest_lap") if driver_race else None,
+        },
+        "pit_stops": pit_stops,
+        "strategy": strategy_summary,
+        "safety_car_impact": safety_car_summary,
+        "teammate": {
+            "name": teammate_race.get("driver") if teammate_race else teammate_quali.get("driver") if teammate_quali else None,
+            "qualifying_position": teammate_quali.get("position") if teammate_quali else None,
+            "finish_position": teammate_race.get("position") if teammate_race else None,
+            "status": teammate_race.get("status") if teammate_race else None,
+        },
+        "nearby_rivals": [
+            {
+                "position": r.get("position"),
+                "driver": r.get("driver"),
+                "code": r.get("code"),
+                "team": r.get("team"),
+                "status": r.get("status"),
+            }
+            for r in nearby_rivals
+        ],
+    }
+
+
+def get_driver_race_story(round_number: int, driver_name: str) -> dict:
+    """
+    Narrative-ready race overview for one driver with key race events and contextual comparisons.
+    """
+    overview = get_driver_weekend_overview(round_number, driver_name)
+    code = overview["code"]
+
+    race_control = None
+    try:
+        session_results = get_session_results(round_number, 'R')
+        driver_meta = next((r for r in session_results.get("results", []) if r.get("abbreviation", "").upper() == code.upper()), None)
+        driver_number = driver_meta.get("driver_number") if driver_meta else None
+        category = driver_number if driver_number else code.upper()
+        race_control = get_race_control_messages(round_number, 'R', category=category, limit=20)
+    except Exception:
+        race_control = None
+
+    summary_points = []
+    race = overview.get("race", {})
+    quali = overview.get("qualifying", {})
+
+    if quali.get("position") is not None and race.get("finish_position") is not None:
+        delta = quali["position"] - race["finish_position"]
+        if delta > 0:
+            summary_points.append(f"Gained {delta} place(s) from qualifying to the finish.")
+        elif delta < 0:
+            summary_points.append(f"Lost {abs(delta)} place(s) from qualifying to the finish.")
+        else:
+            summary_points.append("Finished where they broadly started.")
+
+    if overview.get("pit_stops"):
+        stop_text = ", ".join(
+            f"after lap {p['pit_window_after_lap']} for {p['new_compound']}"
+            for p in overview["pit_stops"]
+        )
+        summary_points.append(f"Pit strategy: {stop_text}.")
+
+    sc = overview.get("safety_car_impact")
+    if sc:
+        if sc.get("pitted_during_sc"):
+            periods = ", ".join(
+                f"{p['type']} on lap {p['lap']}" for p in sc["pitted_during_sc"]
+            )
+            summary_points.append(f"Pitted under neutralisation: {periods}.")
+        elif sc.get("pitted_just_before_sc"):
+            periods = ", ".join(
+                f"{p['type']} on lap {p['lap']} ({p['seconds_before']}s before)"
+                for p in sc["pitted_just_before_sc"]
+            )
+            summary_points.append(f"Potentially unlucky timing before neutralisation: {periods}.")
+        elif sc.get("sc_count", 0) == 0 and sc.get("vsc_count", 0) == 0:
+            summary_points.append("No Safety Car or VSC interruptions affected the race.")
+
+    teammate = overview.get("teammate", {})
+    if teammate.get("name") and teammate.get("finish_position") is not None and race.get("finish_position") is not None:
+        gap = teammate["finish_position"] - race["finish_position"]
+        if gap > 0:
+            summary_points.append(f"Finished ahead of teammate {teammate['name']}.")
+        elif gap < 0:
+            summary_points.append(f"Finished behind teammate {teammate['name']}.")
+        else:
+            summary_points.append(f"Finished level with teammate {teammate['name']} on classification position.")
+
+    control_highlights = []
+    if race_control and race_control.get("messages"):
+        for message in race_control["messages"][:5]:
+            text = message.get("message")
+            if text:
+                control_highlights.append({
+                    "lap": message.get("lap"),
+                    "category": message.get("category"),
+                    "message": text,
+                })
+
+    rivalry_story = []
+    for rival in overview.get("nearby_rivals", [])[:3]:
+        rivalry_story.append(
+            f"Finished near {rival['driver']} ({rival['team']}) in P{rival['position']}."
+        )
+
+    return {
+        "driver": overview["driver"],
+        "code": overview["code"],
+        "team": overview["team"],
+        "event": overview["event"],
+        "round": round_number,
+        "qualifying": overview["qualifying"],
+        "race": overview["race"],
+        "pit_stops": overview["pit_stops"],
+        "strategy": overview["strategy"],
+        "safety_car_impact": overview["safety_car_impact"],
+        "teammate": overview["teammate"],
+        "nearby_rivals": overview["nearby_rivals"],
+        "race_control_highlights": control_highlights,
+        "story_points": summary_points,
+        "rivalry_story": rivalry_story,
+    }
+
+
+def get_team_weekend_overview(round_number: int, team_name: str) -> dict:
+    """
+    High-level weekend overview for a team across both drivers.
+    """
+    resolved_team = _resolve_team(team_name)
+    if resolved_team is None:
+        raise ValueError(f"Team not found: {team_name!r}. Try the current constructor name.")
+
+    team_drivers = [d for d in get_drivers() if d.get("team") == resolved_team]
+    if not team_drivers:
+        raise ValueError(f"No current-season drivers found for team {resolved_team!r}.")
+
+    qualifying = get_qualifying_results(round_number)
+    race = get_race_results(round_number)
+    quali_results = qualifying.get("results", [])
+    race_results = race.get("results", [])
+
+    driver_summaries = []
+    for driver in team_drivers:
+        code = driver.get("code", "").upper()
+        quali_row = next((r for r in quali_results if r.get("code", "").upper() == code), None)
+        race_row = next((r for r in race_results if r.get("code", "").upper() == code), None)
+
+        strategy = None
+        try:
+            strat = get_driver_strategy(round_number, 'R', code)
+            strategy = strat["drivers"][0] if strat.get("drivers") else None
+        except Exception:
+            strategy = None
+
+        pit_stops = []
+        if strategy:
+            for stint in strategy.get("stints", [])[1:]:
+                pit_stops.append({
+                    "pit_window_after_lap": max((stint.get("start_lap") or 1) - 1, 0),
+                    "new_compound": stint.get("compound"),
+                })
+
+        driver_summaries.append({
+            "driver": driver["full_name"],
+            "code": code,
+            "qualifying_position": quali_row.get("position") if quali_row else None,
+            "finish_position": race_row.get("position") if race_row else None,
+            "points": race_row.get("points") if race_row else None,
+            "status": race_row.get("status") if race_row else None,
+            "fastest_lap": race_row.get("fastest_lap") if race_row else None,
+            "positions_gained": (
+                (quali_row.get("position") - race_row.get("position"))
+                if quali_row and race_row and quali_row.get("position") is not None and race_row.get("position") is not None
+                else None
+            ),
+            "pit_stops": pit_stops,
+            "strategy": strategy,
+        })
+
+    sorted_finishers = sorted(
+        [d for d in driver_summaries if d.get("finish_position") is not None],
+        key=lambda d: d["finish_position"],
+    )
+    lead_driver = sorted_finishers[0]["driver"] if sorted_finishers else None
+    total_points = round(sum(d.get("points", 0) or 0 for d in driver_summaries), 1)
+
+    summary_points = []
+    finish_positions = [d["finish_position"] for d in driver_summaries if d.get("finish_position") is not None]
+    if len(finish_positions) == 2:
+        summary_points.append(
+            f"{resolved_team} finished P{finish_positions[0]} and P{finish_positions[1]}."
+        )
+    if total_points:
+        summary_points.append(f"Scored {total_points} point(s) across both cars.")
+
+    gains = [d for d in driver_summaries if d.get("positions_gained") is not None]
+    if gains:
+        biggest_gain = max(gains, key=lambda d: d["positions_gained"])
+        if biggest_gain["positions_gained"] > 0:
+            summary_points.append(
+                f"{biggest_gain['driver']} made the most progress, gaining {biggest_gain['positions_gained']} place(s)."
+            )
+
+    return {
+        "team": resolved_team,
+        "event": race.get("race_name") or qualifying.get("race_name"),
+        "round": round_number,
+        "total_points": total_points,
+        "lead_driver": lead_driver,
+        "drivers": driver_summaries,
+        "summary_points": summary_points,
+    }
+
+
+def get_race_report(round_number: int) -> dict:
+    """
+    Whole-race recap independent of driver/team.
+    """
+    qualifying = get_qualifying_results(round_number)
+    race = get_race_results(round_number)
+    results = race.get("results", [])
+    quali_results = qualifying.get("results", [])
+    safety_car = None
+    try:
+        safety_car = get_safety_car_periods(round_number, 'R')
+    except Exception:
+        safety_car = None
+
+    by_code_quali = {row.get("code", "").upper(): row for row in quali_results}
+    finishers = [row for row in results if row.get("position") is not None]
+    finishers.sort(key=lambda row: row["position"])
+
+    podium = finishers[:3]
+    dnfs = [row for row in results if row.get("status") and row.get("status") != "Finished"]
+
+    movers = []
+    for row in finishers:
+        code = row.get("code", "").upper()
+        quali = by_code_quali.get(code)
+        if quali and quali.get("position") is not None:
+            delta = quali["position"] - row["position"]
+            movers.append({
+                "driver": row.get("driver"),
+                "code": code,
+                "team": row.get("team"),
+                "qualified": quali["position"],
+                "finished": row["position"],
+                "positions_gained": delta,
+            })
+    biggest_gainer = max(movers, key=lambda item: item["positions_gained"], default=None)
+    biggest_loser = min(movers, key=lambda item: item["positions_gained"], default=None)
+
+    points_scoring = [row for row in finishers if (row.get("points") or 0) > 0]
+    fastest_lap = next((row for row in results if row.get("fastest_lap")), None)
+
+    summary_points = []
+    if podium:
+        summary_points.append(
+            "Podium: " + ", ".join(f"P{idx + 1} {row['driver']}" for idx, row in enumerate(podium)) + "."
+        )
+    if biggest_gainer and biggest_gainer["positions_gained"] > 0:
+        summary_points.append(
+            f"Biggest gainer: {biggest_gainer['driver']} gained {biggest_gainer['positions_gained']} place(s)."
+        )
+    if fastest_lap:
+        summary_points.append(f"Fastest lap went to {fastest_lap['driver']}.")
+    if safety_car:
+        total_neutralisations = safety_car.get("sc_count", 0) + safety_car.get("vsc_count", 0)
+        if total_neutralisations == 0:
+            summary_points.append("No SC or VSC interruptions.")
+        else:
+            summary_points.append(
+                f"Neutralisations: {safety_car.get('sc_count', 0)} SC and {safety_car.get('vsc_count', 0)} VSC period(s)."
+            )
+
+    return {
+        "event": race.get("race_name") or qualifying.get("race_name"),
+        "round": round_number,
+        "circuit": race.get("circuit"),
+        "date": race.get("date"),
+        "podium": [
+            {
+                "position": row.get("position"),
+                "driver": row.get("driver"),
+                "code": row.get("code"),
+                "team": row.get("team"),
+            }
+            for row in podium
+        ],
+        "fastest_lap": fastest_lap,
+        "points_scoring_finishers": points_scoring,
+        "dnfs": [
+            {
+                "driver": row.get("driver"),
+                "code": row.get("code"),
+                "team": row.get("team"),
+                "status": row.get("status"),
+            }
+            for row in dnfs
+        ],
+        "biggest_gainer": biggest_gainer,
+        "biggest_loser": biggest_loser,
+        "safety_car": safety_car,
+        "summary_points": summary_points,
+    }
+
+
+def get_qualifying_progression(round_number: int) -> dict:
+    """
+    Split qualifying into Q1/Q2/Q3 and summarize progression and knockout state.
+    """
+    session = _load_session(round_number, 'Q', laps=True, telemetry=False, weather=False, messages=False)
+    split = session.laps.split_qualifying_sessions()
+    session_names = ['Q1', 'Q2', 'Q3']
+    driver_info = _driver_lookup(session)
+    by_driver = {}
+
+    for index, laps in enumerate(split):
+        segment_name = session_names[index]
+        if laps is None:
+            continue
+        drivers = getattr(laps, 'pick_driver', None)
+        if not callable(drivers):
+            continue
+        for code in session.drivers:
+            driver_laps = laps.pick_driver(code)
+            if getattr(driver_laps, "empty", True):
+                continue
+            fastest = _pick_fastest_lap(driver_laps)
+            if pd.isna(fastest['LapTime']):
+                continue
+            entry = by_driver.setdefault(code, {
+                "driver": driver_info.get(code, {}).get("FullName") or code,
+                "abbreviation": code,
+                "team": driver_info.get(code, {}).get("TeamName"),
+            })
+            entry[segment_name.lower()] = {
+                "lap_time": _fmt_td(fastest['LapTime']),
+                "lap_time_s": round(fastest['LapTime'].total_seconds(), 3),
+                "compound": str(fastest['Compound']) if pd.notna(fastest.get('Compound')) else None,
+                "lap_number": int(fastest['LapNumber']) if pd.notna(fastest.get('LapNumber')) else None,
+            }
+
+    for entry in by_driver.values():
+        q1 = entry.get("q1", {}).get("lap_time_s")
+        q2 = entry.get("q2", {}).get("lap_time_s")
+        q3 = entry.get("q3", {}).get("lap_time_s")
+        entry["made_q2"] = q2 is not None
+        entry["made_q3"] = q3 is not None
+        entry["improvement_q1_to_q2_s"] = round(q2 - q1, 3) if q1 is not None and q2 is not None else None
+        entry["improvement_q2_to_q3_s"] = round(q3 - q2, 3) if q2 is not None and q3 is not None else None
+        entry["best_segment"] = min(
+            ((segment, data["lap_time_s"]) for segment, data in entry.items() if segment in ("q1", "q2", "q3")),
+            key=lambda item: item[1],
+            default=(None, None),
+        )[0]
+
+    return {
+        "event": session.event['EventName'],
+        "session": "Q",
+        "drivers": sorted(
+            by_driver.values(),
+            key=lambda d: (
+                d.get("q3", {}).get("lap_time_s") is None,
+                d.get("q3", {}).get("lap_time_s", float("inf")),
+                d.get("q2", {}).get("lap_time_s", float("inf")),
+                d.get("q1", {}).get("lap_time_s", float("inf")),
+            ),
+        ),
+    }
+
+
+def get_clean_pace_summary(round_number: int, session_type: str,
+                           driver_codes: list[str] | None = None,
+                           green_only: bool = True,
+                           limit: int = 10) -> dict:
+    """
+    Compare representative clean laps only, excluding deleted, inaccurate and pit laps.
+    """
+    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    driver_info = _driver_lookup(session)
+    drivers = [code.upper() for code in driver_codes] if driver_codes else [str(code).upper() for code in session.drivers]
+    summaries = []
+
+    for code in drivers:
+        laps = session.laps.pick_driver(code)
+        if getattr(laps, "empty", True):
+            continue
+
+        for method_name in ("pick_accurate", "pick_not_deleted", "pick_wo_box"):
+            method = getattr(laps, method_name, None)
+            if callable(method):
+                laps = method()
+
+        if green_only:
+            pick_track_status = getattr(laps, "pick_track_status", None)
+            if callable(pick_track_status):
+                laps = pick_track_status('1')
+
+        pick_quicklaps = getattr(laps, "pick_quicklaps", None)
+        if callable(pick_quicklaps):
+            laps = pick_quicklaps()
+
+        if getattr(laps, "empty", True):
+            continue
+
+        lap_times = laps['LapTime'].dropna()
+        if lap_times.empty:
+            continue
+        rep_laps = _pick_representative_laps(laps.sort_values('LapTime'), limit)
+        compounds = rep_laps['Compound'].dropna().astype(str).value_counts().to_dict() if 'Compound' in rep_laps else {}
+        summaries.append({
+            "driver": driver_info.get(code, {}).get("FullName") or code,
+            "abbreviation": code,
+            "team": driver_info.get(code, {}).get("TeamName"),
+            "lap_count": int(len(laps)),
+            "best_lap_time": _fmt_td(lap_times.min()),
+            "best_lap_time_s": round(lap_times.min().total_seconds(), 3),
+            "avg_lap_time_s": round(lap_times.dt.total_seconds().mean(), 3),
+            "median_lap_time_s": round(lap_times.dt.total_seconds().median(), 3),
+            "lap_time_range_s": round(lap_times.dt.total_seconds().max() - lap_times.dt.total_seconds().min(), 3),
+            "compounds": compounds,
+            "sample_laps": [
+                {
+                    "lap_number": int(lap['LapNumber']) if pd.notna(lap.get('LapNumber')) else None,
+                    "lap_time": _fmt_td(lap['LapTime']),
+                    "compound": str(lap['Compound']) if pd.notna(lap.get('Compound')) else None,
+                    "tyre_life": _normalize_position(lap.get('TyreLife')),
+                    "track_status": str(lap.get('TrackStatus')) if pd.notna(lap.get('TrackStatus')) else None,
+                }
+                for _, lap in rep_laps.iterrows()
+            ],
+        })
+
+    summaries.sort(key=lambda item: item['best_lap_time_s'])
+    for idx, item in enumerate(summaries, start=1):
+        item["rank"] = idx
+        if idx > 1:
+            item["gap_to_fastest_s"] = round(item['best_lap_time_s'] - summaries[0]['best_lap_time_s'], 3)
+        else:
+            item["gap_to_fastest_s"] = 0.0
+
+    return {
+        "event": session.event['EventName'],
+        "session": session_type.upper(),
+        "green_only": green_only,
+        "drivers": summaries,
+    }
+
+
 def get_sector_comparison(round_number: int, session_type: str,
                           driver_a: str, driver_b: str) -> dict:
     """
@@ -351,14 +1215,13 @@ def get_sector_comparison(round_number: int, session_type: str,
     Positive gap_s = driver_a is SLOWER. Positive speed_delta = driver_a is FASTER.
     Answers: "why was Norris 0.3s faster than Leclerc in sector 2?"
     """
-    session = fastf1.get_session(CURRENT_YEAR, round_number, session_type)
-    session.load(laps=True, telemetry=False, weather=False, messages=False)
+    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
 
     def _fastest(code: str):
         laps = session.laps.pick_driver(code.upper())
         if laps.empty:
             raise ValueError(f"No session data for driver {code!r}")
-        fastest = laps.pick_fastest()
+        fastest = _pick_fastest_lap(laps)
         if pd.isna(fastest['LapTime']):
             raise ValueError(f"No valid lap time found for {code!r}")
         return fastest
@@ -431,8 +1294,7 @@ def get_lap_telemetry(round_number: int, session_type: str,
     This is the deepest data level — use it to explain corner-specific pace differences.
     Requires session.load(telemetry=True); first load is slow, subsequent are cached.
     """
-    session = fastf1.get_session(CURRENT_YEAR, round_number, session_type)
-    session.load(laps=True, telemetry=True, weather=False, messages=False)
+    session = _load_session(round_number, session_type, laps=True, telemetry=True, weather=False, messages=False)
 
     driver_laps = session.laps.pick_driver(driver_code.upper())
     if driver_laps.empty:
@@ -444,7 +1306,7 @@ def get_lap_telemetry(round_number: int, session_type: str,
             raise ValueError(f"Lap {lap_number} not found for {driver_code!r}")
         lap = matching.iloc[0]
     else:
-        lap = driver_laps.pick_fastest()
+        lap = _pick_fastest_lap(driver_laps)
 
     tel = lap.get_telemetry().add_distance()
     total_dist = float(tel['Distance'].max())
@@ -455,13 +1317,17 @@ def get_lap_telemetry(round_number: int, session_type: str,
     while dist <= total_dist:
         idx = (tel['Distance'] - dist).abs().idxmin()
         row = tel.loc[idx]
+        rpm = row.get('RPM')
+        gear = row.get('nGear')
+        drs = row.get('DRS')
         samples.append({
             "distance_m": int(dist),
             "speed_kph": round(float(row['Speed']), 1),
             "throttle_pct": round(float(row['Throttle']), 1),
             "brake": bool(row['Brake']),
-            "gear": int(row['nGear']) if pd.notna(row['nGear']) else None,
-            "drs_open": int(row['DRS']) >= 10 if pd.notna(row['DRS']) else False,
+            "gear": int(gear) if pd.notna(gear) else None,
+            "rpm": int(rpm) if pd.notna(rpm) else None,
+            "drs_open": int(drs) >= 10 if pd.notna(drs) else False,
         })
         dist += INTERVAL_M
 
@@ -492,8 +1358,7 @@ def get_telemetry_comparison(round_number: int, session_type: str,
     Returns delta_speed (positive = driver_a faster) and delta_throttle at every 100m.
     Use this to pinpoint exactly where and why one driver gains time over another.
     """
-    session = fastf1.get_session(CURRENT_YEAR, round_number, session_type)
-    session.load(laps=True, telemetry=True, weather=False, messages=False)
+    session = _load_session(round_number, session_type, laps=True, telemetry=True, weather=False, messages=False)
 
     def _get_lap(code: str, lap_num: int | None):
         laps = session.laps.pick_driver(code.upper())
@@ -504,7 +1369,7 @@ def get_telemetry_comparison(round_number: int, session_type: str,
             if matching.empty:
                 raise ValueError(f"Lap {lap_num} not found for {code!r}")
             return matching.iloc[0]
-        return laps.pick_fastest()
+        return _pick_fastest_lap(laps)
 
     lap_a = _get_lap(driver_a, lap_number_a)
     lap_b = _get_lap(driver_b, lap_number_b)
@@ -527,6 +1392,16 @@ def get_telemetry_comparison(round_number: int, session_type: str,
         spd_b = round(float(row_b['Speed']), 1)
         thr_a = round(float(row_a['Throttle']), 1)
         thr_b = round(float(row_b['Throttle']), 1)
+        gear_a_raw = row_a.get('nGear')
+        gear_b_raw = row_b.get('nGear')
+        rpm_a_raw = row_a.get('RPM')
+        rpm_b_raw = row_b.get('RPM')
+        drs_a_raw = row_a.get('DRS')
+        drs_b_raw = row_b.get('DRS')
+        gear_a = int(gear_a_raw) if pd.notna(gear_a_raw) else None
+        gear_b = int(gear_b_raw) if pd.notna(gear_b_raw) else None
+        rpm_a = int(rpm_a_raw) if pd.notna(rpm_a_raw) else None
+        rpm_b = int(rpm_b_raw) if pd.notna(rpm_b_raw) else None
 
         samples.append({
             "distance_m": int(dist),
@@ -538,10 +1413,14 @@ def get_telemetry_comparison(round_number: int, session_type: str,
             "delta_throttle": round(thr_a - thr_b, 1),
             "brake_a": bool(row_a['Brake']),
             "brake_b": bool(row_b['Brake']),
-            "gear_a": int(row_a['nGear']) if pd.notna(row_a['nGear']) else None,
-            "gear_b": int(row_b['nGear']) if pd.notna(row_b['nGear']) else None,
-            "drs_a": int(row_a['DRS']) >= 10 if pd.notna(row_a['DRS']) else False,
-            "drs_b": int(row_b['DRS']) >= 10 if pd.notna(row_b['DRS']) else False,
+            "gear_a": gear_a,
+            "gear_b": gear_b,
+            "delta_gear": (gear_a - gear_b) if gear_a is not None and gear_b is not None else None,
+            "rpm_a": rpm_a,
+            "rpm_b": rpm_b,
+            "delta_rpm": (rpm_a - rpm_b) if rpm_a is not None and rpm_b is not None else None,
+            "drs_a": int(drs_a_raw) >= 10 if pd.notna(drs_a_raw) else False,
+            "drs_b": int(drs_b_raw) >= 10 if pd.notna(drs_b_raw) else False,
         })
         dist += INTERVAL_M
 
@@ -576,6 +1455,24 @@ def get_circuit_corners(round_number: int) -> list[dict]:
     return corners
 
 
+def get_circuit_details(round_number: int) -> dict:
+    """
+    Rich circuit metadata for map-based UI: corners, marshal lights, sectors, rotation.
+    """
+    try:
+        session = _load_session(round_number, 'R', laps=False, telemetry=True, weather=False, messages=False)
+        circuit_info = session.get_circuit_info()
+    except Exception:
+        circuit_info = fastf1.get_circuit_info(CURRENT_YEAR, round_number)
+
+    return {
+        "rotation": _normalize_float(getattr(circuit_info, "rotation", None)),
+        "corners": _extract_track_markers(getattr(circuit_info, "corners", None)),
+        "marshal_lights": _extract_track_markers(getattr(circuit_info, "marshal_lights", None)),
+        "marshal_sectors": _extract_track_markers(getattr(circuit_info, "marshal_sectors", None)),
+    }
+
+
 def get_historical_circuit_performance(round_number: int,
                                         years: list[int] | None = None) -> dict:
     """
@@ -584,7 +1481,7 @@ def get_historical_circuit_performance(round_number: int,
     Default years: [2023, 2024, 2025].
     """
     if years is None:
-        years = [2023, 2024, 2025]
+        years = [CURRENT_YEAR - 2, CURRENT_YEAR - 1, CURRENT_YEAR]
 
     resp = requests.get(
         f"{JOLPICA_BASE}/{CURRENT_YEAR}/{round_number}/results.json?limit=1",
@@ -657,3 +1554,273 @@ def get_historical_circuit_performance(round_number: int,
         "race_name": race_name,
         "history": history,
     }
+
+
+def get_safety_car_periods(round_number: int, session_type: str) -> dict:
+    """
+    Find all Safety Car and Virtual Safety Car periods in a session.
+    For each period: when it was deployed (lap number + session time), duration,
+    which drivers pitted just before it (got screwed — lost their gap),
+    and which drivers pitted during it (got a free stop).
+    """
+    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+
+    ts = session.track_status  # columns: Time (Timedelta), Status (str), Message (str)
+    laps = session.laps
+
+    # Parse SC/VSC periods from status transitions
+    # Status: '1'=clear, '2'=yellow, '4'=SC, '5'=red, '6'=VSC deployed, '7'=VSC ending
+    periods = []
+    active = None
+
+    for _, row in ts.iterrows():
+        status = str(row['Status'])
+        t_s = round(row['Time'].total_seconds(), 1)
+
+        if status == '4' and (active is None or active['type'] != 'SafetyCar'):
+            if active is not None:
+                active['end_time_s'] = t_s
+                periods.append(active)
+            active = {'type': 'SafetyCar', 'start_time_s': t_s, 'end_time_s': None}
+
+        elif status == '6' and (active is None or active['type'] != 'VSC'):
+            if active is not None:
+                active['end_time_s'] = t_s
+                periods.append(active)
+            active = {'type': 'VSC', 'start_time_s': t_s, 'end_time_s': None}
+
+        elif status in ('1', '2', '5') and active is not None:
+            active['end_time_s'] = t_s
+            periods.append(active)
+            active = None
+
+    if active is not None:
+        periods.append(active)
+
+    # Annotate each period with context
+    for period in periods:
+        start_s = period['start_time_s']
+        end_s = period['end_time_s']
+        period['duration_s'] = round(end_s - start_s, 1) if end_s else None
+
+        # Approximate race lap: highest lap number that started before SC deployment
+        if not laps.empty:
+            sc_td = pd.Timedelta(seconds=start_s)
+            laps_before = laps[laps['LapStartTime'] <= sc_td]
+            period['deployed_on_lap'] = int(laps_before['LapNumber'].max()) if not laps_before.empty else None
+        else:
+            period['deployed_on_lap'] = None
+
+        # Pit stop impact — who pitted in the 90s before SC (got screwed) vs during (free stop)
+        pitted_just_before = []
+        pitted_during = []
+        LOOK_BACK_S = 90
+
+        for driver_code in laps['Driver'].unique():
+            for _, lap in laps.pick_driver(str(driver_code)).iterrows():
+                pit_in = lap.get('PitInTime')
+                if pit_in is None or pd.isna(pit_in):
+                    continue
+                pit_s = pit_in.total_seconds()
+
+                if (start_s - LOOK_BACK_S) <= pit_s < start_s:
+                    pitted_just_before.append({
+                        'driver': str(lap['Driver']),
+                        'team': str(lap['Team']),
+                        'lap': int(lap['LapNumber']),
+                        'seconds_before_sc': round(start_s - pit_s, 1),
+                    })
+                elif end_s and start_s <= pit_s <= end_s:
+                    pitted_during.append({
+                        'driver': str(lap['Driver']),
+                        'team': str(lap['Team']),
+                        'lap': int(lap['LapNumber']),
+                    })
+
+        period['pitted_just_before'] = sorted(pitted_just_before, key=lambda x: x['seconds_before_sc'])
+        period['pitted_during'] = pitted_during
+
+    return {
+        'event': session.event['EventName'],
+        'session': session_type.upper(),
+        'sc_count': len([p for p in periods if p['type'] == 'SafetyCar']),
+        'vsc_count': len([p for p in periods if p['type'] == 'VSC']),
+        'periods': periods,
+    }
+
+
+def get_race_control_messages(round_number: int, session_type: str,
+                              category: str | None = None,
+                              limit: int = 50) -> dict:
+    """
+    Return race control messages with optional category filtering.
+    Useful for deleted lap reasons, incidents, flags and steward notes.
+    """
+    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=True)
+    messages = getattr(session, "race_control_messages", None)
+    if messages is None or getattr(messages, "empty", False):
+        return {"event": session.event['EventName'], "session": session_type.upper(), "messages": []}
+
+    df = messages.copy()
+    if category:
+        category_lower = category.lower()
+        mask = pd.Series(False, index=df.index)
+        for col in ("Category", "Flag", "Message"):
+            if col in df:
+                mask = mask | df[col].astype(str).str.lower().str.contains(category_lower, na=False)
+        df = df[mask]
+
+    trimmed = df.head(limit)
+    rows = []
+    for _, row in trimmed.iterrows():
+        rows.append({
+            "category": row.get("Category"),
+            "flag": row.get("Flag"),
+            "scope": row.get("Scope"),
+            "message": row.get("Message"),
+            "status": row.get("Status"),
+            "lap": _normalize_position(row.get("Lap")),
+            "time": str(row.get("Time")) if row.get("Time") is not None and not pd.isna(row.get("Time")) else None,
+            "driver_number": str(row.get("DriverNumber")) if row.get("DriverNumber") is not None and not pd.isna(row.get("DriverNumber")) else None,
+        })
+
+    return {
+        "event": session.event['EventName'],
+        "session": session_type.upper(),
+        "category_filter": category,
+        "messages": rows,
+    }
+
+
+def get_track_position_comparison(round_number: int, session_type: str,
+                                  driver_a: str, driver_b: str,
+                                  lap_number_a: int | None = None,
+                                  lap_number_b: int | None = None) -> dict:
+    """
+    Compare two drivers using raw position and car telemetry sampled by distance.
+    Best for track maps, racing lines, and locating gains/losses.
+    """
+    session = _load_session(round_number, session_type, laps=True, telemetry=True, weather=False, messages=False)
+
+    def _get_driver_lap(code: str, lap_num: int | None):
+        laps = session.laps.pick_driver(code.upper())
+        if laps.empty:
+            raise ValueError(f"No data for driver {code!r}")
+        if lap_num is not None:
+            selected = laps[laps['LapNumber'] == lap_num]
+            if selected.empty:
+                raise ValueError(f"Lap {lap_num} not found for {code!r}")
+            return selected.iloc[0]
+        return _pick_fastest_lap(laps)
+
+    lap_a = _get_driver_lap(driver_a, lap_number_a)
+    lap_b = _get_driver_lap(driver_b, lap_number_b)
+    pos_a = lap_a.get_pos_data().add_distance()
+    pos_b = lap_b.get_pos_data().add_distance()
+    car_a = lap_a.get_car_data().add_distance()
+    car_b = lap_b.get_car_data().add_distance()
+
+    total_dist = min(
+        float(pos_a['Distance'].max()),
+        float(pos_b['Distance'].max()),
+        float(car_a['Distance'].max()),
+        float(car_b['Distance'].max()),
+    )
+
+    samples = []
+    dist = 0.0
+    while dist <= total_dist:
+        pos_idx_a = (pos_a['Distance'] - dist).abs().idxmin()
+        pos_idx_b = (pos_b['Distance'] - dist).abs().idxmin()
+        car_idx_a = (car_a['Distance'] - dist).abs().idxmin()
+        car_idx_b = (car_b['Distance'] - dist).abs().idxmin()
+
+        prow_a = pos_a.loc[pos_idx_a]
+        prow_b = pos_b.loc[pos_idx_b]
+        crow_a = car_a.loc[car_idx_a]
+        crow_b = car_b.loc[car_idx_b]
+        samples.append({
+            "distance_m": int(dist),
+            "x_a": _normalize_float(prow_a.get('X')),
+            "y_a": _normalize_float(prow_a.get('Y')),
+            "x_b": _normalize_float(prow_b.get('X')),
+            "y_b": _normalize_float(prow_b.get('Y')),
+            "status_a": prow_a.get('Status'),
+            "status_b": prow_b.get('Status'),
+            "speed_a": _normalize_float(crow_a.get('Speed')),
+            "speed_b": _normalize_float(crow_b.get('Speed')),
+            "delta_speed": round(float(crow_a['Speed']) - float(crow_b['Speed']), 1),
+        })
+        dist += 100.0
+
+    return {
+        "event": session.event['EventName'],
+        "session": session_type.upper(),
+        "driver_a": driver_a.upper(),
+        "driver_b": driver_b.upper(),
+        "lap_number_a": int(lap_a['LapNumber']),
+        "lap_number_b": int(lap_b['LapNumber']),
+        "circuit_length_m": int(total_dist),
+        "rotation": _normalize_float(getattr(session.get_circuit_info(), "rotation", None)),
+        "comparison": samples,
+    }
+
+
+def get_session_weather(round_number: int, session_type: str) -> dict:
+    """
+    Weather conditions throughout a session: air/track temperature, humidity,
+    wind, and rainfall. Includes ~20 time-spaced samples showing how conditions
+    evolved, and flags exactly when rain started/stopped.
+    Useful for explaining pace anomalies, tyre choice, or lap time swings.
+    """
+    session = _load_session(round_number, session_type, laps=False, telemetry=False, weather=True, messages=False)
+
+    weather = session.weather_data
+
+    if weather is None or weather.empty:
+        return {
+            'event': session.event['EventName'],
+            'session': session_type.upper(),
+            'available': False,
+        }
+
+    had_rain = bool(weather['Rainfall'].any())
+
+    result = {
+        'event': session.event['EventName'],
+        'session': session_type.upper(),
+        'available': True,
+        'had_rainfall': had_rain,
+        'air_temp_c': {
+            'min': round(float(weather['AirTemp'].min()), 1),
+            'max': round(float(weather['AirTemp'].max()), 1),
+            'avg': round(float(weather['AirTemp'].mean()), 1),
+        },
+        'track_temp_c': {
+            'min': round(float(weather['TrackTemp'].min()), 1),
+            'max': round(float(weather['TrackTemp'].max()), 1),
+            'avg': round(float(weather['TrackTemp'].mean()), 1),
+        },
+        'humidity_pct_avg': round(float(weather['Humidity'].mean()), 1),
+        'wind_speed_avg_ms': round(float(weather['WindSpeed'].mean()), 1),
+    }
+
+    if had_rain:
+        rain_rows = weather[weather['Rainfall'] == True]
+        result['rainfall_start_s'] = round(float(rain_rows['Time'].iloc[0].total_seconds()), 0)
+        result['rainfall_end_s'] = round(float(rain_rows['Time'].iloc[-1].total_seconds()), 0)
+
+    # ~20 evenly spaced samples showing how conditions evolved
+    step = max(1, len(weather) // 20)
+    result['samples'] = [
+        {
+            'time_s': round(float(row['Time'].total_seconds()), 0),
+            'air_temp_c': round(float(row['AirTemp']), 1),
+            'track_temp_c': round(float(row['TrackTemp']), 1),
+            'rainfall': bool(row['Rainfall']),
+            'wind_speed_ms': round(float(row['WindSpeed']), 1),
+        }
+        for _, row in weather.iloc[::step].iterrows()
+    ]
+
+    return result

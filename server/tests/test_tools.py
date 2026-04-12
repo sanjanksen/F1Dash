@@ -125,8 +125,8 @@ def test_tool_definitions_are_valid_schemas():
 
 
 def test_tool_definitions_count():
-    """Should have 14 tools — 7 Jolpica + 4 FastF1 + 3 context tools."""
-    assert len(tools.TOOL_DEFINITIONS) == 14
+    """Tool registry should include the expanded FastF1 analysis surface."""
+    assert len(tools.TOOL_DEFINITIONS) >= 20
 
 
 def test_execute_tool_get_telemetry_comparison():
@@ -152,3 +152,82 @@ def test_execute_tool_get_historical_circuit_performance():
     with patch('tools.get_historical_circuit_performance', return_value=mock):
         result = tools.execute_tool("get_historical_circuit_performance", {"round_number": 8})
     assert result["circuit_id"] == "monaco"
+
+
+def test_execute_tool_get_session_results():
+    mock = {"event": "Bahrain Grand Prix", "results": [{"driver": "Max Verstappen"}]}
+    with patch('tools.get_session_results', return_value=mock):
+        result = tools.execute_tool("get_session_results", {"round_number": 1, "session_type": "R"})
+    assert result["results"][0]["driver"] == "Max Verstappen"
+
+
+def test_execute_tool_get_driver_strategy():
+    mock = {"drivers": [{"driver": "Lando Norris", "pit_stop_count": 1}]}
+    with patch('tools.get_driver_strategy', return_value=mock):
+        result = tools.execute_tool("get_driver_strategy", {"round_number": 1, "session_type": "R", "driver_code": "NOR"})
+    assert result["drivers"][0]["pit_stop_count"] == 1
+
+
+def test_execute_tool_get_qualifying_progression():
+    mock = {"drivers": [{"abbreviation": "NOR", "made_q3": True}]}
+    with patch('tools.get_qualifying_progression', return_value=mock):
+        result = tools.execute_tool("get_qualifying_progression", {"round_number": 1})
+    assert result["drivers"][0]["made_q3"] is True
+
+
+def test_execute_tool_get_clean_pace_summary():
+    mock = {"drivers": [{"abbreviation": "NOR", "rank": 1}]}
+    with patch('tools.get_clean_pace_summary', return_value=mock):
+        result = tools.execute_tool("get_clean_pace_summary", {"round_number": 1, "session_type": "Q"})
+    assert result["drivers"][0]["rank"] == 1
+
+
+def test_execute_tool_get_track_position_comparison():
+    mock = {"comparison": [{"distance_m": 100, "delta_speed": 3.5}]}
+    with patch('tools.get_track_position_comparison', return_value=mock):
+        result = tools.execute_tool("get_track_position_comparison", {
+            "round_number": 1, "session_type": "Q", "driver_a": "NOR", "driver_b": "LEC"
+        })
+    assert result["comparison"][0]["delta_speed"] == 3.5
+
+
+def test_execute_tool_get_circuit_details():
+    mock = {"rotation": 90.0, "corners": []}
+    with patch('tools.get_circuit_details', return_value=mock):
+        result = tools.execute_tool("get_circuit_details", {"round_number": 1})
+    assert result["rotation"] == 90.0
+
+
+def test_execute_tool_get_race_control_messages():
+    mock = {"messages": [{"category": "Track Limits", "message": "Lap deleted"}]}
+    with patch('tools.get_race_control_messages', return_value=mock):
+        result = tools.execute_tool("get_race_control_messages", {"round_number": 1, "session_type": "Q"})
+    assert result["messages"][0]["message"] == "Lap deleted"
+
+
+def test_execute_tool_get_driver_weekend_overview():
+    mock = {"driver": "George Russell", "race": {"finish_position": 4}}
+    with patch('tools.get_driver_weekend_overview', return_value=mock):
+        result = tools.execute_tool("get_driver_weekend_overview", {"round_number": 3, "driver_name": "Russell"})
+    assert result["race"]["finish_position"] == 4
+
+
+def test_execute_tool_get_driver_race_story():
+    mock = {"driver": "George Russell", "story_points": ["Gained 2 places."]}
+    with patch('tools.get_driver_race_story', return_value=mock):
+        result = tools.execute_tool("get_driver_race_story", {"round_number": 3, "driver_name": "Russell"})
+    assert result["story_points"][0] == "Gained 2 places."
+
+
+def test_execute_tool_get_team_weekend_overview():
+    mock = {"team": "Mercedes", "total_points": 20.0}
+    with patch('tools.get_team_weekend_overview', return_value=mock):
+        result = tools.execute_tool("get_team_weekend_overview", {"round_number": 3, "team_name": "Mercedes"})
+    assert result["total_points"] == 20.0
+
+
+def test_execute_tool_get_race_report():
+    mock = {"event": "Japanese Grand Prix", "podium": [{"driver": "Max Verstappen"}]}
+    with patch('tools.get_race_report', return_value=mock):
+        result = tools.execute_tool("get_race_report", {"round_number": 3})
+    assert result["podium"][0]["driver"] == "Max Verstappen"

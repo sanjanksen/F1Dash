@@ -1,27 +1,18 @@
-// client/src/components/ChatView.jsx
 import { useState, useRef, useEffect } from 'react'
-import { sendChatMessage } from '../api/f1api.js'
+import AnswerRenderer from './AnswerRenderer.jsx'
 
 const SUGGESTIONS = [
-  "Who leads the 2025 championship?",
-  "How has Verstappen performed this season?",
-  "Which races are coming up next?",
-  "Compare Norris and Leclerc this season",
+  { label: 'Race Story', text: 'How did Russell do at Suzuka?' },
+  { label: 'Team Weekend', text: 'How did Ferrari do this weekend?' },
+  { label: 'Race Report', text: 'Give me the Japanese GP race recap' },
+  { label: 'Qualifying', text: 'Why was Norris faster than Leclerc in qualifying?' },
 ]
 
-export default function ChatView() {
-  const [messages, setMessages] = useState([
-    {
-      id: 'welcome',
-      role: 'assistant',
-      text: "Ask me anything about the 2025 Formula 1 season — driver performance, standings, race results, or circuit comparisons.",
-    },
-  ])
+export default function ChatView({ messages, loading, onSend }) {
   const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [hasStarted, setHasStarted] = useState(false)
   const bottomRef = useRef(null)
-  const inputRef  = useRef(null)
+  const inputRef = useRef(null)
+  const year = new Date().getFullYear()
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -31,107 +22,117 @@ export default function ChatView() {
     if (!loading) inputRef.current?.focus()
   }, [loading])
 
-  const send = async (text) => {
+  const handleSend = (text) => {
     const msg = text.trim()
     if (!msg || loading) return
-
-    setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'user', text: msg }])
-    setHasStarted(true)
     setInput('')
-    setLoading(true)
-
-    try {
-      const { response } = await sendChatMessage(msg)
-      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'assistant', text: response }])
-    } catch (e) {
-      setMessages(prev => [
-        ...prev,
-        { id: crypto.randomUUID(), role: 'assistant', text: `Something went wrong: ${e.message}`, isError: true },
-      ])
-    } finally {
-      setLoading(false)
-    }
+    onSend(msg)
   }
 
-  const isIntro = !hasStarted
+  const isIntro = messages.length === 0 && !loading
 
   return (
-    <div className="chat-container">
-      {/* Suggestion chips — visible only before the first user message */}
-      {isIntro && (
-        <div className="chat-intro animate-in">
-          <div className="chat-avatar-lg">
-            F<span>1</span>
-          </div>
-          <p className="chat-intro-label">Your F1 Analyst</p>
-          <div className="suggestion-chips">
-            {SUGGESTIONS.map(s => (
-              <button key={s} className="suggestion-chip" onClick={() => send(s)}>
-                {s}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Message list */}
-      <div className="chat-messages">
-        {messages.map((msg, i) => (
-          <div
-            key={msg.id}
-            className={`bubble-row ${msg.role} animate-in`}
-            style={{ animationDelay: `${i * 0.025}s` }}
-          >
-            {msg.role === 'assistant' && (
-              <div className="chat-avatar">F<span>1</span></div>
-            )}
-            <div className={`chat-bubble ${msg.role}${msg.isError ? ' error' : ''}`}>
-              {msg.text}
-            </div>
-          </div>
-        ))}
-
-        {loading && (
-          <div className="bubble-row assistant animate-in">
-            <div className="chat-avatar">F<span>1</span></div>
-            <div className="chat-bubble assistant typing">
-              <span className="typing-dot" />
-              <span className="typing-dot" />
-              <span className="typing-dot" />
+    <div className="chat-wrap">
+      <div className="chat-scroll">
+        {isIntro && (
+          <div className="chat-intro animate-in">
+            <div className="chat-intro-badge">F1</div>
+            <span className="chat-intro-kicker">Race Intelligence</span>
+            <h1 className="chat-intro-title">Ask for the story,<br />not just the stat.</h1>
+            <p className="chat-intro-sub">
+              Weekend recaps, race reports, team summaries, safety car impact,
+              qualifying progression, or telemetry-led analysis for the {year} season.
+            </p>
+            <div className="suggestion-grid">
+              {SUGGESTIONS.map(s => (
+                <button
+                  key={s.text}
+                  className="suggestion-card"
+                  onClick={() => handleSend(s.text)}
+                >
+                  <span className="suggestion-label">{s.label}</span>
+                  <span className="suggestion-text">{s.text}</span>
+                </button>
+              ))}
             </div>
           </div>
         )}
-        <div ref={bottomRef} />
+
+        {messages.length > 0 && (
+          <div className="chat-messages">
+            {messages.map((msg, i) => (
+              <div
+                key={msg.id}
+                className={`message-row ${msg.role} animate-in`}
+                style={{ animationDelay: `${Math.min(i * 0.02, 0.2)}s` }}
+              >
+                {msg.role === 'assistant' && (
+                  <div className="msg-avatar">F1</div>
+                )}
+                <div className={`message-content ${msg.role}${msg.isError ? ' error' : ''}`}>
+                  {msg.role === 'assistant' && !msg.isError
+                    ? <AnswerRenderer text={msg.text} />
+                    : msg.text}
+                </div>
+              </div>
+            ))}
+
+            {loading && (
+              <div className="message-row assistant animate-in">
+                <div className="msg-avatar">F1</div>
+                <div className="message-content typing">
+                  <span className="typing-dot" />
+                  <span className="typing-dot" />
+                  <span className="typing-dot" />
+                </div>
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+        )}
+
+        {isIntro && <div ref={bottomRef} />}
       </div>
 
-      {/* Input row */}
-      <form
-        className="chat-input-row"
-        onSubmit={e => { e.preventDefault(); send(input) }}
-      >
-        <input
-          ref={inputRef}
-          className="chat-input"
-          type="text"
-          placeholder="Ask about any driver, race, or circuit…"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          disabled={loading}
-        />
-        <button
-          className="send-btn"
-          type="submit"
-          disabled={loading || !input.trim()}
-          aria-label="Send"
-        >
-          <svg viewBox="0 0 20 20" fill="none" width="17" height="17">
-            <path d="M3 10h14M17 10l-6-6M17 10l-6 6"
-              stroke="currentColor" strokeWidth="1.75"
-              strokeLinecap="round" strokeLinejoin="round"
+      <div className="chat-bottom">
+        <div className="chat-bottom-inner">
+          <form
+            className="chat-input-row"
+            onSubmit={e => { e.preventDefault(); handleSend(input) }}
+          >
+            <input
+              ref={inputRef}
+              className="chat-input"
+              type="text"
+              placeholder="Ask about a driver, team, race, safety car, or qualifying story..."
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              disabled={loading}
             />
-          </svg>
-        </button>
-      </form>
+            <button
+              className="send-btn"
+              type="submit"
+              disabled={loading || !input.trim()}
+              aria-label="Send"
+            >
+              {loading ? (
+                <span className="send-spinner" />
+              ) : (
+                <svg viewBox="0 0 20 20" fill="none" width="16" height="16">
+                  <path
+                    d="M3 10h14M17 10l-6-6M17 10l-6 6"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
+            </button>
+          </form>
+          <p className="chat-hint">Structured F1 replies powered by FastF1, Jolpica, and route-aware tooling.</p>
+        </div>
+      </div>
     </div>
   )
 }
