@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
 
-from f1_data import get_drivers, get_driver_stats, get_circuits, get_f1_context
+from f1_data import get_drivers, get_driver_stats, get_circuits
 from chat import answer_f1_question
 
 app = FastAPI(title="F1 Dashboard API", version="1.0.0")
@@ -64,8 +64,7 @@ async def chat_endpoint(request: ChatRequest):
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="message cannot be empty")
     try:
-        context = get_f1_context(request.message)
-        response = answer_f1_question(request.message, context)
+        response = answer_f1_question(request.message)
         return {"response": response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -23,8 +23,8 @@ def test_cors_header_present():
 
 
 def test_chat_endpoint_returns_response():
-    with patch('main.get_f1_context', return_value="standings data"), \
-         patch('main.answer_f1_question', return_value="Verstappen leads."):
+    # answer_f1_question now takes only message — no f1_context
+    with patch('main.answer_f1_question', return_value="Verstappen leads."):
         response = client.post("/api/chat", json={"message": "Who is leading?"})
 
     assert response.status_code == 200
