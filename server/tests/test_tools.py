@@ -125,5 +125,30 @@ def test_tool_definitions_are_valid_schemas():
 
 
 def test_tool_definitions_count():
-    """Should have 11 tools — 7 Jolpica + 4 FastF1."""
-    assert len(tools.TOOL_DEFINITIONS) == 11
+    """Should have 14 tools — 7 Jolpica + 4 FastF1 + 3 context tools."""
+    assert len(tools.TOOL_DEFINITIONS) == 14
+
+
+def test_execute_tool_get_telemetry_comparison():
+    mock = {"driver_a": "NOR", "driver_b": "LEC", "comparison": [{"distance_m": 0, "delta_speed": 5.0}]}
+    with patch('tools.get_telemetry_comparison', return_value=mock):
+        result = tools.execute_tool("get_telemetry_comparison", {
+            "round_number": 8, "session_type": "Q",
+            "driver_a": "NOR", "driver_b": "LEC"
+        })
+    assert result["driver_a"] == "NOR"
+    assert result["comparison"][0]["delta_speed"] == 5.0
+
+
+def test_execute_tool_get_circuit_corners():
+    mock = [{"number": 1, "label": None, "distance_m": 150}]
+    with patch('tools.get_circuit_corners', return_value=mock):
+        result = tools.execute_tool("get_circuit_corners", {"round_number": 8})
+    assert result[0]["number"] == 1
+
+
+def test_execute_tool_get_historical_circuit_performance():
+    mock = {"circuit_id": "monaco", "history": [{"year": 2024}]}
+    with patch('tools.get_historical_circuit_performance', return_value=mock):
+        result = tools.execute_tool("get_historical_circuit_performance", {"round_number": 8})
+    assert result["circuit_id"] == "monaco"

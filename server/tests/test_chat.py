@@ -178,4 +178,4 @@ def test_answer_f1_question_passes_tool_definitions():
 
     call_kwargs = mock_client.messages.create.call_args[1]
     assert "tools" in call_kwargs
-    assert len(call_kwargs["tools"]) == 11
+    assert len(call_kwargs["tools"]) == 14

@@ -17,6 +17,9 @@ from f1_data import (
     get_driver_lap_times,
     get_sector_comparison,
     get_lap_telemetry,
+    get_telemetry_comparison,
+    get_circuit_corners,
+    get_historical_circuit_performance,
 )
 
 TOOL_DEFINITIONS = [
@@ -263,6 +266,64 @@ TOOL_DEFINITIONS = [
             "required": ["round_number", "session_type", "driver_code"],
         },
     },
+    {
+        "name": "get_telemetry_comparison",
+        "description": (
+            "Overlay two drivers' telemetry traces for the same session, aligned by distance. "
+            "Returns speed, throttle, brake, gear, and DRS for both drivers at every 100m point, "
+            "plus delta_speed (positive = driver_a faster) and delta_throttle. "
+            "Use this to explain exactly where one driver gains or loses time — e.g. earlier "
+            "braking into a corner, higher minimum speed, stronger traction on exit. "
+            "Combine with get_circuit_corners to name the corners where differences occur."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "round_number": {"type": "integer", "description": "The 2025 season round number."},
+                "session_type": {"type": "string", "description": "Session type: 'Q', 'R', 'FP1', 'FP2', 'FP3', 'S', 'SQ', 'SS'."},
+                "driver_a": {"type": "string", "description": "First driver's 3-letter code (e.g. 'NOR')."},
+                "driver_b": {"type": "string", "description": "Second driver's 3-letter code (e.g. 'LEC')."},
+                "lap_number_a": {"type": "integer", "description": "Specific lap number for driver_a. If omitted, uses their fastest lap."},
+                "lap_number_b": {"type": "integer", "description": "Specific lap number for driver_b. If omitted, uses their fastest lap."},
+            },
+            "required": ["round_number", "session_type", "driver_a", "driver_b"],
+        },
+    },
+    {
+        "name": "get_circuit_corners",
+        "description": (
+            "Get the corner map for a circuit: each corner's number, optional letter label, "
+            "and distance along the lap in metres. "
+            "Use this alongside get_telemetry_comparison or get_lap_telemetry to translate "
+            "distance-based observations into corner names. "
+            "e.g. 'at 1400m, NOR braked much later' + corner 6 at 1380m = 'NOR braked later into Turn 6'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "round_number": {"type": "integer", "description": "The 2025 season round number."},
+            },
+            "required": ["round_number"],
+        },
+    },
+    {
+        "name": "get_historical_circuit_performance",
+        "description": (
+            "Qualifying top-5 and race top-5 for the same circuit across the last 2-3 seasons. "
+            "Use this to give team/car context: which constructors have historically been strong "
+            "or weak at this venue. e.g. 'Red Bull has qualified P1 here two years running, "
+            "Mercedes has struggled to make Q3.' "
+            "Default covers 2023, 2024, 2025. Pass years=[2024, 2025] for a shorter window."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "round_number": {"type": "integer", "description": "The 2025 season round number. The circuit is looked up automatically."},
+                "years": {"type": "array", "items": {"type": "integer"}, "description": "List of years to fetch. Defaults to [2023, 2024, 2025]."},
+            },
+            "required": ["round_number"],
+        },
+    },
 ]
 
 
@@ -316,6 +377,21 @@ def execute_tool(name: str, args: dict):
         return get_lap_telemetry(
             args["round_number"], args["session_type"],
             args["driver_code"], args.get("lap_number")
+        )
+
+    if name == "get_telemetry_comparison":
+        return get_telemetry_comparison(
+            args["round_number"], args["session_type"],
+            args["driver_a"], args["driver_b"],
+            args.get("lap_number_a"), args.get("lap_number_b"),
+        )
+
+    if name == "get_circuit_corners":
+        return get_circuit_corners(args["round_number"])
+
+    if name == "get_historical_circuit_performance":
+        return get_historical_circuit_performance(
+            args["round_number"], args.get("years")
         )
 
     raise ValueError(f"Unknown tool: {name!r}")
