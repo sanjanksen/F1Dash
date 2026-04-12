@@ -65,7 +65,7 @@ export default function StatsView() {
             <input
               className="search-input"
               type="text"
-              placeholder="Search driver — name, code, or nationality…"
+              placeholder="Search driver — name or code (e.g. Verstappen, NOR)…"
               value={query}
               onChange={e => setQuery(e.target.value)}
               autoFocus

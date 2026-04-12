@@ -82,7 +82,9 @@ export default function DriverCard({ stats }) {
                 <span className="race-name">{race.race}</span>
                 <div className="race-meta">
                   {race.fastest_lap && <span className="fl-tag">FL</span>}
-                  <span className="race-pos" style={{ color: rColor }}>P{race.position}</span>
+                  <span className="race-pos" style={{ color: rColor }}>
+                    {race.position != null ? `P${race.position}` : 'DNF'}
+                  </span>
                   <span className="race-pts">{race.points}p</span>
                 </div>
               </div>

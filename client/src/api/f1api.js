@@ -13,7 +13,6 @@ async function apiFetch(path, options = {}) {
   return res.json()
 }
 
-export const fetchDrivers = () => apiFetch('/drivers')
 export const fetchDriverStats = (name) => apiFetch(`/driver/${encodeURIComponent(name)}/stats`)
 export const fetchCircuits = () => apiFetch('/circuits')
 export const sendChatMessage = (message) =>
