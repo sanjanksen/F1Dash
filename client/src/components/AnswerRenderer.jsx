@@ -1,8 +1,11 @@
+import { Badge } from './ui/badge.jsx'
+import { Card, CardContent } from './ui/card.jsx'
+
 function splitBlocks(text) {
   return text
     .trim()
     .split(/\n\s*\n/)
-    .map(block => block.trim())
+    .map((block) => block.trim())
     .filter(Boolean)
 }
 
@@ -19,27 +22,27 @@ function isKeyValue(line) {
 }
 
 function parseBlock(block) {
-  const lines = block.split('\n').map(line => line.trim()).filter(Boolean)
+  const lines = block.split('\n').map((line) => line.trim()).filter(Boolean)
   if (lines.length === 0) return null
 
   if (lines.every(isBullet)) {
     return {
       type: 'bullet-list',
-      items: lines.map(line => line.replace(/^[-*]\s+/, '')),
+      items: lines.map((line) => line.replace(/^[-*]\s+/, '')),
     }
   }
 
   if (lines.every(isNumbered)) {
     return {
       type: 'number-list',
-      items: lines.map(line => line.replace(/^\d+\.\s+/, '')),
+      items: lines.map((line) => line.replace(/^\d+\.\s+/, '')),
     }
   }
 
   if (lines.every(isKeyValue)) {
     return {
       type: 'kv-grid',
-      rows: lines.map(line => {
+      rows: lines.map((line) => {
         const [label, ...rest] = line.split(':')
         return { label: label.trim(), value: rest.join(':').trim() }
       }),
@@ -50,7 +53,7 @@ function parseBlock(block) {
     return {
       type: 'section-list',
       title: lines[0].replace(/:$/, ''),
-      items: lines.slice(1).map(line => line.replace(/^[-*]\s+/, '')),
+      items: lines.slice(1).map((line) => line.replace(/^[-*]\s+/, '')),
     }
   }
 
@@ -61,34 +64,59 @@ function parseBlock(block) {
 }
 
 function renderInline(text) {
-  const parts = text.split(/(\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|`[^`]+`|\bP\d+\b|\bQ[123]\b|\bSC\b|\bVSC\b|\bFP[123]\b|\b[A-Z]{3}\b|\b\d+\.\d+s\b)/g)
+  const parts = text.split(
+    /(\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|`[^`]+`|\bP\d+\b|\bQ[123]\b|\bSC\b|\bVSC\b|\bFP[123]\b|\b[A-Z]{3}\b|\b\d+\.\d+s\b)/g,
+  )
+
   return parts.map((part, index) => {
     if (!part) return null
+
     if (/^\*\*\*[^*]+\*\*\*$/.test(part)) {
-      const value = part.slice(3, -3)
-      return <strong key={index} className="inline-strong">{value}</strong>
+      return <strong key={index} className="font-semibold text-foreground">{part.slice(3, -3)}</strong>
     }
+
     if (/^\*\*[^*]+\*\*$/.test(part)) {
-      const value = part.slice(2, -2)
-      return <strong key={index} className="inline-strong">{value}</strong>
+      return <strong key={index} className="font-semibold text-foreground">{part.slice(2, -2)}</strong>
     }
+
     if (/^`[^`]+`$/.test(part)) {
-      return <code key={index} className="inline-code">{part.slice(1, -1)}</code>
+      return (
+        <code key={index} className="rounded-sm border border-border bg-background px-1.5 py-0.5 text-[0.92em] text-foreground">
+          {part.slice(1, -1)}
+        </code>
+      )
     }
+
     if (/^P\d+$/.test(part)) {
-      return <span key={index} className="inline-pill position-pill">{part}</span>
+      return <Badge key={index} variant="accent" className="mx-0.5 normal-case tracking-normal">{part}</Badge>
     }
+
     if (/^(SC|VSC|Q[123]|FP[123])$/.test(part)) {
-      return <span key={index} className="inline-pill session-pill">{part}</span>
+      return <Badge key={index} variant="default" className="mx-0.5 normal-case tracking-normal">{part}</Badge>
     }
+
     if (/^[A-Z]{3}$/.test(part)) {
-      return <span key={index} className="inline-pill code-pill">{part}</span>
+      return <Badge key={index} variant="muted" className="mx-0.5 tracking-[0.08em]">{part}</Badge>
     }
+
     if (/^\d+\.\d+s$/.test(part)) {
-      return <span key={index} className="inline-time">{part}</span>
+      return <span key={index} className="font-medium text-foreground">{part}</span>
     }
+
     return <span key={index}>{part}</span>
   })
+}
+
+function List({ items, ordered = false }) {
+  const Tag = ordered ? 'ol' : 'ul'
+
+  return (
+    <Tag className={ordered ? 'space-y-2 pl-5 text-sm leading-7 text-foreground list-decimal' : 'space-y-2 pl-5 text-sm leading-7 text-foreground list-disc'}>
+      {items.map((item, index) => (
+        <li key={index}>{renderInline(item)}</li>
+      ))}
+    </Tag>
+  )
 }
 
 export default function AnswerRenderer({ text }) {
@@ -97,83 +125,82 @@ export default function AnswerRenderer({ text }) {
 
   const [first, ...rest] = blocks
   const hasLead = first?.type === 'paragraph'
+  const bodyBlocks = hasLead ? rest : blocks
 
   return (
-    <div className="answer-renderer">
-      {hasLead && (
-        <div className="answer-lead">
-          <p>{renderInline(first.text)}</p>
+    <div className="max-w-3xl space-y-4">
+      {hasLead ? (
+        <div className="text-[15px] leading-7 text-foreground">
+          {renderInline(first.text)}
         </div>
-      )}
+      ) : null}
 
-      <div className="answer-blocks">
-        {(hasLead ? rest : blocks).map((block, index) => {
-          if (block.type === 'paragraph') {
-            return (
-              <div key={index} className="answer-card prose-card">
-                <p>{renderInline(block.text)}</p>
-              </div>
-            )
-          }
+      {bodyBlocks.map((block, index) => {
+        if (block.type === 'paragraph') {
+          return (
+            <Card key={index}>
+              <CardContent className="p-4 text-sm leading-7 text-foreground">
+                {renderInline(block.text)}
+              </CardContent>
+            </Card>
+          )
+        }
 
-          if (block.type === 'bullet-list') {
-            return (
-              <div key={index} className="answer-card list-card">
-                <ul className="answer-list">
-                  {block.items.map((item, itemIndex) => (
-                    <li key={itemIndex}>{renderInline(item)}</li>
-                  ))}
-                </ul>
-              </div>
-            )
-          }
+        if (block.type === 'bullet-list') {
+          return (
+            <Card key={index}>
+              <CardContent className="p-4">
+                <List items={block.items} />
+              </CardContent>
+            </Card>
+          )
+        }
 
-          if (block.type === 'number-list') {
-            return (
-              <div key={index} className="answer-card list-card">
-                <ol className="answer-list ordered">
-                  {block.items.map((item, itemIndex) => (
-                    <li key={itemIndex}>{renderInline(item)}</li>
-                  ))}
-                </ol>
-              </div>
-            )
-          }
+        if (block.type === 'number-list') {
+          return (
+            <Card key={index}>
+              <CardContent className="p-4">
+                <List items={block.items} ordered />
+              </CardContent>
+            </Card>
+          )
+        }
 
-          if (block.type === 'kv-grid') {
-            return (
-              <div key={index} className="answer-card kv-card">
-                <div className="kv-grid">
-                  {block.rows.map((row, rowIndex) => (
-                    <div key={rowIndex} className="kv-row">
-                      <span className="kv-label">{row.label}</span>
-                      <span className="kv-value">{renderInline(row.value)}</span>
+        if (block.type === 'kv-grid') {
+          return (
+            <Card key={index}>
+              <CardContent className="grid gap-3 p-4">
+                {block.rows.map((row, rowIndex) => (
+                  <div
+                    key={rowIndex}
+                    className="grid gap-1 border-b border-border pb-3 last:border-b-0 last:pb-0 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-4"
+                  >
+                    <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                      {row.label}
                     </div>
-                  ))}
-                </div>
-              </div>
-            )
-          }
+                    <div className="text-sm leading-7 text-foreground">{renderInline(row.value)}</div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )
+        }
 
-          if (block.type === 'section-list') {
-            return (
-              <div key={index} className="answer-card section-card">
-                <div className="section-card-head">
-                  <span className="section-kicker">Section</span>
-                  <h4>{block.title}</h4>
+        if (block.type === 'section-list') {
+          return (
+            <Card key={index}>
+              <CardContent className="p-4">
+                <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                  {block.title}
                 </div>
-                <ul className="answer-list">
-                  {block.items.map((item, itemIndex) => (
-                    <li key={itemIndex}>{renderInline(item)}</li>
-                  ))}
-                </ul>
-              </div>
-            )
-          }
+                <List items={block.items} />
+              </CardContent>
+            </Card>
+          )
+        }
 
-          return null
-        })}
-      </div>
+        return null
+      })}
     </div>
   )
 }
