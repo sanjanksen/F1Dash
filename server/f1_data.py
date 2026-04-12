@@ -1,6 +1,5 @@
 # server/f1_data.py
 import os
-from datetime import date
 import fastf1
 import requests
 
@@ -11,6 +10,32 @@ fastf1.Cache.enable_cache(_CACHE_DIR)
 
 JOLPICA_BASE = "https://api.jolpi.ca/ergast/f1"
 CURRENT_YEAR = 2025
+
+
+def _fetch_all_races(driver_id: str) -> list[dict]:
+    """Fetch all 2025 race results for a driver. Used by get_driver_stats and get_head_to_head."""
+    resp = requests.get(
+        f"{JOLPICA_BASE}/{CURRENT_YEAR}/drivers/{driver_id}/results.json?limit=30",
+        timeout=15,
+    )
+    resp.raise_for_status()
+    races_data = resp.json()["MRData"]["RaceTable"]["Races"]
+    results = []
+    for race in races_data:
+        r_list = race.get("Results", [])
+        if not r_list:
+            continue
+        r = r_list[0]
+        pos_str = r.get("position", "")
+        pos = int(pos_str) if pos_str.isdigit() else None
+        fl = r.get("FastestLap", {})
+        results.append({
+            "race": race.get("raceName", ""),
+            "position": pos,
+            "points": float(r.get("points", 0)),
+            "fastest_lap": fl.get("rank") == "1",
+        })
+    return results
 
 
 def get_drivers() -> list[dict]:
@@ -60,44 +85,11 @@ def get_driver_stats(driver_name: str) -> dict | None:
     if matched is None:
         return None
 
-    driver_id = matched["driver_id"]
+    all_races = _fetch_all_races(matched["driver_id"])
 
-    resp = requests.get(
-        f"{JOLPICA_BASE}/{CURRENT_YEAR}/drivers/{driver_id}/results.json?limit=30",
-        timeout=15,
-    )
-    resp.raise_for_status()
-    races = resp.json()["MRData"]["RaceTable"]["Races"]
-
-    wins = 0
-    podiums = 0
-    fastest_laps = 0
-    recent_races = []
-
-    for race in races:
-        results = race.get("Results", [])
-        if not results:
-            continue
-        r = results[0]
-        pos_str = r.get("position", "")
-        pos = int(pos_str) if pos_str.isdigit() else None
-        points = float(r.get("points", 0))
-
-        if pos == 1:
-            wins += 1
-        if pos is not None and 1 <= pos <= 3:
-            podiums += 1
-
-        fl = r.get("FastestLap", {})
-        if fl.get("rank") == "1":
-            fastest_laps += 1
-
-        recent_races.append({
-            "race": race.get("raceName", ""),
-            "position": pos,
-            "points": points,
-            "fastest_lap": fl.get("rank") == "1",
-        })
+    wins = sum(1 for r in all_races if r["position"] == 1)
+    podiums = sum(1 for r in all_races if r["position"] is not None and 1 <= r["position"] <= 3)
+    fastest_laps = sum(1 for r in all_races if r["fastest_lap"])
 
     return {
         "driver": matched["full_name"],
@@ -109,7 +101,7 @@ def get_driver_stats(driver_name: str) -> dict | None:
         "fastest_laps": fastest_laps,
         "championship_position": matched["standing"],
         "points": matched["points"],
-        "recent_races": recent_races[-5:],
+        "recent_races": all_races[-5:],
     }
 
 
@@ -128,25 +120,133 @@ def get_circuits() -> list[dict]:
     return circuits
 
 
-def get_f1_context(message: str) -> str:
-    """Build a concise F1 data context string for the chat endpoint."""
-    parts: list[str] = []
+def get_constructor_standings() -> list[dict]:
+    """Return all constructor (team) championship standings for 2025."""
+    resp = requests.get(
+        f"{JOLPICA_BASE}/{CURRENT_YEAR}/constructorStandings.json?limit=20",
+        timeout=15,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    standings_lists = data["MRData"]["StandingsTable"]["StandingsLists"]
+    if not standings_lists:
+        return []
+    return [
+        {
+            "position": int(entry["position"]),
+            "team": entry["Constructor"]["name"],
+            "nationality": entry["Constructor"]["nationality"],
+            "points": float(entry["points"]),
+            "wins": int(entry["wins"]),
+        }
+        for entry in standings_lists[0]["ConstructorStandings"]
+    ]
 
-    try:
-        drivers = get_drivers()
-        lines = [f"  {d['standing']}. {d['full_name']} ({d['team']}) — {d['points']} pts, {d['wins']} wins"
-                 for d in drivers[:10]]
-        parts.append("=== 2025 Driver Championship Standings (Top 10) ===\n" + "\n".join(lines))
-    except Exception as exc:
-        parts.append(f"[Standings unavailable: {exc}]")
 
-    try:
-        circuits = get_circuits()
-        upcoming = [c for c in circuits if c["date"] >= str(date.today())][:3]
-        lines = [f"  Round {c['round']}: {c['event_name']} ({c['country']}) — {c['date']}"
-                 for c in upcoming]
-        parts.append("=== Upcoming Races ===\n" + "\n".join(lines))
-    except Exception as exc:
-        parts.append(f"[Schedule unavailable: {exc}]")
+def get_race_results(round_number: int) -> dict:
+    """Return the full finishing order for a specific 2025 Grand Prix round."""
+    resp = requests.get(
+        f"{JOLPICA_BASE}/{CURRENT_YEAR}/{round_number}/results.json?limit=30",
+        timeout=15,
+    )
+    resp.raise_for_status()
+    races = resp.json()["MRData"]["RaceTable"]["Races"]
+    if not races:
+        return {}
+    race = races[0]
+    return {
+        "race_name": race["raceName"],
+        "circuit": race["Circuit"]["circuitName"],
+        "date": race.get("date", ""),
+        "results": [
+            {
+                "position": int(r["position"]) if r["position"].isdigit() else None,
+                "driver": f"{r['Driver']['givenName']} {r['Driver']['familyName']}",
+                "code": r["Driver"].get("code", ""),
+                "team": r["Constructor"]["name"],
+                "points": float(r.get("points", 0)),
+                "fastest_lap": r.get("FastestLap", {}).get("rank") == "1",
+                "status": r.get("status", ""),
+            }
+            for r in race.get("Results", [])
+        ],
+    }
 
-    return "\n\n".join(parts)
+
+def get_qualifying_results(round_number: int) -> dict:
+    """Return Q1/Q2/Q3 times for all drivers at a specific 2025 Grand Prix round."""
+    resp = requests.get(
+        f"{JOLPICA_BASE}/{CURRENT_YEAR}/{round_number}/qualifying.json?limit=30",
+        timeout=15,
+    )
+    resp.raise_for_status()
+    races = resp.json()["MRData"]["RaceTable"]["Races"]
+    if not races:
+        return {}
+    race = races[0]
+    return {
+        "race_name": race["raceName"],
+        "date": race.get("date", ""),
+        "results": [
+            {
+                "position": int(r["position"]),
+                "driver": f"{r['Driver']['givenName']} {r['Driver']['familyName']}",
+                "code": r["Driver"].get("code", ""),
+                "team": r["Constructor"]["name"],
+                "q1": r.get("Q1", ""),
+                "q2": r.get("Q2", ""),
+                "q3": r.get("Q3", ""),
+            }
+            for r in race.get("QualifyingResults", [])
+        ],
+    }
+
+
+def get_head_to_head(driver_a_name: str, driver_b_name: str) -> dict:
+    """Compare two drivers side-by-side across all 2025 races they both competed in."""
+
+    def _find_and_fetch(name: str) -> tuple[dict, list[dict]]:
+        needle = name.lower()
+        for d in get_drivers():
+            if (
+                needle in d["full_name"].lower()
+                or needle == d["driver_id"].lower()
+                or needle == d["code"].lower()
+            ):
+                return d, _fetch_all_races(d["driver_id"])
+        raise ValueError(f"Driver not found: {name}")
+
+    matched_a, races_a = _find_and_fetch(driver_a_name)
+    matched_b, races_b = _find_and_fetch(driver_b_name)
+
+    lookup_b = {r["race"]: r for r in races_b}
+
+    a_ahead = 0
+    b_ahead = 0
+    for ra in races_a:
+        rb = lookup_b.get(ra["race"])
+        if rb is None:
+            continue
+        pa, pb = ra["position"], rb["position"]
+        if pa is not None and pb is not None:
+            if pa < pb:
+                a_ahead += 1
+            elif pb < pa:
+                b_ahead += 1
+
+    return {
+        "driver_a": matched_a["full_name"],
+        "driver_b": matched_b["full_name"],
+        "team_a": matched_a["team"],
+        "team_b": matched_b["team"],
+        "points_a": matched_a["points"],
+        "points_b": matched_b["points"],
+        "points_gap": round(matched_a["points"] - matched_b["points"], 1),
+        "championship_position_a": matched_a["standing"],
+        "championship_position_b": matched_b["standing"],
+        "wins_a": matched_a["wins"],
+        "wins_b": matched_b["wins"],
+        "races_a_ahead": a_ahead,
+        "races_b_ahead": b_ahead,
+        "races_compared": a_ahead + b_ahead,
+    }
