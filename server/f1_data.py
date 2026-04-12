@@ -2,6 +2,7 @@
 import os
 import fastf1
 import requests
+import pandas as pd
 
 # Enable FastF1 disk cache
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), 'cache')
@@ -10,6 +11,16 @@ fastf1.Cache.enable_cache(_CACHE_DIR)
 
 JOLPICA_BASE = "https://api.jolpi.ca/ergast/f1"
 CURRENT_YEAR = 2025
+
+
+def _fmt_td(td) -> str | None:
+    """Format a pd.Timedelta to a lap-time string like '1:26.456' or '0:28.123'."""
+    if td is None or pd.isna(td):
+        return None
+    total = td.total_seconds()
+    m = int(total // 60)
+    s = total % 60
+    return f"{m}:{s:06.3f}"
 
 
 def _fetch_all_races(driver_id: str) -> list[dict]:
@@ -249,4 +260,224 @@ def get_head_to_head(driver_a_name: str, driver_b_name: str) -> dict:
         "races_a_ahead": a_ahead,
         "races_b_ahead": b_ahead,
         "races_compared": a_ahead + b_ahead,
+    }
+
+
+def get_session_fastest_laps(round_number: int, session_type: str) -> list[dict]:
+    """
+    Leaderboard of fastest laps for every driver in a session.
+    Includes sector times (S1/S2/S3) and speed trap values (SpeedI1/I2/FL/ST).
+    session_type: 'Q', 'R', 'FP1', 'FP2', 'FP3', 'S', 'SQ', 'SS'
+    """
+    session = fastf1.get_session(CURRENT_YEAR, round_number, session_type)
+    session.load(laps=True, telemetry=False, weather=False, messages=False)
+
+    results = []
+    for driver_code in session.drivers:
+        driver_laps = session.laps.pick_driver(driver_code)
+        if driver_laps.empty:
+            continue
+        fastest = driver_laps.pick_fastest()
+        if pd.isna(fastest['LapTime']):
+            continue
+        results.append({
+            "driver": str(fastest['Driver']),
+            "team": str(fastest['Team']),
+            "lap_time": _fmt_td(fastest['LapTime']),
+            "lap_time_s": round(fastest['LapTime'].total_seconds(), 3),
+            "sector1": _fmt_td(fastest['Sector1Time']),
+            "sector2": _fmt_td(fastest['Sector2Time']),
+            "sector3": _fmt_td(fastest['Sector3Time']),
+            "speed_i1": round(float(fastest['SpeedI1']), 1) if pd.notna(fastest.get('SpeedI1')) else None,
+            "speed_i2": round(float(fastest['SpeedI2']), 1) if pd.notna(fastest.get('SpeedI2')) else None,
+            "speed_fl": round(float(fastest['SpeedFL']), 1) if pd.notna(fastest.get('SpeedFL')) else None,
+            "speed_st": round(float(fastest['SpeedST']), 1) if pd.notna(fastest.get('SpeedST')) else None,
+            "compound": str(fastest['Compound']) if pd.notna(fastest.get('Compound')) else None,
+            "tyre_life": int(fastest['TyreLife']) if pd.notna(fastest.get('TyreLife')) else None,
+            "lap_number": int(fastest['LapNumber']),
+        })
+
+    results.sort(key=lambda x: x['lap_time_s'])
+    for i, r in enumerate(results):
+        r['position'] = i + 1
+    return results
+
+
+def get_driver_lap_times(round_number: int, session_type: str, driver_code: str) -> dict:
+    """
+    All laps a driver completed in a session, with per-lap sector splits,
+    speed traps, tyre compound, and pit stop flags.
+    Answers: "how did Norris's pace evolve across his qualifying runs?"
+    """
+    session = fastf1.get_session(CURRENT_YEAR, round_number, session_type)
+    session.load(laps=True, telemetry=False, weather=False, messages=False)
+
+    driver_laps = session.laps.pick_driver(driver_code.upper())
+    if driver_laps.empty:
+        raise ValueError(f"No data for driver {driver_code!r} in round {round_number} {session_type}")
+
+    laps = []
+    for _, lap in driver_laps.iterrows():
+        laps.append({
+            "lap_number": int(lap['LapNumber']),
+            "lap_time": _fmt_td(lap['LapTime']),
+            "sector1": _fmt_td(lap['Sector1Time']),
+            "sector2": _fmt_td(lap['Sector2Time']),
+            "sector3": _fmt_td(lap['Sector3Time']),
+            "speed_i1": round(float(lap['SpeedI1']), 1) if pd.notna(lap.get('SpeedI1')) else None,
+            "speed_i2": round(float(lap['SpeedI2']), 1) if pd.notna(lap.get('SpeedI2')) else None,
+            "speed_fl": round(float(lap['SpeedFL']), 1) if pd.notna(lap.get('SpeedFL')) else None,
+            "speed_st": round(float(lap['SpeedST']), 1) if pd.notna(lap.get('SpeedST')) else None,
+            "compound": str(lap['Compound']) if pd.notna(lap.get('Compound')) else None,
+            "tyre_life": int(lap['TyreLife']) if pd.notna(lap.get('TyreLife')) else None,
+            "pit_in": pd.notna(lap.get('PitInTime')),
+            "pit_out": pd.notna(lap.get('PitOutTime')),
+            "is_personal_best": bool(lap.get('IsPersonalBest', False)),
+        })
+
+    return {
+        "driver": driver_code.upper(),
+        "event": session.event['EventName'],
+        "session": session_type.upper(),
+        "laps": laps,
+    }
+
+
+def get_sector_comparison(round_number: int, session_type: str,
+                          driver_a: str, driver_b: str) -> dict:
+    """
+    Head-to-head fastest-lap comparison between two drivers.
+    Shows time gap per sector AND speed trap deltas (SpeedI1/I2/FL/ST).
+    Positive gap_s = driver_a is SLOWER. Positive speed_delta = driver_a is FASTER.
+    Answers: "why was Norris 0.3s faster than Leclerc in sector 2?"
+    """
+    session = fastf1.get_session(CURRENT_YEAR, round_number, session_type)
+    session.load(laps=True, telemetry=False, weather=False, messages=False)
+
+    def _fastest(code: str):
+        laps = session.laps.pick_driver(code.upper())
+        if laps.empty:
+            raise ValueError(f"No session data for driver {code!r}")
+        fastest = laps.pick_fastest()
+        if pd.isna(fastest['LapTime']):
+            raise ValueError(f"No valid lap time found for {code!r}")
+        return fastest
+
+    lap_a = _fastest(driver_a)
+    lap_b = _fastest(driver_b)
+
+    def _s(td) -> float | None:
+        return round(td.total_seconds(), 3) if pd.notna(td) else None
+
+    def _gap(a, b) -> float | None:
+        """Positive = a is slower than b."""
+        return round(a - b, 3) if a is not None and b is not None else None
+
+    def _spd(lap, key) -> float | None:
+        v = lap.get(key)
+        return round(float(v), 1) if v is not None and pd.notna(v) else None
+
+    s1a, s1b = _s(lap_a['Sector1Time']), _s(lap_b['Sector1Time'])
+    s2a, s2b = _s(lap_a['Sector2Time']), _s(lap_b['Sector2Time'])
+    s3a, s3b = _s(lap_a['Sector3Time']), _s(lap_b['Sector3Time'])
+
+    return {
+        "event": session.event['EventName'],
+        "session": session_type.upper(),
+        "driver_a": driver_a.upper(),
+        "driver_b": driver_b.upper(),
+        "lap_time_a": _fmt_td(lap_a['LapTime']),
+        "lap_time_b": _fmt_td(lap_b['LapTime']),
+        "overall_gap_s": _gap(_s(lap_a['LapTime']), _s(lap_b['LapTime'])),
+        "compound_a": str(lap_a['Compound']) if pd.notna(lap_a.get('Compound')) else None,
+        "compound_b": str(lap_b['Compound']) if pd.notna(lap_b.get('Compound')) else None,
+        "tyre_life_a": int(lap_a['TyreLife']) if pd.notna(lap_a.get('TyreLife')) else None,
+        "tyre_life_b": int(lap_b['TyreLife']) if pd.notna(lap_b.get('TyreLife')) else None,
+        "sector1": {
+            "time_a": _fmt_td(lap_a['Sector1Time']),
+            "time_b": _fmt_td(lap_b['Sector1Time']),
+            "gap_s": _gap(s1a, s1b),
+            "speed_i1_a": _spd(lap_a, 'SpeedI1'),
+            "speed_i1_b": _spd(lap_b, 'SpeedI1'),
+            "speed_i1_delta": _gap(_spd(lap_a, 'SpeedI1'), _spd(lap_b, 'SpeedI1')),
+        },
+        "sector2": {
+            "time_a": _fmt_td(lap_a['Sector2Time']),
+            "time_b": _fmt_td(lap_b['Sector2Time']),
+            "gap_s": _gap(s2a, s2b),
+            "speed_i2_a": _spd(lap_a, 'SpeedI2'),
+            "speed_i2_b": _spd(lap_b, 'SpeedI2'),
+            "speed_i2_delta": _gap(_spd(lap_a, 'SpeedI2'), _spd(lap_b, 'SpeedI2')),
+        },
+        "sector3": {
+            "time_a": _fmt_td(lap_a['Sector3Time']),
+            "time_b": _fmt_td(lap_b['Sector3Time']),
+            "gap_s": _gap(s3a, s3b),
+            "speed_fl_a": _spd(lap_a, 'SpeedFL'),
+            "speed_fl_b": _spd(lap_b, 'SpeedFL'),
+            "speed_fl_delta": _gap(_spd(lap_a, 'SpeedFL'), _spd(lap_b, 'SpeedFL')),
+        },
+        "speed_trap_a": _spd(lap_a, 'SpeedST'),
+        "speed_trap_b": _spd(lap_b, 'SpeedST'),
+        "speed_trap_delta": _gap(_spd(lap_a, 'SpeedST'), _spd(lap_b, 'SpeedST')),
+    }
+
+
+def get_lap_telemetry(round_number: int, session_type: str,
+                      driver_code: str, lap_number: int | None = None) -> dict:
+    """
+    Full telemetry trace for a driver's lap (defaults to their fastest lap).
+    Returns speed/throttle/brake/gear/DRS sampled every 100m along the circuit.
+    This is the deepest data level — use it to explain corner-specific pace differences.
+    Requires session.load(telemetry=True); first load is slow, subsequent are cached.
+    """
+    session = fastf1.get_session(CURRENT_YEAR, round_number, session_type)
+    session.load(laps=True, telemetry=True, weather=False, messages=False)
+
+    driver_laps = session.laps.pick_driver(driver_code.upper())
+    if driver_laps.empty:
+        raise ValueError(f"No data for driver {driver_code!r}")
+
+    if lap_number is not None:
+        matching = driver_laps[driver_laps['LapNumber'] == lap_number]
+        if matching.empty:
+            raise ValueError(f"Lap {lap_number} not found for {driver_code!r}")
+        lap = matching.iloc[0]
+    else:
+        lap = driver_laps.pick_fastest()
+
+    tel = lap.get_telemetry().add_distance()
+    total_dist = float(tel['Distance'].max())
+
+    INTERVAL_M = 100
+    samples = []
+    dist = 0.0
+    while dist <= total_dist:
+        idx = (tel['Distance'] - dist).abs().idxmin()
+        row = tel.loc[idx]
+        samples.append({
+            "distance_m": int(dist),
+            "speed_kph": round(float(row['Speed']), 1),
+            "throttle_pct": round(float(row['Throttle']), 1),
+            "brake": bool(row['Brake']),
+            "gear": int(row['nGear']) if pd.notna(row['nGear']) else None,
+            "drs_open": int(row['DRS']) >= 10 if pd.notna(row['DRS']) else False,
+        })
+        dist += INTERVAL_M
+
+    return {
+        "driver": driver_code.upper(),
+        "event": session.event['EventName'],
+        "session": session_type.upper(),
+        "lap_number": int(lap['LapNumber']),
+        "lap_time": _fmt_td(lap['LapTime']),
+        "sector1": _fmt_td(lap['Sector1Time']),
+        "sector2": _fmt_td(lap['Sector2Time']),
+        "sector3": _fmt_td(lap['Sector3Time']),
+        "compound": str(lap['Compound']) if pd.notna(lap.get('Compound')) else None,
+        "tyre_life": int(lap['TyreLife']) if pd.notna(lap.get('TyreLife')) else None,
+        "max_speed_kph": round(float(tel['Speed'].max()), 1),
+        "min_speed_kph": round(float(tel['Speed'].min()), 1),
+        "circuit_length_m": int(total_dist),
+        "telemetry": samples,
     }
