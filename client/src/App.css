@@ -477,3 +477,203 @@
   letter-spacing: -0.01em;
 }
 .hint-secondary { font-size: 0.85rem; color: var(--text-muted); }
+
+/* ─── ChatView ────────────────────────────────────────────── */
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 700px;
+}
+
+/* Intro state with avatar + suggestions */
+.chat-intro {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 2rem 0 0.5rem;
+}
+
+.chat-avatar-lg {
+  width: 54px;
+  height: 54px;
+  background: var(--text-primary);
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 1.1rem;
+  color: #fff;
+  letter-spacing: -0.01em;
+}
+.chat-avatar-lg span { color: var(--accent); }
+
+.chat-intro-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.suggestion-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+  margin-top: 0.25rem;
+}
+
+.suggestion-chip {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.42rem 0.9rem;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.suggestion-chip:hover {
+  border-color: var(--text-primary);
+  color: var(--text-primary);
+}
+
+/* Messages */
+.chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  max-height: 55vh;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+  scroll-padding-bottom: 1rem;
+}
+
+.bubble-row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-end;
+}
+.bubble-row.user { flex-direction: row-reverse; }
+
+/* Small F1 avatar beside assistant bubbles */
+.chat-avatar {
+  width: 28px;
+  height: 28px;
+  background: var(--text-primary);
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 0.6rem;
+  color: #fff;
+  flex-shrink: 0;
+  letter-spacing: -0.01em;
+}
+.chat-avatar span { color: var(--accent); }
+
+.chat-bubble {
+  max-width: 80%;
+  padding: 0.75rem 1rem;
+  border-radius: 14px;
+  font-size: 0.9rem;
+  line-height: 1.62;
+  white-space: pre-wrap;
+}
+
+.chat-bubble.assistant {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
+  color: var(--text-primary);
+}
+
+.chat-bubble.user {
+  background: var(--text-primary);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.chat-bubble.error {
+  background: #FFF4F4;
+  border-color: rgba(225, 6, 0, 0.2);
+  color: var(--accent);
+}
+
+/* Typing indicator */
+.typing {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0.875rem 1rem;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: blink 1.2s ease-in-out infinite;
+}
+.dot:nth-child(2) { animation-delay: 0.2s; }
+.dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes blink {
+  0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+  40%           { opacity: 1;   transform: scale(1); }
+}
+
+/* Input bar */
+.chat-input-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.45rem 0.45rem 0.45rem 1rem;
+  transition: border-color 0.18s, box-shadow 0.18s;
+}
+.chat-input-row:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.chat-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 0.92rem;
+  padding: 0.3rem 0;
+}
+.chat-input::placeholder { color: var(--text-muted); }
+.chat-input:disabled { opacity: 0.6; }
+
+.send-btn {
+  background: var(--text-primary);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.16s, transform 0.1s;
+}
+.send-btn:hover:not(:disabled) { background: #2a2a2a; }
+.send-btn:active:not(:disabled) { transform: scale(0.93); }
+.send-btn:disabled { opacity: 0.28; cursor: default; }
