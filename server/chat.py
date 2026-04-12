@@ -8,7 +8,13 @@ _client: anthropic.Anthropic | None = None
 def _get_client() -> anthropic.Anthropic:
     global _client
     if _client is None:
-        _client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise EnvironmentError(
+                "ANTHROPIC_API_KEY environment variable is not set. "
+                "Add it to your .env file."
+            )
+        _client = anthropic.Anthropic(api_key=api_key)
     return _client
 
 
@@ -29,4 +35,6 @@ Answer concisely and directly. Use specific numbers from the data where availabl
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
+    if not response.content:
+        raise ValueError(f"Claude returned no content (stop_reason={response.stop_reason!r})")
     return response.content[0].text
