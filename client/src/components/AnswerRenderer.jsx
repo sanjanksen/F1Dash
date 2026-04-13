@@ -150,15 +150,15 @@ export default function AnswerRenderer({ text, widgets = [] }) {
 
   return (
     <div className="max-w-3xl space-y-3.5">
-      {widgets.map((widget, index) => (
-        <WidgetRenderer key={`${widget.type}-${index}`} widget={widget} />
-      ))}
-
       {hasLead ? (
         <div className="text-[15px] leading-7 text-foreground">
           {renderInline(first.text)}
         </div>
       ) : null}
+
+      {widgets.map((widget, index) => (
+        <WidgetRenderer key={`${widget.type}-${index}`} widget={widget} />
+      ))}
 
       {bodyBlocks.map((block, index) => {
         if (block.type === 'paragraph') {
