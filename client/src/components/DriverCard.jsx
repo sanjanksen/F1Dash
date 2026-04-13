@@ -28,6 +28,39 @@ function useCountUp(value, duration = 700) {
   return ref
 }
 
+const NATIONALITY_ISO3 = {
+  'British': 'GBR',
+  'Dutch': 'NLD',
+  'Spanish': 'ESP',
+  'Monegasque': 'MCO',
+  'Australian': 'AUS',
+  'Mexican': 'MEX',
+  'Finnish': 'FIN',
+  'French': 'FRA',
+  'German': 'DEU',
+  'Canadian': 'CAN',
+  'Thai': 'THA',
+  'Japanese': 'JPN',
+  'Chinese': 'CHN',
+  'Italian': 'ITA',
+  'Danish': 'DNK',
+  'American': 'USA',
+  'New Zealander': 'NZL',
+  'Austrian': 'AUT',
+  'Argentinian': 'ARG',
+  'Brazilian': 'BRA',
+  'Belgian': 'BEL',
+  'Swiss': 'CHE',
+  'South African': 'ZAF',
+  'Venezuelan': 'VEN',
+  'Colombian': 'COL',
+  'Czech': 'CZE',
+  'Hungarian': 'HUN',
+  'Polish': 'POL',
+  'Indonesian': 'IDN',
+  'Uruguayan': 'URY',
+}
+
 const podiumTone = {
   1: 'text-foreground',
   2: 'text-zinc-300',
@@ -95,7 +128,7 @@ export default function DriverCard({ stats }) {
               </div>
               <div className="rounded-lg border border-border bg-background px-4 py-4">
                 <div className="text-3xl font-semibold tracking-[-0.04em] text-foreground">
-                  {stats.nationality?.slice(0, 3).toUpperCase() || '---'}
+                  {(stats.nationality && NATIONALITY_ISO3[stats.nationality]) || stats.nationality?.slice(0, 3).toUpperCase() || '---'}
                 </div>
                 <div className="mt-1 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                   Origin
