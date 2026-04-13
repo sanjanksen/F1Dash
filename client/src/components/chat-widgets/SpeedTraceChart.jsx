@@ -63,7 +63,9 @@ export default function SpeedTraceChart({ points, driverA, driverB, decisiveDist
             {driverA}
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-primary/80" />
+            <svg width="16" height="8" className="shrink-0">
+              <line x1="0" y1="4" x2="16" y2="4" stroke="currentColor" strokeWidth="2" strokeDasharray="4 2" className="text-primary/80" />
+            </svg>
             {driverB}
           </span>
         </div>
@@ -101,7 +103,7 @@ export default function SpeedTraceChart({ points, driverA, driverB, decisiveDist
             ) : null}
 
             <path d={pathA} fill="none" stroke="currentColor" strokeWidth="2.5" className="text-foreground" />
-            <path d={pathB} fill="none" stroke="currentColor" strokeWidth="2.2" className="text-primary/85" />
+            <path d={pathB} fill="none" stroke="currentColor" strokeWidth="2.2" className="text-primary/85" strokeDasharray="6 3" />
 
             {activePoint ? (
               <>
