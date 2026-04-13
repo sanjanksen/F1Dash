@@ -251,10 +251,6 @@ def _infer_clipping_windows(samples: list[dict], speed_key: str = "speed_kph") -
                 "late_straight_drop_kph": round(end_speed - mid_speed, 1) if mid_speed is not None else None,
             })
     return windows
-    try:
-        return round(float(value), 3)
-    except (TypeError, ValueError):
-        return None
 
 
 def _safe_timedelta_seconds(value):
