@@ -340,6 +340,14 @@ def _pick_fastest_lap(driver_laps):
     raise ValueError("No valid lap time found")
 
 
+def _pick_driver(laps, code: str):
+    """Call pick_drivers([code]) (FastF1 3.8+) or fall back to pick_driver(code)."""
+    pick = getattr(laps, 'pick_drivers', None)
+    if callable(pick):
+        return pick([str(code)])
+    return laps.pick_driver(str(code))
+
+
 def _fetch_all_races(driver_id: str) -> list[dict]:
     """Fetch all 2025 race results for a driver. Used by get_driver_stats and get_head_to_head."""
     resp = requests.get(
@@ -647,7 +655,7 @@ def get_session_fastest_laps(round_number: int, session_type: str) -> list[dict]
 
     results = []
     for driver_code in session.drivers:
-        driver_laps = session.laps.pick_driver(driver_code)
+        driver_laps = _pick_driver(session.laps, driver_code)
         if driver_laps.empty:
             continue
         fastest = _pick_fastest_lap(driver_laps)
@@ -691,7 +699,7 @@ def get_driver_lap_times(round_number: int, session_type: str, driver_code: str)
         messages=_session_needs_race_control_messages(session_type),
     )
 
-    driver_laps = session.laps.pick_driver(driver_code.upper())
+    driver_laps = _pick_driver(session.laps, driver_code.upper())
     if driver_laps.empty:
         raise ValueError(f"No data for driver {driver_code!r} in round {round_number} {session_type}")
 
@@ -730,7 +738,7 @@ def get_driver_strategy(round_number: int, session_type: str, driver_code: str |
     driver_info = _driver_lookup(session)
 
     def _summarize_driver(code: str) -> dict:
-        driver_laps = session.laps.pick_driver(code.upper())
+        driver_laps = _pick_driver(session.laps, code.upper())
         if driver_laps.empty:
             raise ValueError(f"No data for driver {code!r} in round {round_number} {session_type}")
 
@@ -1359,11 +1367,8 @@ def get_qualifying_progression(round_number: int) -> dict:
         segment_name = session_names[index]
         if laps is None:
             continue
-        drivers = getattr(laps, 'pick_driver', None)
-        if not callable(drivers):
-            continue
         for code in session.drivers:
-            driver_laps = laps.pick_driver(code)
+            driver_laps = _pick_driver(laps, code)
             if getattr(driver_laps, "empty", True):
                 continue
             fastest = _pick_fastest_lap(driver_laps)
@@ -1430,7 +1435,7 @@ def get_clean_pace_summary(round_number: int, session_type: str,
     summaries = []
 
     for code in drivers:
-        laps = session.laps.pick_driver(code)
+        laps = _pick_driver(session.laps, code)
         if getattr(laps, "empty", True):
             continue
 
@@ -1513,7 +1518,7 @@ def get_sector_comparison(round_number: int, session_type: str,
     )
 
     def _fastest(code: str):
-        laps = session.laps.pick_driver(code.upper())
+        laps = _pick_driver(session.laps, code.upper())
         if laps.empty:
             raise ValueError(f"No session data for driver {code!r}")
         fastest = _pick_fastest_lap(laps)
@@ -1598,7 +1603,7 @@ def get_lap_telemetry(round_number: int, session_type: str,
         messages=_session_needs_race_control_messages(session_type),
     )
 
-    driver_laps = session.laps.pick_driver(driver_code.upper())
+    driver_laps = _pick_driver(session.laps, driver_code.upper())
     if driver_laps.empty:
         raise ValueError(f"No data for driver {driver_code!r}")
 
@@ -1670,7 +1675,7 @@ def get_telemetry_comparison(round_number: int, session_type: str,
     )
 
     def _get_lap(code: str, lap_num: int | None):
-        laps = session.laps.pick_driver(code.upper())
+        laps = _pick_driver(session.laps, code.upper())
         if laps.empty:
             raise ValueError(f"No data for driver {code!r}")
         if lap_num is not None:
@@ -1916,7 +1921,7 @@ def _get_comparable_qualifying_laps(round_number: int, driver_codes: list[str]):
     segments = [("Q3", split[2]), ("Q2", split[1]), ("Q1", split[0])]
 
     def _fastest_valid_lap(segment_laps, code: str):
-        driver_laps = segment_laps.pick_driver(code.upper())
+        driver_laps = _pick_driver(segment_laps, code.upper())
         if driver_laps.empty:
             return None
         fastest = _pick_fastest_lap(driver_laps)
@@ -2499,7 +2504,7 @@ def get_safety_car_periods(round_number: int, session_type: str) -> dict:
         LOOK_BACK_S = 90
 
         for driver_code in laps['Driver'].unique():
-            for _, lap in laps.pick_driver(str(driver_code)).iterrows():
+            for _, lap in _pick_driver(laps, str(driver_code)).iterrows():
                 pit_in = lap.get('PitInTime')
                 if pit_in is None or pd.isna(pit_in):
                     continue
@@ -2585,7 +2590,7 @@ def get_track_position_comparison(round_number: int, session_type: str,
     session = _load_session(round_number, session_type, laps=True, telemetry=True, weather=False, messages=False)
 
     def _get_driver_lap(code: str, lap_num: int | None):
-        laps = session.laps.pick_driver(code.upper())
+        laps = _pick_driver(session.laps, code.upper())
         if laps.empty:
             raise ValueError(f"No data for driver {code!r}")
         if lap_num is not None:

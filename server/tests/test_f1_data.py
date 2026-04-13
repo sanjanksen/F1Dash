@@ -504,7 +504,8 @@ def _make_mock_session(fastest_laps_by_driver: dict, event_name="Monaco Grand Pr
     mock_session.event = {'EventName': event_name}
     mock_session.drivers = list(fastest_laps_by_driver.keys())
 
-    def pick_driver(code):
+    def pick_drivers(codes):
+        code = codes[0] if isinstance(codes, list) else codes
         if code not in fastest_laps_by_driver:
             mock_laps = MagicMock()
             mock_laps.empty = True
@@ -519,7 +520,7 @@ def _make_mock_session(fastest_laps_by_driver: dict, event_name="Monaco Grand Pr
         mock_laps.iterrows.return_value = iter(lap_df.iterrows())
         return mock_laps
 
-    mock_session.laps.pick_driver.side_effect = pick_driver
+    mock_session.laps.pick_drivers.side_effect = pick_drivers
     return mock_session
 
 
@@ -634,13 +635,13 @@ def test_get_lap_telemetry():
     mock_lap_obj.get.side_effect = lambda k, d=None: nor_lap.get(k, d)
     mock_lap_obj.get_telemetry.return_value.add_distance.return_value = mock_tel
 
-    def pick_driver_tel(code):
+    def pick_driver_tel(codes):
         mock_laps = MagicMock()
         mock_laps.empty = False
         mock_laps.pick_fastest.return_value = mock_lap_obj
         return mock_laps
 
-    mock_session.laps.pick_driver.side_effect = pick_driver_tel
+    mock_session.laps.pick_drivers.side_effect = pick_driver_tel
 
     with patch('f1_data.fastf1.get_session', return_value=mock_session):
         import f1_data
@@ -693,7 +694,8 @@ def test_get_telemetry_comparison():
     mock_lap_lec.get.side_effect = lambda k, d=None: lec_lap_series.get(k, d)
     mock_lap_lec.get_telemetry.return_value.add_distance.return_value = tel_lec
 
-    def pick_driver_tel(code):
+    def pick_driver_tel(codes):
+        code = codes[0] if isinstance(codes, list) else codes
         mock_laps = MagicMock()
         mock_laps.empty = False
         mock_laps.pick_fastest.return_value = mock_lap_nor if code.upper() == "NOR" else mock_lap_lec
@@ -701,7 +703,7 @@ def test_get_telemetry_comparison():
 
     mock_session = MagicMock()
     mock_session.event = {'EventName': 'Monaco Grand Prix'}
-    mock_session.laps.pick_driver.side_effect = pick_driver_tel
+    mock_session.laps.pick_drivers.side_effect = pick_driver_tel
 
     with patch('f1_data.fastf1.get_session', return_value=mock_session):
         import f1_data
@@ -722,12 +724,12 @@ def test_get_telemetry_comparison_driver_not_found():
     mock_session = MagicMock()
     mock_session.event = {'EventName': 'Monaco Grand Prix'}
 
-    def pick_empty(code):
+    def pick_empty(codes):
         m = MagicMock()
         m.empty = True
         return m
 
-    mock_session.laps.pick_driver.side_effect = pick_empty
+    mock_session.laps.pick_drivers.side_effect = pick_empty
 
     with patch('f1_data.fastf1.get_session', return_value=mock_session):
         import f1_data
@@ -776,14 +778,15 @@ def test_analyze_qualifying_battle_derives_causal_summary():
     q1 = MagicMock()
     q2 = MagicMock()
     q3 = MagicMock()
-    q1.pick_driver.side_effect = lambda code: MagicMock(empty=True)
-    q2.pick_driver.side_effect = lambda code: MagicMock(empty=True)
-    def pick_driver_q3(code):
+    q1.pick_drivers.side_effect = lambda codes: MagicMock(empty=True)
+    q2.pick_drivers.side_effect = lambda codes: MagicMock(empty=True)
+    def pick_driver_q3(codes):
+        code = codes[0] if isinstance(codes, list) else codes
         mock_laps = MagicMock()
         mock_laps.empty = False
         mock_laps.pick_fastest.return_value = lec_lap if code.upper() == "LEC" else nor_lap
         return mock_laps
-    q3.pick_driver.side_effect = pick_driver_q3
+    q3.pick_drivers.side_effect = pick_driver_q3
     mock_session.laps.split_qualifying_sessions.return_value = [q1, q2, q3]
 
     with patch('f1_data._load_session', return_value=mock_session), \
@@ -811,14 +814,15 @@ def test_analyze_qualifying_battle_gracefully_handles_missing_telemetry():
     q1 = MagicMock()
     q2 = MagicMock()
     q3 = MagicMock()
-    q1.pick_driver.side_effect = lambda code: MagicMock(empty=True)
-    q2.pick_driver.side_effect = lambda code: MagicMock(empty=True)
-    def pick_driver_q3(code):
+    q1.pick_drivers.side_effect = lambda codes: MagicMock(empty=True)
+    q2.pick_drivers.side_effect = lambda codes: MagicMock(empty=True)
+    def pick_driver_q3(codes):
+        code = codes[0] if isinstance(codes, list) else codes
         mock_laps = MagicMock()
         mock_laps.empty = False
         mock_laps.pick_fastest.return_value = lec_lap if code.upper() == "LEC" else nor_lap
         return mock_laps
-    q3.pick_driver.side_effect = pick_driver_q3
+    q3.pick_drivers.side_effect = pick_driver_q3
     mock_session.laps.split_qualifying_sessions.return_value = [q1, q2, q3]
 
     with patch('f1_data._load_session', return_value=mock_session), \
@@ -969,7 +973,7 @@ def test_get_driver_strategy_single_driver():
     mock_session = MagicMock()
     mock_session.event = {'EventName': 'Bahrain Grand Prix'}
     mock_session.results = pd.DataFrame([{"Abbreviation": "NOR", "FullName": "Lando Norris", "TeamName": "McLaren", "GridPosition": 4, "Position": 2}])
-    mock_session.laps.pick_driver.side_effect = lambda code: lap_df if code == 'NOR' else pd.DataFrame()
+    mock_session.laps.pick_drivers.side_effect = lambda codes: lap_df if (codes[0] if isinstance(codes, list) else codes) == 'NOR' else pd.DataFrame()
 
     with patch('f1_data.fastf1.get_session', return_value=mock_session):
         result = f1_data.get_driver_strategy(1, 'R', 'NOR')
@@ -990,9 +994,9 @@ def test_get_qualifying_progression():
     q1_laps = MagicMock()
     q2_laps = MagicMock()
     q3_laps = MagicMock()
-    q1_laps.pick_driver.side_effect = lambda code: _lap_pickable(_make_mock_fastest_lap(code, lap_time_s=90.0))
-    q2_laps.pick_driver.side_effect = lambda code: _lap_pickable(_make_mock_fastest_lap(code, lap_time_s=89.5))
-    q3_laps.pick_driver.side_effect = lambda code: _lap_pickable(_make_mock_fastest_lap(code, lap_time_s=89.0))
+    q1_laps.pick_drivers.side_effect = lambda codes: _lap_pickable(_make_mock_fastest_lap(codes[0] if isinstance(codes, list) else codes, lap_time_s=90.0))
+    q2_laps.pick_drivers.side_effect = lambda codes: _lap_pickable(_make_mock_fastest_lap(codes[0] if isinstance(codes, list) else codes, lap_time_s=89.5))
+    q3_laps.pick_drivers.side_effect = lambda codes: _lap_pickable(_make_mock_fastest_lap(codes[0] if isinstance(codes, list) else codes, lap_time_s=89.0))
 
     mock_session = MagicMock()
     mock_session.event = {'EventName': 'Monaco Grand Prix'}
@@ -1038,7 +1042,7 @@ def test_get_clean_pace_summary():
     mock_session.event = {'EventName': 'Monaco Grand Prix'}
     mock_session.drivers = ['NOR']
     mock_session.results = pd.DataFrame([{"Abbreviation": "NOR", "FullName": "Lando Norris", "TeamName": "McLaren"}])
-    mock_session.laps.pick_driver.side_effect = lambda code: laps if code == 'NOR' else PaceFrame()
+    mock_session.laps.pick_drivers.side_effect = lambda codes: laps if (codes[0] if isinstance(codes, list) else codes) == 'NOR' else PaceFrame()
 
     with patch('f1_data.fastf1.get_session', return_value=mock_session):
         result = f1_data.get_clean_pace_summary(8, 'Q', ['NOR'])
@@ -1090,7 +1094,8 @@ def test_get_track_position_comparison():
     lap_a = MockLap(12, pos_a, car_a)
     lap_b = MockLap(13, pos_b, car_b)
 
-    def pick_driver(code):
+    def pick_driver(codes):
+        code = codes[0] if isinstance(codes, list) else codes
         mock = MagicMock()
         mock.empty = False
         mock.pick_fastest.return_value = lap_a if code == 'NOR' else lap_b
@@ -1098,7 +1103,7 @@ def test_get_track_position_comparison():
 
     mock_session = MagicMock()
     mock_session.event = {'EventName': 'Monaco Grand Prix'}
-    mock_session.laps.pick_driver.side_effect = pick_driver
+    mock_session.laps.pick_drivers.side_effect = pick_driver
     mock_session.get_circuit_info.return_value.rotation = 90.0
 
     with patch('f1_data.fastf1.get_session', return_value=mock_session):
@@ -1303,3 +1308,30 @@ def test_get_race_report():
     assert result["fastest_lap"]["driver"] == "Lando Norris"
     assert result["biggest_gainer"]["driver"] == "Lando Norris"
     assert result["dnfs"][0]["driver"] == "George Russell"
+
+
+def test_pick_driver_uses_pick_drivers_when_available():
+    """3.8+ path: delegates to pick_drivers([code])."""
+    mock_laps = MagicMock()
+    mock_result = MagicMock()
+    mock_laps.pick_drivers.return_value = mock_result
+    result = f1_data._pick_driver(mock_laps, 'VER')
+    mock_laps.pick_drivers.assert_called_once_with(['VER'])
+    assert result is mock_result
+
+
+def test_pick_driver_falls_back_to_pick_driver():
+    """Pre-3.8 fallback: calls pick_driver(code) when pick_drivers absent."""
+    mock_laps = MagicMock(spec=['pick_driver'])
+    mock_result = MagicMock()
+    mock_laps.pick_driver.return_value = mock_result
+    result = f1_data._pick_driver(mock_laps, 'NOR')
+    mock_laps.pick_driver.assert_called_once_with('NOR')
+    assert result is mock_result
+
+
+def test_pick_driver_coerces_code_to_string():
+    """Code arg is always stringified before passing through."""
+    mock_laps = MagicMock()
+    f1_data._pick_driver(mock_laps, 44)  # int driver number
+    mock_laps.pick_drivers.assert_called_once_with(['44'])
