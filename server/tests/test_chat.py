@@ -292,6 +292,60 @@ def test_build_analysis_plan_uses_qualifying_battle_tool_for_qualifying_comparis
     assert tool_names.count("get_team_radio") == 2
 
 
+def test_build_analysis_plan_uses_requested_session_for_race_pace_comparison():
+    import chat
+
+    resolved = {
+        "analysis_mode": "race_pace_comparison",
+        "analysis_focus": "race",
+        "round_number": 3,
+        "entity_names": ["Max Verstappen", "Lando Norris"],
+        "entity_codes": ["VER", "NOR"],
+        "session_type": "S",
+    }
+
+    plan = chat._build_analysis_plan("Why did Verstappen pull away from Norris in the sprint?", resolved)
+
+    assert plan["tool_calls"][0][0] == "analyze_race_pace_battle"
+    assert plan["tool_calls"][0][1]["session_type"] == "S"
+    assert plan["tool_calls"][1][1]["session_type"] == "S"
+    assert plan["tool_calls"][2][1]["session_type"] == "S"
+
+
+def test_widgets_from_preloaded_supports_race_pace_battle():
+    import chat
+
+    widgets = chat._widgets_from_preloaded({
+        "tool": "analyze_race_pace_battle",
+        "result": {
+            "driver_a": "VER",
+            "driver_b": "NOR",
+            "event": "Japanese Grand Prix",
+            "session": "R",
+        },
+    })
+
+    assert widgets[0]["type"] == "race_pace_battle"
+    assert widgets[0]["title"] == "VER vs NOR"
+
+
+def test_widgets_from_preloaded_supports_corner_comparison():
+    import chat
+
+    widgets = chat._widgets_from_preloaded({
+        "tool": "compare_corner_profiles",
+        "result": {
+            "driver_a": "LEC",
+            "driver_b": "NOR",
+            "event": "Japanese Grand Prix",
+            "session": "Q",
+        },
+    })
+
+    assert widgets[0]["type"] == "corner_comparison"
+    assert widgets[0]["title"] == "LEC vs NOR"
+
+
 def test_try_deterministic_analysis_falls_back_on_analysis_failure():
     import chat
 

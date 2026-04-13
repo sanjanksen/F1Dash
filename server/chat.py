@@ -9,8 +9,12 @@ import json
 import os
 import logging
 import re
+from typing import Any
 import anthropic
-import openai as openai_sdk
+try:
+    import openai as openai_sdk
+except ImportError:
+    openai_sdk = None
 from tools import TOOL_DEFINITIONS, OPENAI_TOOL_DEFINITIONS, execute_tool
 from resolver import resolve_query_context, resolve_context_from_history
 
@@ -68,6 +72,44 @@ def _make_race_story_widget(result: dict) -> dict:
     }
 
 
+def _make_race_pace_battle_widget(result: dict) -> dict:
+    return {
+        "type": "race_pace_battle",
+        "title": f"{result.get('driver_a')} vs {result.get('driver_b')}",
+        "event": result.get("event"),
+        "session": result.get("session"),
+        "driver_a": result.get("driver_a"),
+        "driver_b": result.get("driver_b"),
+        "fuel_corrected_pace_a_s": result.get("fuel_corrected_pace_a_s"),
+        "fuel_corrected_pace_b_s": result.get("fuel_corrected_pace_b_s"),
+        "overall_pace_delta_s": result.get("overall_pace_delta_s"),
+        "avg_deg_rate_a_s_per_lap": result.get("avg_deg_rate_a_s_per_lap"),
+        "avg_deg_rate_b_s_per_lap": result.get("avg_deg_rate_b_s_per_lap"),
+        "deg_rate_delta": result.get("deg_rate_delta"),
+        "decisive_factor": result.get("decisive_factor"),
+        "aligned_stints": result.get("aligned_stints") or [],
+        "undercut_opportunity": result.get("undercut_opportunity"),
+    }
+
+
+def _make_corner_comparison_widget(result: dict) -> dict:
+    return {
+        "type": "corner_comparison",
+        "title": f"{result.get('driver_a')} vs {result.get('driver_b')}",
+        "event": result.get("event"),
+        "session": result.get("session"),
+        "driver_a": result.get("driver_a"),
+        "driver_b": result.get("driver_b"),
+        "faster_driver": result.get("faster_driver"),
+        "overall_gap_s": result.get("overall_gap_s"),
+        "setup_direction_inference": result.get("setup_direction_inference"),
+        "gain_location_summary": result.get("gain_location_summary") or [],
+        "cause_breakdown": result.get("cause_breakdown") or {},
+        "avg_straight_speed_a_kph": result.get("avg_straight_speed_a_kph"),
+        "avg_straight_speed_b_kph": result.get("avg_straight_speed_b_kph"),
+    }
+
+
 def _widgets_from_preloaded(preloaded: dict | None) -> list[dict]:
     if not preloaded or "result" not in preloaded:
         return []
@@ -77,6 +119,10 @@ def _widgets_from_preloaded(preloaded: dict | None) -> list[dict]:
         return [_make_race_story_widget(result)]
     if tool == "analyze_qualifying_battle":
         return [_make_qualifying_battle_widget(result)]
+    if tool == "analyze_race_pace_battle":
+        return [_make_race_pace_battle_widget(result)]
+    if tool == "compare_corner_profiles":
+        return [_make_corner_comparison_widget(result)]
     return []
 
 
@@ -85,21 +131,25 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
     for item in evidence:
         if "result" not in item:
             continue
-        if item.get("tool") == "analyze_qualifying_battle":
+        tool = item.get("tool")
+        if tool == "analyze_qualifying_battle":
             widgets.append(_make_qualifying_battle_widget(item["result"]))
-        elif item.get("tool") == "get_driver_race_story":
+        elif tool == "get_driver_race_story":
             widgets.append(_make_race_story_widget(item["result"]))
-    if plan.get("focus") == "race":
-        deduped = []
-        seen = set()
-        for widget in widgets:
-            key = (widget.get("type"), widget.get("title"), widget.get("subtitle"))
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(widget)
-        return deduped
-    return widgets
+        elif tool == "analyze_race_pace_battle":
+            widgets.append(_make_race_pace_battle_widget(item["result"]))
+        elif tool == "compare_corner_profiles":
+            widgets.append(_make_corner_comparison_widget(item["result"]))
+
+    deduped = []
+    seen: set = set()
+    for widget in widgets:
+        key = (widget.get("type"), widget.get("title"), widget.get("subtitle"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(widget)
+    return deduped
 
 SYSTEM_PROMPT = f"""You are an expert Formula 1 analyst with access to real-time {CURRENT_YEAR} season data through tools.
 
@@ -129,6 +179,11 @@ Guidelines:
 - For causal qualifying battle questions like "why was Leclerc faster than Norris in quali?" use analyze_qualifying_battle
 - For lap-by-lap pace: use get_driver_lap_times
 - For corner-level analysis (braking points, gear shifts, throttle application): use get_lap_telemetry or get_telemetry_comparison. These include gear, RPM, throttle, and brake at every 100m — use them to make specific claims like "Norris was still in 4th gear at 1400m while Leclerc had already dropped to 3rd, braking 20m earlier"
+- For structured corner profiles (entry/apex/exit speeds, braking point, gear at apex, traction point, straight acceleration, DRS, clipping) for a single driver: use extract_corner_profiles
+- For comparing two drivers corner-by-corner (where the faster driver gains, cause classification, setup direction, avg straight speeds): use compare_corner_profiles
+- For a team's setup direction or which teammate is stronger through the corners: use analyze_team_performance
+- For tyre degradation rate, stint deg model, or how a driver's pace degraded per lap on a compound: use analyze_stint_degradation
+- For race pace comparison between two drivers (fuel-corrected pace delta, degradation rates, undercut analysis, decisive factor): use analyze_race_pace_battle. Prefer this over manual lap time inspection for 'why did X pull away from Y in the race?' questions
 - For 2026-style energy questions like lift-and-coast, clipping, super-clipping, deployment taper, or energy recovery behavior: use analyze_energy_management
 - For racing-line or on-track position comparisons, track maps, or where a gain happened physically on the lap: use get_track_position_comparison
 - For team radio or in-car context, use get_team_radio
@@ -261,10 +316,62 @@ def _extract_json_object(text: str) -> dict:
 
 
 def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
-    if resolved.get("analysis_mode") != "driver_comparison":
+    analysis_mode = resolved.get("analysis_mode")
+    round_number = resolved.get("round_number")
+
+    # ── team_performance mode ────────────────────────────────────────────────
+    if analysis_mode == "team_performance":
+        team = resolved.get("entity_name")
+        if round_number is None or not team:
+            return None
+        session_type = resolved.get("session_type") or "Q"
+        return {
+            "analysis_mode": "team_performance",
+            "focus": "team",
+            "question": message,
+            "round_number": round_number,
+            "team": team,
+            "tool_calls": [
+                ("analyze_team_performance", {
+                    "round_number": round_number,
+                    "team_name": team,
+                    "session_type": session_type,
+                }),
+            ],
+        }
+
+    # ── race_pace_comparison mode ────────────────────────────────────────────
+    if analysis_mode == "race_pace_comparison":
+        codes = resolved.get("entity_codes") or []
+        names = resolved.get("entity_names") or []
+        if round_number is None or len(codes) < 2 or len(names) < 2:
+            return None
+        session_type = resolved.get("session_type") or "R"
+        return {
+            "analysis_mode": "race_pace_comparison",
+            "focus": "race",
+            "question": message,
+            "round_number": round_number,
+            "drivers": [
+                {"name": names[0], "code": codes[0]},
+                {"name": names[1], "code": codes[1]},
+            ],
+            "tool_calls": [
+                ("analyze_race_pace_battle", {
+                    "round_number": round_number,
+                    "driver_a": codes[0],
+                    "driver_b": codes[1],
+                    "session_type": session_type,
+                }),
+                ("get_safety_car_periods", {"round_number": round_number, "session_type": session_type}),
+                ("get_driver_strategy", {"round_number": round_number, "session_type": session_type}),
+            ],
+        }
+
+    # ── driver_comparison mode ───────────────────────────────────────────────
+    if analysis_mode != "driver_comparison":
         return None
 
-    round_number = resolved.get("round_number")
     codes = resolved.get("entity_codes") or []
     names = resolved.get("entity_names") or []
     if round_number is None or len(codes) < 2 or len(names) < 2:
@@ -293,6 +400,12 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
                 "driver_a": codes[0],
                 "driver_b": codes[1],
             }),
+            ("compare_corner_profiles", {
+                "round_number": round_number,
+                "session_type": "Q",
+                "driver_a": codes[0],
+                "driver_b": codes[1],
+            }),
             ("get_team_radio", {
                 "round_number": round_number,
                 "session_type": "Q",
@@ -312,12 +425,15 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
         plan["tool_calls"] = [
             ("get_driver_race_story", {"round_number": round_number, "driver_name": names[0]}),
             ("get_driver_race_story", {"round_number": round_number, "driver_name": names[1]}),
-            ("get_safety_car_periods", {"round_number": round_number, "session_type": "R"}),
-            ("analyze_energy_management", {
+            ("analyze_race_pace_battle", {
                 "round_number": round_number,
-                "session_type": resolved.get("session_type") or "R",
                 "driver_a": codes[0],
                 "driver_b": codes[1],
+                "session_type": resolved.get("session_type") or "R",
+            }),
+            ("get_safety_car_periods", {
+                "round_number": round_number,
+                "session_type": resolved.get("session_type") or "R",
             }),
         ]
         return plan
@@ -559,10 +675,12 @@ def _answer_anthropic(message: str, history: list[dict]) -> dict:
 
 # ── OpenAI ───────────────────────────────────────────────────────────────────
 
-_openai_client: openai_sdk.OpenAI | None = None
+_openai_client: Any | None = None
 
-def _get_openai_client() -> openai_sdk.OpenAI:
+def _get_openai_client() -> Any:
     global _openai_client
+    if openai_sdk is None:
+        raise ImportError("openai package is not installed")
     if _openai_client is None:
         _openai_client = openai_sdk.OpenAI(
             api_key=os.environ.get("OPENAI_API_KEY")

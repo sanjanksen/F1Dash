@@ -11,6 +11,11 @@ questions and use primitives for focused follow-ups.
 """
 from f1_data import (
     analyze_qualifying_battle,
+    analyze_race_pace_battle,
+    analyze_stint_degradation,
+    analyze_team_performance,
+    compare_corner_profiles,
+    extract_corner_profiles,
     get_circuit_corners,
     get_circuit_details,
     get_circuits,
@@ -380,6 +385,78 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
         },
         ["round_number", "session_type"],
     ),
+    _tool(
+        "extract_corner_profiles",
+        "DEEP ANALYSIS PRIMITIVE. Per-corner and per-straight telemetry breakdown for a driver's lap. "
+        "Returns entry/apex/exit speed, braking point, gear at apex, traction point, straight acceleration, DRS activation, "
+        "clipping detection, and whole-lap usage summary (full_throttle_pct, braking_pct, gear distribution). "
+        "Use for questions like 'what gear does Hamilton use at Turn 8?' or 'where is Leclerc braking?'.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
+            "driver_code": {"type": "string", "description": "3-letter driver code."},
+            "lap_number": {"type": "integer", "description": "Optional specific lap number. Defaults to fastest lap."},
+        },
+        ["round_number", "session_type", "driver_code"],
+    ),
+    _tool(
+        "compare_corner_profiles",
+        "DEEP ANALYSIS PRIMITIVE. Compare corner-by-corner telemetry between two drivers. "
+        "Returns per-corner cause classification (braking/minimum_speed/traction/mixed), "
+        "setup direction inference (corner_heavy/straight_heavy/balanced), average straight speeds, "
+        "and gain location summary showing the top 3 corners where the faster driver has an advantage. "
+        "Use for questions like 'is Ferrari better in corners or on straights vs Mercedes?' or "
+        "'where does Norris gain time on Leclerc in quali?'.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
+            "driver_a": {"type": "string", "description": "First driver's 3-letter code."},
+            "driver_b": {"type": "string", "description": "Second driver's 3-letter code."},
+            "lap_number_a": {"type": "integer", "description": "Optional lap number for driver_a."},
+            "lap_number_b": {"type": "integer", "description": "Optional lap number for driver_b."},
+        },
+        ["round_number", "session_type", "driver_a", "driver_b"],
+    ),
+    _tool(
+        "analyze_stint_degradation",
+        "DEEP ANALYSIS PRIMITIVE. Compute tyre degradation model for a driver's race stints. "
+        "Fits linear regression on fuel-corrected lap times vs tyre age per stint compound. "
+        "Returns deg_rate_s_per_lap, fuel_corrected_pace_at_age_1_s, r_squared, consistency_std_dev_s. "
+        "Use for questions about tyre wear, degradation rate, or how pace evolved over a stint.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "driver_code": {"type": "string", "description": "3-letter driver code."},
+            "session_type": {"type": "string", "description": "Session type: R or S. Defaults to R."},
+        },
+        ["round_number", "driver_code"],
+    ),
+    _tool(
+        "analyze_race_pace_battle",
+        "DEEP ANALYSIS PRIMITIVE. Compare race pace and tyre degradation between two drivers. "
+        "Race equivalent of analyze_qualifying_battle. Returns fuel-corrected pace delta, "
+        "per-compound degradation rate comparison, aligned stints, decisive_factor classification "
+        "(tyre_degradation/raw_pace_advantage/strategy_execution/mixed), and undercut analysis. "
+        "Use for questions like 'who had better race pace?' or 'why did Verstappen pull away from Hamilton in the race?'.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "driver_a": {"type": "string", "description": "First driver's 3-letter code."},
+            "driver_b": {"type": "string", "description": "Second driver's 3-letter code."},
+            "session_type": {"type": "string", "description": "Session type: R or S. Defaults to R."},
+        },
+        ["round_number", "driver_a", "driver_b"],
+    ),
+    _tool(
+        "analyze_team_performance",
+        "DEEP ANALYSIS PRIMITIVE. Compare both teammates' corner profiles and (in race sessions) degradation for a team. "
+        "Returns setup_direction_inference, gain_location_summary, and per-driver stint degradation. "
+        "Use for questions like 'how did Ferrari compare as a team?' or 'which teammate was stronger in the corners?'.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "team_name": {"type": "string", "description": "Team name or close match (e.g. Ferrari, McLaren, Mercedes)."},
+            "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
+        },
+        ["round_number", "team_name", "session_type"],
+    ),
 ]
 
 
@@ -502,5 +579,40 @@ def execute_tool(name: str, args: dict):
             args["session_type"],
             args.get("category"),
             args.get("limit", 50),
+        )
+    if name == "extract_corner_profiles":
+        return extract_corner_profiles(
+            args["round_number"],
+            args["session_type"],
+            args["driver_code"],
+            args.get("lap_number"),
+        )
+    if name == "compare_corner_profiles":
+        return compare_corner_profiles(
+            args["round_number"],
+            args["session_type"],
+            args["driver_a"],
+            args["driver_b"],
+            args.get("lap_number_a"),
+            args.get("lap_number_b"),
+        )
+    if name == "analyze_stint_degradation":
+        return analyze_stint_degradation(
+            args["round_number"],
+            args["driver_code"],
+            args.get("session_type", "R"),
+        )
+    if name == "analyze_race_pace_battle":
+        return analyze_race_pace_battle(
+            args["round_number"],
+            args["driver_a"],
+            args["driver_b"],
+            args.get("session_type", "R"),
+        )
+    if name == "analyze_team_performance":
+        return analyze_team_performance(
+            args["round_number"],
+            args["team_name"],
+            args["session_type"],
         )
     raise ValueError(f"Unknown tool: {name!r}")

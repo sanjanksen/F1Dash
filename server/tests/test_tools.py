@@ -272,3 +272,58 @@ def test_execute_tool_get_race_report():
     with patch('tools.get_race_report', return_value=mock):
         result = tools.execute_tool("get_race_report", {"round_number": 3})
     assert result["podium"][0]["driver"] == "Max Verstappen"
+
+
+def test_execute_tool_extract_corner_profiles():
+    mock = {"driver": "NOR", "corner_profiles": {"corner_1": {"apex_gear": 4}}}
+    with patch('tools.extract_corner_profiles', return_value=mock):
+        result = tools.execute_tool("extract_corner_profiles", {
+            "round_number": 3,
+            "session_type": "Q",
+            "driver_code": "NOR",
+        })
+    assert result["corner_profiles"]["corner_1"]["apex_gear"] == 4
+
+
+def test_execute_tool_compare_corner_profiles():
+    mock = {"driver_a": "NOR", "driver_b": "LEC", "setup_direction_inference": "corner_heavy"}
+    with patch('tools.compare_corner_profiles', return_value=mock):
+        result = tools.execute_tool("compare_corner_profiles", {
+            "round_number": 3,
+            "session_type": "Q",
+            "driver_a": "NOR",
+            "driver_b": "LEC",
+        })
+    assert result["setup_direction_inference"] == "corner_heavy"
+
+
+def test_execute_tool_analyze_stint_degradation():
+    mock = {"driver": "NOR", "stints": [{"compound": "MEDIUM"}]}
+    with patch('tools.analyze_stint_degradation', return_value=mock):
+        result = tools.execute_tool("analyze_stint_degradation", {
+            "round_number": 3,
+            "driver_code": "NOR",
+        })
+    assert result["stints"][0]["compound"] == "MEDIUM"
+
+
+def test_execute_tool_analyze_race_pace_battle():
+    mock = {"driver_a": "NOR", "driver_b": "LEC", "decisive_factor": "raw_pace_advantage"}
+    with patch('tools.analyze_race_pace_battle', return_value=mock):
+        result = tools.execute_tool("analyze_race_pace_battle", {
+            "round_number": 3,
+            "driver_a": "NOR",
+            "driver_b": "LEC",
+        })
+    assert result["decisive_factor"] == "raw_pace_advantage"
+
+
+def test_execute_tool_analyze_team_performance():
+    mock = {"team": "Ferrari", "setup_direction_inference": "balanced"}
+    with patch('tools.analyze_team_performance', return_value=mock):
+        result = tools.execute_tool("analyze_team_performance", {
+            "round_number": 3,
+            "team_name": "Ferrari",
+            "session_type": "Q",
+        })
+    assert result["team"] == "Ferrari"

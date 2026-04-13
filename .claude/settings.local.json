@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('f1_data.py'\\).read\\(\\)\\); print\\('f1_data.py OK'\\)\")",
+      "Bash(py -c \"import ast; ast.parse\\(open\\('f1_data.py'\\).read\\(\\)\\); print\\('f1_data.py OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('f1_data.py'\\).read\\(\\)\\); print\\('f1_data.py OK'\\)\")",
+      "Read(//c/Users/Student/AppData/Local/Programs/**)",
+      "Bash(ls /c/Python*)",
+      "Read(//c/Users/Student/miniconda3/**)",
+      "Read(//c/Users/Student/anaconda3/**)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('tools.py'\\).read\\(\\)\\); print\\('tools.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('chat.py'\\).read\\(\\)\\); print\\('chat.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('resolver.py'\\).read\\(\\)\\); print\\('resolver.py OK'\\)\")",
+      "Bash(python:*)"
+    ]
+  }
+}

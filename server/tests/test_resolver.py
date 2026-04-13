@@ -276,6 +276,41 @@ def test_detect_analysis_mode_gap_between(mock_circuits, mock_drivers):
 
 @patch('resolver.get_drivers')
 @patch('resolver.get_circuits')
+def test_resolve_query_context_race_pace_comparison(mock_circuits, mock_drivers):
+    mock_drivers.return_value = [
+        {"full_name": "Max Verstappen", "code": "VER", "driver_id": "verstappen", "team": "Red Bull"},
+        {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
+    ]
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+
+    result = resolver.resolve_query_context("Why did Verstappen pull away from Norris on race pace at Suzuka?")
+
+    assert result["analysis_mode"] == "race_pace_comparison"
+    assert result["analysis_focus"] == "race"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_resolve_query_context_team_performance_analysis(mock_circuits, mock_drivers):
+    mock_drivers.return_value = [
+        {"full_name": "Charles Leclerc", "code": "LEC", "driver_id": "leclerc", "team": "Ferrari"},
+        {"full_name": "Lewis Hamilton", "code": "HAM", "driver_id": "hamilton", "team": "Ferrari"},
+    ]
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+
+    result = resolver.resolve_query_context("What was Ferrari's setup direction through the corners at Suzuka?")
+
+    assert result["entity_type"] == "team"
+    assert result["entity_name"] == "Ferrari"
+    assert result["analysis_mode"] == "team_performance"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
 def test_standings_scope_driver(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = []

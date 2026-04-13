@@ -49,6 +49,13 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
         scope = scope or "qualifying"
     if re.search(r"\bradio\b", normalized) or "team radio" in normalized or "on the radio" in normalized:
         scope = "radio"
+    if any(term in normalized for term in (
+        "corner profile", "braking point", "apex speed", "traction point",
+        "gear at", "corner analysis", "corner comparison", "setup direction",
+        "corner heavy", "straight heavy", "degradation", "tyre wear", "tire wear",
+        "deg rate", "stint pace", "race pace",
+    )):
+        scope = "corner_analysis"
     if any(phrase in normalized for phrase in (
         "standings", "championship", "who leads", "points table",
         "leaderboard", "points leader", "championship leader",
@@ -223,7 +230,17 @@ def _suggest_tool(entity_type: str | None, scope: str | None, session_type: str 
     return None
 
 
-def _detect_analysis_mode(normalized: str, matched_drivers: list[dict], session_type: str | None) -> tuple[str | None, str | None]:
+def _detect_analysis_mode(normalized: str, matched_drivers: list[dict], session_type: str | None, matched_team: str | None = None) -> tuple[str | None, str | None]:
+    # Team performance mode (single team, no two-driver comparison)
+    if matched_team and len(matched_drivers) < 2:
+        team_perf_terms = any(phrase in normalized for phrase in (
+            "team performance", "as a team", "team analysis", "setup direction",
+            "corner heavy", "straight heavy", "which teammate", "teammate comparison",
+            "better through the corners", "better on the straights",
+        ))
+        if team_perf_terms:
+            return "team_performance", None
+
     if len(matched_drivers) < 2:
         return None, None
 
@@ -237,6 +254,14 @@ def _detect_analysis_mode(normalized: str, matched_drivers: list[dict], session_
     ))
     if not comparison_language:
         return None, None
+
+    # Race pace comparison: explicit race pace / degradation language
+    race_pace_terms = any(phrase in normalized for phrase in (
+        "race pace", "pace battle", "deg", "degradation", "tyre wear", "tire wear",
+        "stint", "fuel corrected", "pull away", "pulled away", "gap in the race",
+    ))
+    if race_pace_terms and session_type != "Q":
+        return "race_pace_comparison", "race"
 
     if session_type == "Q" or "qualifying" in normalized or re.search(r"\bquali\b", normalized) or "pole lap" in normalized or "outqualif" in normalized:
         return "driver_comparison", "qualifying"
@@ -252,7 +277,7 @@ def _base_context(message: str) -> dict:
     driver = matched_drivers[0] if len(matched_drivers) == 1 else None
     team = None if driver else _match_team(normalized)
     event = _match_event(normalized)
-    analysis_mode, analysis_focus = _detect_analysis_mode(normalized, matched_drivers, session_type)
+    analysis_mode, analysis_focus = _detect_analysis_mode(normalized, matched_drivers, session_type, team)
 
     entity_type = None
     entity_name = None

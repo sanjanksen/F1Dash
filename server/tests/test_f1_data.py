@@ -1335,3 +1335,34 @@ def test_pick_driver_coerces_code_to_string():
     mock_laps = MagicMock()
     f1_data._pick_driver(mock_laps, 44)  # int driver number
     mock_laps.pick_drivers.assert_called_once_with(['44'])
+
+
+def test_analyze_race_pace_battle_raises_without_clean_laps():
+    mock_session = MagicMock()
+    mock_session.event = {'EventName': 'Japanese Grand Prix'}
+
+    with patch('f1_data._validate_session_availability'), \
+         patch('f1_data._load_session', return_value=mock_session), \
+         patch('f1_data._pick_driver', return_value=pd.DataFrame([{'LapNumber': 1}])), \
+         patch('f1_data._filter_clean_race_laps', return_value=[]):
+        with pytest.raises(ValueError, match="No clean laps available"):
+            f1_data.analyze_race_pace_battle(3, 'NOR', 'LEC')
+
+
+def test_analyze_team_performance_uses_degradation_event_when_corner_comparison_fails():
+    with patch('f1_data._resolve_team', return_value='Ferrari'), \
+         patch('f1_data.get_drivers', return_value=[
+             {'full_name': 'Charles Leclerc', 'code': 'LEC', 'driver_id': 'leclerc', 'team': 'Ferrari'},
+             {'full_name': 'Lewis Hamilton', 'code': 'HAM', 'driver_id': 'hamilton', 'team': 'Ferrari'},
+         ]), \
+         patch('f1_data.compare_corner_profiles', side_effect=ValueError('telemetry unavailable')), \
+         patch('f1_data.analyze_stint_degradation', side_effect=[
+             {'event': 'Japanese Grand Prix', 'driver': 'LEC', 'stints': []},
+             {'event': 'Japanese Grand Prix', 'driver': 'HAM', 'stints': []},
+         ]):
+        result = f1_data.analyze_team_performance(3, 'Ferrari', 'R')
+
+    assert result['event'] == 'Japanese Grand Prix'
+    assert result['corner_error'] == 'telemetry unavailable'
+    assert result['degradation_a']['driver'] == 'LEC'
+    assert result['degradation_b']['driver'] == 'HAM'
