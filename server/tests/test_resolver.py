@@ -243,3 +243,32 @@ def test_suggest_tool_qualifying_strategy_not_race_story(mock_circuits, mock_dri
     result = resolver.resolve_query_context("What was Hamilton's qualifying strategy at Suzuka?")
     assert result["session_type"] == "Q"
     assert result["suggested_tool"] != "get_driver_race_story"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_detect_analysis_mode_outqualify(mock_circuits, mock_drivers):
+    mock_drivers.return_value = [
+        {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
+        {"full_name": "Charles Leclerc", "code": "LEC", "driver_id": "leclerc", "team": "Ferrari"},
+    ]
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+    result = resolver.resolve_query_context("How did Norris outqualify Leclerc at Suzuka?")
+    assert result["analysis_mode"] == "driver_comparison"
+    assert result["analysis_focus"] == "qualifying"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_detect_analysis_mode_gap_between(mock_circuits, mock_drivers):
+    mock_drivers.return_value = [
+        {"full_name": "Max Verstappen", "code": "VER", "driver_id": "verstappen", "team": "Red Bull"},
+        {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
+    ]
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+    result = resolver.resolve_query_context("What was the gap between Verstappen and Norris in the race at Suzuka?")
+    assert result["analysis_mode"] == "driver_comparison"

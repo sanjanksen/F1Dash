@@ -223,12 +223,15 @@ def _detect_analysis_mode(normalized: str, matched_drivers: list[dict], session_
     comparison_language = any(phrase in normalized for phrase in (
         "compare", "compared", "comparison", "vs", "versus", "faster than", "slower than",
         "beat", "ahead of", "edge", "advantage", "where did", "how did", "why did",
-        "gain time", "lose time", "quicker than", "better than"
+        "gain time", "lose time", "quicker than", "better than",
+        "outqualif", "outperform", "outpace", "outrun",
+        "gap between", "difference between", "time difference", "delta between",
+        "how much did", "which driver", "who was quicker", "who was faster",
     ))
     if not comparison_language:
         return None, None
 
-    if session_type == "Q" or "qualifying" in normalized or re.search(r"\bquali\b", normalized) or "pole lap" in normalized:
+    if session_type == "Q" or "qualifying" in normalized or re.search(r"\bquali\b", normalized) or "pole lap" in normalized or "outqualif" in normalized:
         return "driver_comparison", "qualifying"
     if session_type == "R" or "race" in normalized or "grand prix" in normalized:
         return "driver_comparison", "race"
