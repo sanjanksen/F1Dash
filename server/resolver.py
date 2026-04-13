@@ -99,6 +99,8 @@ def _match_team(normalized: str) -> str | None:
         "haas": "Haas F1 Team",
         "sauber": "Kick Sauber",
         "williams": "Williams",
+        "audi": "Audi",           # 2026 rebrand
+        "kick sauber": "Kick Sauber",
     }
 
     for alias, canonical in aliases.items():
