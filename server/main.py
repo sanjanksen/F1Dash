@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
 
+import logging
+logger = logging.getLogger(__name__)
+
 from f1_data import get_drivers, get_driver_stats, get_circuits
 from chat import answer_f1_payload, answer_f1_question
 
@@ -39,7 +42,8 @@ async def drivers_endpoint():
     try:
         return get_drivers()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error in GET /api/drivers")
+        raise HTTPException(status_code=500, detail="Failed to fetch drivers.")
 
 
 @app.get("/api/driver/{name}/stats")
@@ -51,8 +55,11 @@ async def driver_stats_endpoint(name: str):
         return stats
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error in GET /api/driver/%s/stats", name)
+        raise HTTPException(status_code=500, detail="Failed to fetch driver stats.")
 
 
 @app.get("/api/circuits")
@@ -60,7 +67,8 @@ async def circuits_endpoint():
     try:
         return get_circuits()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error in GET /api/circuits")
+        raise HTTPException(status_code=500, detail="Failed to fetch circuit schedule.")
 
 
 @app.post("/api/chat")
@@ -69,5 +77,8 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=400, detail="message cannot be empty")
     try:
         return answer_f1_payload(request.message, request.history)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error in POST /api/chat")
+        raise HTTPException(status_code=500, detail="Something went wrong processing your request.")
