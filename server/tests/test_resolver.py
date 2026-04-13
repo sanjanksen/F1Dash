@@ -272,3 +272,33 @@ def test_detect_analysis_mode_gap_between(mock_circuits, mock_drivers):
     ]
     result = resolver.resolve_query_context("What was the gap between Verstappen and Norris in the race at Suzuka?")
     assert result["analysis_mode"] == "driver_comparison"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_standings_scope_driver(mock_circuits, mock_drivers):
+    mock_drivers.return_value = []
+    mock_circuits.return_value = []
+    result = resolver.resolve_query_context("Who leads the championship?")
+    assert result["scope"] == "standings"
+    assert result["suggested_tool"] == "get_driver_standings"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_standings_scope_constructor(mock_circuits, mock_drivers):
+    mock_drivers.return_value = []
+    mock_circuits.return_value = []
+    result = resolver.resolve_query_context("What are the constructor standings?")
+    assert result["scope"] == "standings"
+    assert result["suggested_tool"] == "get_constructor_standings"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_standings_scope_points_table(mock_circuits, mock_drivers):
+    mock_drivers.return_value = []
+    mock_circuits.return_value = []
+    result = resolver.resolve_query_context("Show me the points table")
+    assert result["scope"] == "standings"
+    assert result["suggested_tool"] == "get_driver_standings"

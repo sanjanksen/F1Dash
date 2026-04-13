@@ -49,6 +49,11 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
         scope = scope or "qualifying"
     if re.search(r"\bradio\b", normalized) or "team radio" in normalized or "on the radio" in normalized:
         scope = "radio"
+    if any(phrase in normalized for phrase in (
+        "standings", "championship", "who leads", "points table",
+        "leaderboard", "points leader", "championship leader",
+    )):
+        scope = "standings"
 
     return session_type, scope
 
@@ -262,6 +267,12 @@ def _base_context(message: str) -> dict:
         entity_type = "team"
         entity_name = team
 
+    if scope == "standings":
+        _is_constructor = any(w in normalized for w in ("constructor", "team standings", "constructors"))
+        _suggested_tool = "get_constructor_standings" if _is_constructor else "get_driver_standings"
+    else:
+        _suggested_tool = _suggest_tool(entity_type, scope, session_type)
+
     return {
         "raw_message": message,
         "normalized_message": normalized,
@@ -277,7 +288,7 @@ def _base_context(message: str) -> dict:
         "scope": scope,
         "analysis_mode": analysis_mode,
         "analysis_focus": analysis_focus,
-        "suggested_tool": _suggest_tool(entity_type, scope, session_type),
+        "suggested_tool": _suggested_tool,
         "has_reference_language": _has_reference_language(normalized),
         "has_explicit_context": any([
             entity_type is not None,
@@ -315,7 +326,11 @@ def _merge_with_previous_context(current: dict, previous: dict | None) -> dict:
             used_previous = True
 
     if merged.get("suggested_tool") is None:
-        merged["suggested_tool"] = _suggest_tool(merged.get("entity_type"), merged.get("scope"), merged.get("session_type"))
+        if merged.get("scope") == "standings":
+            _is_constructor = any(w in (merged.get("normalized_message") or "") for w in ("constructor", "team standings", "constructors"))
+            merged["suggested_tool"] = "get_constructor_standings" if _is_constructor else "get_driver_standings"
+        else:
+            merged["suggested_tool"] = _suggest_tool(merged.get("entity_type"), merged.get("scope"), merged.get("session_type"))
 
     if current.get("analysis_mode") is None and previous.get("analysis_mode") is not None and merged.get("has_reference_language"):
         used_previous = True
