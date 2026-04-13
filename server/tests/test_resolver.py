@@ -195,3 +195,36 @@ def test_resolve_query_context_detects_quali_shorthand(mock_circuits, mock_drive
     assert result["scope"] == "qualifying"
     assert result["analysis_mode"] == "driver_comparison"
     assert result["analysis_focus"] == "qualifying"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_match_event_montreal(mock_circuits, mock_drivers):
+    mock_drivers.return_value = []
+    mock_circuits.return_value = [
+        {"round": 9, "event_name": "Canadian Grand Prix", "circuit_name": "Circuit Gilles Villeneuve", "country": "Canada"},
+    ]
+    result = resolver.resolve_query_context("What happened at Montreal this year?")
+    assert result["round_number"] == 9
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_match_event_sakhir(mock_circuits, mock_drivers):
+    mock_drivers.return_value = []
+    mock_circuits.return_value = [
+        {"round": 1, "event_name": "Bahrain Grand Prix", "circuit_name": "Bahrain International Circuit", "country": "Bahrain"},
+    ]
+    result = resolver.resolve_query_context("Tell me about the Sakhir race")
+    assert result["round_number"] == 1
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_match_event_budapest(mock_circuits, mock_drivers):
+    mock_drivers.return_value = []
+    mock_circuits.return_value = [
+        {"round": 13, "event_name": "Hungarian Grand Prix", "circuit_name": "Hungaroring", "country": "Hungary"},
+    ]
+    result = resolver.resolve_query_context("How was the race in Budapest?")
+    assert result["round_number"] == 13
