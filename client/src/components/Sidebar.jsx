@@ -25,7 +25,7 @@ export default function Sidebar({ sessions, activeId, onSelect, onDelete }) {
       seen.add(label)
       groups.push({ label, items: [session] })
     } else {
-      groups[groups.length - 1].items.push(session)
+      groups.find((g) => g.label === label).items.push(session)
     }
   }
 
