@@ -12,6 +12,7 @@ export default function ChatView({ messages, loading, onSend }) {
   const inputRef = useRef(null)
   const year = new Date().getFullYear()
   const [lastRound, setLastRound] = useState(null)
+  const [loadingTooLong, setLoadingTooLong] = useState(false)
 
   useEffect(() => {
     fetchCircuits()
@@ -44,6 +45,15 @@ export default function ChatView({ messages, loading, onSend }) {
 
   useEffect(() => {
     if (!loading) inputRef.current?.focus()
+  }, [loading])
+
+  useEffect(() => {
+    if (!loading) {
+      setLoadingTooLong(false)
+      return
+    }
+    const timer = setTimeout(() => setLoadingTooLong(true), 15000)
+    return () => clearTimeout(timer)
   }, [loading])
 
   const handleSend = (text) => {
@@ -134,6 +144,11 @@ export default function ChatView({ messages, loading, onSend }) {
                   <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-foreground/60 [animation-delay:120ms]" />
                   <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-foreground/60 [animation-delay:240ms]" />
                 </div>
+                {loadingTooLong && (
+                  <div className="text-xs text-muted-foreground">
+                    Fetching telemetry and session data — this may take a moment.
+                  </div>
+                )}
               </div>
             )}
             <div ref={bottomRef} />
