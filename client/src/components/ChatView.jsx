@@ -4,19 +4,39 @@ import { ArrowUp, ChevronRight } from 'lucide-react'
 import AnswerRenderer from './AnswerRenderer.jsx'
 import { Button } from './ui/button.jsx'
 import { Input } from './ui/input.jsx'
-
-const suggestions = [
-  { label: 'Race story', text: 'How did Russell do at Suzuka?' },
-  { label: 'Team weekend', text: 'How did Ferrari do this weekend?' },
-  { label: 'Race report', text: 'Give me the Japanese GP race recap' },
-  { label: 'Qualifying', text: 'Why was Norris faster than Leclerc in qualifying?' },
-]
+import { fetchCircuits } from '../api/f1api.js'
 
 export default function ChatView({ messages, loading, onSend }) {
   const [input, setInput] = useState('')
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
   const year = new Date().getFullYear()
+  const [lastRound, setLastRound] = useState(null)
+
+  useEffect(() => {
+    fetchCircuits()
+      .then((circuits) => {
+        const today = new Date().toISOString().slice(0, 10)
+        const completed = circuits.filter((c) => c.date < today)
+        if (completed.length > 0) {
+          setLastRound(completed[completed.length - 1])
+        }
+      })
+      .catch(() => {
+        // Silently fall back to static suggestions
+      })
+  }, [])
+
+  const shortName = lastRound
+    ? lastRound.event_name.replace(' Grand Prix', ' GP')
+    : 'the latest race'
+
+  const suggestions = [
+    { label: 'Race story', text: `How did Russell do at ${shortName}?` },
+    { label: 'Team weekend', text: `How did Ferrari do at ${shortName}?` },
+    { label: 'Race report', text: `Give me the ${shortName} race recap` },
+    { label: 'Qualifying', text: `Why was Norris faster than Leclerc in qualifying at ${shortName}?` },
+  ]
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
