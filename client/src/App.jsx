@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Activity, Plus } from 'lucide-react'
+import { Plus } from 'lucide-react'
 
 import { sendChatMessage } from './api/f1api.js'
 import ChatView from './components/ChatView.jsx'
@@ -63,14 +63,17 @@ export default function App() {
   return (
     <div className="dark h-full bg-background text-foreground">
       <div className="flex h-full flex-col">
-        <header className="border-b border-border/90 bg-background">
-          <div className="grid h-13 grid-cols-1 md:grid-cols-[16rem_minmax(0,1fr)]">
+        {/* Thin red speed stripe at very top */}
+        <div className="h-[2px] w-full shrink-0 bg-gradient-to-r from-primary/80 via-primary to-primary/40" />
+        <header className="border-b border-border/90 bg-background/95 backdrop-blur-sm">
+          <div className="grid h-12 grid-cols-1 md:grid-cols-[16rem_minmax(0,1fr)]">
             <div className="hidden items-center justify-between border-r border-border/90 px-4 md:flex">
               <div className="min-w-0">
-                <div className="text-sm font-semibold tracking-[-0.025em] text-foreground">
-                  F1 <span className="text-foreground">Dash</span>
+                <div className="font-display text-base font-semibold tracking-tight text-foreground" style={{ letterSpacing: '-0.01em' }}>
+                  <span className="text-primary">F1</span>{' '}
+                  <span className="text-foreground">Dash</span>
                 </div>
-                <div className="mt-0.5 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                <div className="mt-0.5 text-[9px] uppercase tracking-[0.22em] text-muted-foreground/80">
                   {year} race intelligence
                 </div>
               </div>
@@ -80,15 +83,15 @@ export default function App() {
                 onClick={createSession}
                 aria-label="New chat"
                 title="New chat"
-                className="h-8 w-8"
+                className="h-7 w-7"
               >
-                <Plus className="h-4 w-4" />
+                <Plus className="h-3.5 w-3.5" />
               </Button>
             </div>
 
             <div className="flex items-center justify-between gap-3 px-4 md:px-5">
               <div className="flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
-                <Activity className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="live-dot" />
                 <span className="truncate uppercase tracking-[0.12em]">FastF1-backed analysis</span>
               </div>
               <div className="flex items-center gap-2">

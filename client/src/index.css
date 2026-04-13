@@ -1,3 +1,4 @@
+@import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,400;0,500;0,600;0,700;1,600&family=JetBrains+Mono:wght@400;500&display=swap");
 @import "tailwindcss";
 @import "tw-animate-css";
 
@@ -23,12 +24,15 @@
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
+  --color-speed: hsl(var(--speed));
+  --color-time: hsl(var(--time));
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
   --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Inter Variable", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Barlow Condensed", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
 }
 
 :root {
@@ -38,20 +42,26 @@
   --card-foreground: 0 0% 96%;
   --popover: 0 0% 7%;
   --popover-foreground: 0 0% 96%;
-  --primary: 0 72% 50%;
+  --primary: 0 75% 50%;
   --primary-foreground: 0 0% 98%;
-  --secondary: 0 0% 10%;
+  --secondary: 0 0% 11%;
   --secondary-foreground: 0 0% 92%;
   --muted: 0 0% 9%;
-  --muted-foreground: 0 0% 62%;
+  --muted-foreground: 0 0% 58%;
   --accent: 285 60% 52%;
   --accent-foreground: 0 0% 98%;
   --destructive: 0 65% 42%;
   --destructive-foreground: 0 0% 98%;
-  --border: 0 0% 14%;
+  --border: 0 0% 15%;
   --input: 0 0% 10%;
-  --ring: 0 72% 50%;
+  --ring: 0 75% 50%;
   --radius: 0.45rem;
+  /* semantic data colors */
+  --speed: 186 100% 45%;
+  --time: 38 95% 55%;
+  --podium-gold: 48 96% 55%;
+  --podium-silver: 0 0% 75%;
+  --podium-bronze: 28 60% 52%;
 }
 
 .dark {
@@ -61,20 +71,57 @@
   --card-foreground: 0 0% 96%;
   --popover: 0 0% 7%;
   --popover-foreground: 0 0% 96%;
-  --primary: 0 72% 50%;
+  --primary: 0 75% 50%;
   --primary-foreground: 0 0% 98%;
-  --secondary: 0 0% 10%;
+  --secondary: 0 0% 11%;
   --secondary-foreground: 0 0% 92%;
   --muted: 0 0% 9%;
-  --muted-foreground: 0 0% 62%;
+  --muted-foreground: 0 0% 58%;
   --accent: 285 60% 52%;
   --accent-foreground: 0 0% 98%;
   --destructive: 0 65% 42%;
   --destructive-foreground: 0 0% 98%;
-  --border: 0 0% 14%;
+  --border: 0 0% 15%;
   --input: 0 0% 10%;
-  --ring: 0 72% 50%;
+  --ring: 0 75% 50%;
+  --speed: 186 100% 45%;
+  --time: 38 95% 55%;
+  --podium-gold: 48 96% 55%;
+  --podium-silver: 0 0% 75%;
+  --podium-bronze: 28 60% 52%;
 }
+
+/* --- Keyframes --- */
+
+@keyframes widget-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes race-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.6); }
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 hsl(0 75% 50% / 0.5); }
+  60% { opacity: 0.8; box-shadow: 0 0 0 4px hsl(0 75% 50% / 0); }
+}
+
+@keyframes streak {
+  0% { transform: translateX(-100%); opacity: 0; }
+  20% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { transform: translateX(200%); opacity: 0; }
+}
+
+/* --- Base --- */
 
 @layer base {
   * {
@@ -90,6 +137,10 @@
   body {
     @apply bg-background font-sans text-foreground antialiased;
     font-feature-settings: "cv11", "ss01";
+    /* Subtle red glow from top, cyan bleed from bottom-left */
+    background-image:
+      radial-gradient(ellipse 70% 40% at 50% -5%, hsl(0 72% 50% / 0.06) 0%, transparent 70%),
+      radial-gradient(ellipse 40% 30% at 8% 95%, hsl(186 100% 45% / 0.04) 0%, transparent 60%);
   }
 
   button,
@@ -97,6 +148,8 @@
     font: inherit;
   }
 }
+
+/* --- Utilities --- */
 
 @layer utilities {
   .app-scrollbar {
@@ -116,5 +169,84 @@
   .app-scrollbar::-webkit-scrollbar-thumb {
     background: hsl(var(--border));
     border-radius: 9999px;
+  }
+
+  /* Widget enter animation */
+  .widget-enter {
+    animation: widget-enter 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  /* Staggered entry for multiple widgets */
+  .widget-enter-1 { animation: widget-enter 0.35s 0.05s cubic-bezier(0.16, 1, 0.3, 1) both; }
+  .widget-enter-2 { animation: widget-enter 0.35s 0.12s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+  /* Live indicator dot */
+  .live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+    background: hsl(var(--primary));
+    animation: live-pulse 2.2s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+
+  /* Font display utility */
+  .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono-data {
+    font-family: var(--font-mono);
+    font-feature-settings: "tnum";
+  }
+
+  /* Colored top-border cards */
+  .card-accent-primary {
+    border-top: 2px solid hsl(var(--primary) / 0.75);
+  }
+
+  .card-accent-speed {
+    border-top: 2px solid hsl(var(--speed) / 0.75);
+  }
+
+  .card-accent-time {
+    border-top: 2px solid hsl(var(--time) / 0.65);
+  }
+
+  /* Subtle glow variants */
+  .glow-primary {
+    box-shadow: 0 0 0 1px hsl(var(--primary) / 0.18), 0 0 18px hsl(var(--primary) / 0.12);
+  }
+
+  .glow-speed {
+    box-shadow: 0 0 0 1px hsl(var(--speed) / 0.18), 0 0 18px hsl(var(--speed) / 0.10);
+  }
+
+  /* Position badge colors */
+  .pos-p1 { color: hsl(var(--podium-gold)); }
+  .pos-p2 { color: hsl(var(--podium-silver)); }
+  .pos-p3 { color: hsl(var(--podium-bronze)); }
+  .pos-points { color: hsl(var(--primary)); }
+
+  /* Suggestion card hover */
+  .suggestion-card {
+    border-left: 2px solid transparent;
+    transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .suggestion-card:hover {
+    border-left-color: hsl(var(--primary) / 0.6);
+    box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.08), 0 0 0 1px hsl(var(--primary) / 0.06);
+  }
+
+  /* Lap time / data value styling */
+  .data-time {
+    color: hsl(var(--time));
+    font-family: var(--font-mono);
+    font-feature-settings: "tnum";
+  }
+
+  .data-speed {
+    color: hsl(var(--speed));
   }
 }

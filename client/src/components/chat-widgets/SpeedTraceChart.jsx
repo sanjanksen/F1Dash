@@ -1,5 +1,9 @@
 import { useState } from 'react'
 
+// Colors for driver A (red) and driver B (cyan/speed)
+const COLOR_A = 'hsl(0, 75%, 50%)'
+const COLOR_B = 'hsl(186, 100%, 45%)'
+
 function linePath(points, width, height, minY, maxY, yKey) {
   if (!points.length || maxY <= minY) return ''
   const maxDistance = Math.max(points[points.length - 1]?.distance_m ?? 1, 1)
@@ -10,6 +14,19 @@ function linePath(points, width, height, minY, maxY, yKey) {
       return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`
     })
     .join(' ')
+}
+
+function fillPath(points, width, height, minY, maxY, yKey) {
+  if (!points.length || maxY <= minY) return ''
+  const maxDistance = Math.max(points[points.length - 1]?.distance_m ?? 1, 1)
+  const coords = points.map((point) => {
+    const x = (point.distance_m / maxDistance) * width
+    const y = height - (((point[yKey] ?? minY) - minY) / (maxY - minY)) * height
+    return [x.toFixed(2), y.toFixed(2)]
+  })
+  const linePart = coords.map(([x, y], i) => `${i === 0 ? 'M' : 'L'} ${x} ${y}`).join(' ')
+  const lastX = coords[coords.length - 1][0]
+  return `${linePart} L ${lastX} ${height} L 0 ${height} Z`
 }
 
 function nearestPoint(points, cursorDistance) {
@@ -26,7 +43,8 @@ function formatDelta(value, driverA, driverB) {
   if (typeof value !== 'number') return '—'
   if (value === 0) return 'Level'
   const leader = value > 0 ? driverA : driverB
-  return `${leader} +${Math.abs(value).toFixed(1)} kph`
+  const leaderColor = value > 0 ? COLOR_A : COLOR_B
+  return { leader, kph: Math.abs(value).toFixed(1), color: leaderColor }
 }
 
 export default function SpeedTraceChart({ points, driverA, driverB, decisiveDistance, decisiveCorner }) {
@@ -36,42 +54,48 @@ export default function SpeedTraceChart({ points, driverA, driverB, decisiveDist
 
   const width = 680
   const height = 190
-  const speeds = points.flatMap((point) => [point.speed_a, point.speed_b]).filter((value) => typeof value === 'number')
+  const speeds = points.flatMap((p) => [p.speed_a, p.speed_b]).filter((v) => typeof v === 'number')
   const minY = Math.max(0, Math.min(...speeds) - 8)
   const maxY = Math.max(...speeds) + 8
   const maxDistance = Math.max(points[points.length - 1]?.distance_m ?? 1, 1)
+
   const pathA = linePath(points, width, height, minY, maxY, 'speed_a')
   const pathB = linePath(points, width, height, minY, maxY, 'speed_b')
-  const activePoint = nearestPoint(points, hoveredDistance ?? decisiveDistance ?? points[Math.floor(points.length * 0.6)]?.distance_m ?? 0)
+  const fillA = fillPath(points, width, height, minY, maxY, 'speed_a')
+  const fillB = fillPath(points, width, height, minY, maxY, 'speed_b')
+
+  const activePoint = nearestPoint(
+    points,
+    hoveredDistance ?? decisiveDistance ?? points[Math.floor(points.length * 0.6)]?.distance_m ?? 0,
+  )
   const activeX = ((activePoint?.distance_m ?? 0) / maxDistance) * width
   const decisiveX = decisiveDistance != null ? (decisiveDistance / maxDistance) * width : null
 
+  const delta = formatDelta(activePoint?.delta_speed, driverA, driverB)
+
   return (
-    <div className="rounded-md border border-border/90 bg-card">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/90 px-3 py-2.5">
+    <div className="overflow-hidden rounded-md border border-border/80 bg-card">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/80 px-3 py-2.5">
         <div>
-          <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-            Speed Trace
-          </div>
-          <div className="mt-1 text-sm text-muted-foreground">
-            Hover the trace to inspect the speed split through the lap.
-          </div>
+          <div className="text-[9px] font-medium uppercase tracking-[0.22em] text-muted-foreground/80">Speed Trace</div>
+          <div className="mt-0.5 text-xs text-muted-foreground/60">Hover to inspect the speed split.</div>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-foreground" />
-            {driverA}
+        {/* Color-coded driver legend */}
+        <div className="flex items-center gap-3 text-[11px]">
+          <span className="flex items-center gap-1.5">
+            <span className="h-[3px] w-5 rounded-full" style={{ background: COLOR_A }} />
+            <span className="font-medium" style={{ color: COLOR_A }}>{driverA}</span>
           </span>
-          <span className="inline-flex items-center gap-1.5">
-            <svg width="16" height="8" className="shrink-0">
-              <line x1="0" y1="4" x2="16" y2="4" stroke="currentColor" strokeWidth="2" strokeDasharray="4 2" className="text-primary/80" />
-            </svg>
-            {driverB}
+          <span className="flex items-center gap-1.5">
+            <span className="h-[3px] w-5 rounded-full" style={{ background: COLOR_B }} />
+            <span className="font-medium" style={{ color: COLOR_B }}>{driverB}</span>
           </span>
         </div>
       </div>
 
       <div className="grid gap-3 px-3 py-3 lg:grid-cols-[minmax(0,1fr)_13rem]">
+        {/* SVG chart */}
         <div>
           <svg
             viewBox={`0 0 ${width} ${height}`}
@@ -83,6 +107,20 @@ export default function SpeedTraceChart({ points, driverA, driverB, decisiveDist
             }}
             onMouseLeave={() => setHoveredDistance(decisiveDistance ?? null)}
           >
+            <defs>
+              {/* Gradient fill under driver A (red) */}
+              <linearGradient id="gradA" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="hsl(0, 75%, 50%)" stopOpacity="0.22" />
+                <stop offset="100%" stopColor="hsl(0, 75%, 50%)" stopOpacity="0" />
+              </linearGradient>
+              {/* Gradient fill under driver B (cyan) */}
+              <linearGradient id="gradB" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="hsl(186, 100%, 45%)" stopOpacity="0.16" />
+                <stop offset="100%" stopColor="hsl(186, 100%, 45%)" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+
+            {/* Grid lines */}
             {[0.2, 0.4, 0.6, 0.8].map((ratio) => (
               <line
                 key={ratio}
@@ -90,73 +128,125 @@ export default function SpeedTraceChart({ points, driverA, driverB, decisiveDist
                 x2={width}
                 y1={height * ratio}
                 y2={height * ratio}
-                className="stroke-border/70"
+                stroke="hsl(0, 0%, 15%)"
                 strokeWidth="1"
               />
             ))}
 
+            {/* Decisive zone highlight */}
             {decisiveX != null ? (
               <>
-                <rect x={Math.max(decisiveX - 30, 0)} y="0" width="60" height={height} className="fill-primary/[0.06]" />
-                <line x1={decisiveX} x2={decisiveX} y1="0" y2={height} className="stroke-primary/45" strokeDasharray="4 5" strokeWidth="1.25" />
+                <rect
+                  x={Math.max(decisiveX - 32, 0)}
+                  y="0"
+                  width="64"
+                  height={height}
+                  fill="hsl(0, 75%, 50%)"
+                  fillOpacity="0.05"
+                />
+                <line
+                  x1={decisiveX}
+                  x2={decisiveX}
+                  y1="0"
+                  y2={height}
+                  stroke="hsl(0, 75%, 50%)"
+                  strokeOpacity="0.5"
+                  strokeDasharray="4 5"
+                  strokeWidth="1.25"
+                />
               </>
             ) : null}
 
-            <path d={pathA} fill="none" stroke="currentColor" strokeWidth="2.5" className="text-foreground" />
-            <path d={pathB} fill="none" stroke="currentColor" strokeWidth="2.2" className="text-primary/85" strokeDasharray="6 3" />
+            {/* Fill areas (rendered behind lines) */}
+            <path d={fillB} fill="url(#gradB)" />
+            <path d={fillA} fill="url(#gradA)" />
 
+            {/* Speed traces */}
+            <path d={pathA} fill="none" stroke={COLOR_A} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            <path d={pathB} fill="none" stroke={COLOR_B} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+
+            {/* Cursor crosshair + dots */}
             {activePoint ? (
               <>
-                <line x1={activeX} x2={activeX} y1="0" y2={height} className="stroke-foreground/35" strokeWidth="1" />
+                <line
+                  x1={activeX}
+                  x2={activeX}
+                  y1="0"
+                  y2={height}
+                  stroke="hsl(0, 0%, 60%)"
+                  strokeOpacity="0.25"
+                  strokeWidth="1"
+                />
                 <circle
                   cx={activeX}
                   cy={height - (((activePoint.speed_a ?? minY) - minY) / (maxY - minY)) * height}
-                  r="4"
-                  className="fill-foreground"
+                  r="4.5"
+                  fill={COLOR_A}
+                  style={{ filter: 'drop-shadow(0 0 4px hsl(0, 75%, 50%))' }}
                 />
                 <circle
                   cx={activeX}
                   cy={height - (((activePoint.speed_b ?? minY) - minY) / (maxY - minY)) * height}
-                  r="4"
-                  className="fill-primary"
+                  r="4.5"
+                  fill={COLOR_B}
+                  style={{ filter: 'drop-shadow(0 0 4px hsl(186, 100%, 45%))' }}
                 />
               </>
             ) : null}
           </svg>
 
-          <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
+          {/* Distance axis */}
+          <div className="mt-1 flex items-center justify-between text-[10px] font-mono-data text-muted-foreground/60">
             <span>0m</span>
             <span>{maxDistance}m</span>
           </div>
         </div>
 
-        <div className="rounded-md border border-border/90 bg-secondary/30 p-3">
-          <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+        {/* Cursor readout */}
+        <div className="rounded-md border border-border/80 bg-secondary/25 p-3">
+          <div className="text-[9px] font-medium uppercase tracking-[0.22em] text-muted-foreground/70">
             Cursor Readout
           </div>
-          <div className="mt-2 space-y-2 text-sm leading-6 text-foreground">
+          <div className="mt-2.5 space-y-2.5 text-sm">
             <div>
-              <div className="text-xs text-muted-foreground">Distance</div>
-              <div className="font-medium">{activePoint?.distance_m ?? '—'}m</div>
-            </div>
-            <div>
-              <div className="text-xs text-muted-foreground">Speed split</div>
-              <div className="font-medium">{formatDelta(activePoint?.delta_speed, driverA, driverB)}</div>
-            </div>
-            <div className="grid grid-cols-2 gap-2 pt-1">
-              <div>
-                <div className="text-xs text-muted-foreground">{driverA}</div>
-                <div className="font-medium">{activePoint?.speed_a != null ? `${activePoint.speed_a.toFixed(1)} kph` : '—'}</div>
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground">{driverB}</div>
-                <div className="font-medium">{activePoint?.speed_b != null ? `${activePoint.speed_b.toFixed(1)} kph` : '—'}</div>
+              <div className="text-[10px] text-muted-foreground/60">Distance</div>
+              <div className="font-mono-data font-medium text-foreground">
+                {activePoint?.distance_m ?? '—'}m
               </div>
             </div>
+
+            <div>
+              <div className="text-[10px] text-muted-foreground/60">Speed split</div>
+              {typeof delta === 'object' ? (
+                <div className="font-medium" style={{ color: delta.color }}>
+                  {delta.leader} +{delta.kph} kph
+                </div>
+              ) : (
+                <div className="font-medium text-muted-foreground">Level</div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 border-t border-border/60 pt-2">
+              <div>
+                <div className="text-[10px]" style={{ color: `${COLOR_A}99` }}>{driverA}</div>
+                <div className="font-mono-data font-medium" style={{ color: COLOR_A }}>
+                  {activePoint?.speed_a != null ? `${activePoint.speed_a.toFixed(1)}` : '—'}
+                  <span className="text-[10px] font-normal text-muted-foreground/60"> kph</span>
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px]" style={{ color: `${COLOR_B}99` }}>{driverB}</div>
+                <div className="font-mono-data font-medium" style={{ color: COLOR_B }}>
+                  {activePoint?.speed_b != null ? `${activePoint.speed_b.toFixed(1)}` : '—'}
+                  <span className="text-[10px] font-normal text-muted-foreground/60"> kph</span>
+                </div>
+              </div>
+            </div>
+
             {decisiveCorner || decisiveDistance != null ? (
-              <div className="border-t border-border/80 pt-2">
-                <div className="text-xs text-muted-foreground">Decisive zone</div>
-                <div className="font-medium">
+              <div className="border-t border-border/60 pt-2">
+                <div className="text-[10px] text-muted-foreground/60">Decisive zone</div>
+                <div className="font-medium" style={{ color: 'hsl(var(--time))' }}>
                   {decisiveCorner ?? `${decisiveDistance}m`}
                 </div>
               </div>

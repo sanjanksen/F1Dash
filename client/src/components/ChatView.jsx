@@ -71,35 +71,50 @@ export default function ChatView({ messages, loading, onSend }) {
         {isIntro ? (
           <div className="mx-auto flex min-h-full w-full max-w-4xl flex-1 flex-col justify-center px-6 py-10 lg:px-10">
             <div className="max-w-2xl">
-              <div className="mb-4 text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
-                F1 race intelligence
+              <div className="mb-3 flex items-center gap-2">
+                <span className="h-px w-6 bg-primary/70" />
+                <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-primary/80">
+                  F1 race intelligence · {year}
+                </div>
               </div>
-              <h1 className="max-w-xl text-[2.55rem] font-semibold tracking-[-0.045em] text-foreground sm:text-[3.35rem]">
-                Ask for the weekend, not just the number.
+              <h1
+                className="max-w-xl text-foreground"
+                style={{
+                  fontFamily: 'var(--font-display)',
+                  fontSize: 'clamp(2.8rem, 6vw, 4.4rem)',
+                  fontWeight: 700,
+                  lineHeight: 1.05,
+                  letterSpacing: '-0.01em',
+                  textTransform: 'uppercase',
+                }}
+              >
+                Ask for the{' '}
+                <span style={{ color: 'hsl(var(--primary))' }}>weekend</span>,<br />
+                not just the number.
               </h1>
-              <p className="mt-4 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-[15px]">
-                Structured race stories, driver recaps, team summaries, qualifying progression,
-                safety car impact, and telemetry-led answers for the {year} season.
+              <p className="mt-5 max-w-lg text-sm leading-7 text-muted-foreground sm:text-[15px]">
+                Race stories, qualifying breakdowns, telemetry diffs, and driver comparisons—all from live {year} FastF1 data.
               </p>
             </div>
 
-            <div className="mt-9 grid gap-2.5 md:grid-cols-2">
-              {suggestions.map((suggestion) => (
+            <div className="mt-10 grid gap-2 md:grid-cols-2">
+              {suggestions.map((suggestion, i) => (
                 <button
                   key={suggestion.text}
                   type="button"
                   onClick={() => handleSend(suggestion.text)}
-                  className="group flex items-start justify-between rounded-md border border-border/90 bg-card px-4 py-3.5 text-left transition-colors hover:bg-secondary"
+                  className="suggestion-card group flex items-start justify-between rounded-md border border-border/90 bg-card px-4 py-3.5 text-left"
+                  style={{ animationDelay: `${i * 60}ms` }}
                 >
                   <div>
-                    <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                    <div className="text-[9px] font-medium uppercase tracking-[0.2em]" style={{ color: 'hsl(var(--primary) / 0.7)' }}>
                       {suggestion.label}
                     </div>
                     <div className="mt-1.5 text-sm leading-6 text-foreground">
                       {suggestion.text}
                     </div>
                   </div>
-                  <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                  <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary/70" />
                 </button>
               ))}
             </div>
@@ -107,12 +122,26 @@ export default function ChatView({ messages, loading, onSend }) {
         ) : (
           <div className="mx-auto flex w-full max-w-4xl flex-col gap-7 px-6 py-7 lg:px-10">
             {messages.map((message) => (
-              <div key={message.id} className="flex flex-col gap-2">
+              <div key={message.id} className="flex flex-col gap-2.5">
                 <div className="flex items-center gap-3">
-                  <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-                    {message.role === 'assistant' ? 'F1 Dash' : 'You'}
-                  </div>
-                  <div className="h-px flex-1 bg-border/80" />
+                  {message.role === 'assistant' ? (
+                    <>
+                      <div className="flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary/80" />
+                        <div className="text-[10px] font-medium uppercase tracking-[0.18em]" style={{ color: 'hsl(var(--primary) / 0.85)' }}>
+                          F1 Dash
+                        </div>
+                      </div>
+                      <div className="h-px flex-1 bg-gradient-to-r from-primary/20 to-transparent" />
+                    </>
+                  ) : (
+                    <>
+                      <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/70">
+                        You
+                      </div>
+                      <div className="h-px flex-1 bg-border/60" />
+                    </>
+                  )}
                 </div>
 
                 {message.role === 'assistant' && !message.isError ? (
@@ -132,20 +161,42 @@ export default function ChatView({ messages, loading, onSend }) {
             ))}
 
             {loading && (
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-2.5">
                 <div className="flex items-center gap-3">
-                  <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-                    F1 Dash
+                  <div className="flex items-center gap-1.5">
+                    <span className="h-1.5 w-1.5 rounded-full bg-primary/80" />
+                    <div className="text-[10px] font-medium uppercase tracking-[0.18em]" style={{ color: 'hsl(var(--primary) / 0.85)' }}>
+                      F1 Dash
+                    </div>
                   </div>
-                  <div className="h-px flex-1 bg-border/80" />
+                  <div className="h-px flex-1 bg-gradient-to-r from-primary/20 to-transparent" />
                 </div>
-                <div className="inline-flex w-fit items-center gap-2 rounded-md border border-border/90 bg-card px-4 py-3 text-sm text-muted-foreground">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-foreground/60" />
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-foreground/60 [animation-delay:120ms]" />
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-foreground/60 [animation-delay:240ms]" />
+                {/* Racing loader: three color-coded dots */}
+                <div className="inline-flex w-fit items-center gap-1.5 rounded-md border border-border/90 bg-card px-4 py-3">
+                  <span
+                    className="h-1.5 w-1.5 rounded-full"
+                    style={{
+                      background: 'hsl(var(--primary))',
+                      animation: 'race-dot 1.2s 0ms ease-in-out infinite',
+                    }}
+                  />
+                  <span
+                    className="h-1.5 w-1.5 rounded-full"
+                    style={{
+                      background: 'hsl(var(--time))',
+                      animation: 'race-dot 1.2s 200ms ease-in-out infinite',
+                    }}
+                  />
+                  <span
+                    className="h-1.5 w-1.5 rounded-full"
+                    style={{
+                      background: 'hsl(var(--speed))',
+                      animation: 'race-dot 1.2s 400ms ease-in-out infinite',
+                    }}
+                  />
                 </div>
                 {loadingTooLong && (
-                  <div className="text-xs text-muted-foreground">
+                  <div className="text-xs text-muted-foreground/70">
                     Fetching telemetry and session data — this may take a moment.
                   </div>
                 )}
@@ -156,14 +207,15 @@ export default function ChatView({ messages, loading, onSend }) {
         )}
       </div>
 
-      <div className="border-t border-border/90 bg-background">
+      <div className="border-t border-border/90 bg-background/95 backdrop-blur-sm">
         <div className="mx-auto w-full max-w-4xl px-6 py-3 lg:px-10">
           <form
             onSubmit={(event) => {
               event.preventDefault()
               handleSend(input)
             }}
-            className="rounded-md border border-border/90 bg-card p-1.5"
+            className="rounded-md border bg-card p-1.5 transition-shadow focus-within:shadow-[0_0_0_1px_hsl(var(--primary)/0.35),0_0_12px_hsl(var(--primary)/0.12)]"
+            style={{ borderColor: 'hsl(var(--border) / 0.9)' }}
           >
             <div className="flex items-center gap-2">
               <Input

@@ -110,7 +110,11 @@ function renderInline(text) {
     }
 
     if (/^\d+\.\d+s$/.test(part)) {
-      return <span key={index} className="font-medium text-foreground">{part}</span>
+      return (
+        <span key={index} className="font-mono-data font-medium" style={{ color: 'hsl(var(--time))' }}>
+          {part}
+        </span>
+      )
     }
 
     return <span key={index}>{part}</span>
@@ -157,7 +161,12 @@ export default function AnswerRenderer({ text, widgets = [] }) {
       ) : null}
 
       {widgets.map((widget, index) => (
-        <WidgetRenderer key={`${widget.type}-${index}`} widget={widget} />
+        <div
+          key={`${widget.type}-${index}`}
+          className={index === 0 ? 'widget-enter' : index === 1 ? 'widget-enter-1' : 'widget-enter-2'}
+        >
+          <WidgetRenderer widget={widget} />
+        </div>
       ))}
 
       {bodyBlocks.map((block, index) => {
