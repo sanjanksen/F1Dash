@@ -258,14 +258,16 @@ def test_try_deterministic_analysis_uses_analysis_and_writer_stages():
         "confidence": "high",
     }
 
-    with patch.object(chat, '_prepare_resolved_context', return_value=(resolved, None)), \
+    with patch('chat.resolve_context_from_history', return_value=None), \
+         patch('chat.resolve_query_context', return_value=resolved), \
          patch.object(chat, '_build_analysis_plan', return_value=plan), \
          patch.object(chat, '_retrieve_analysis_evidence', return_value=evidence), \
          patch.object(chat, '_run_anthropic_analysis', return_value=analysis) as analysis_mock, \
          patch.object(chat, '_run_anthropic_answer_writer', return_value="Leclerc beat Norris mainly through sector 1.") as writer_mock:
         result = chat._try_deterministic_analysis("How did Leclerc beat Lando in qualifying at Suzuka?", [], provider="anthropic")
 
-    assert "sector 1" in result.lower()
+    assert "sector 1" in result["response"].lower()
+    assert result["widgets"] == []
     analysis_mock.assert_called_once()
     writer_mock.assert_called_once()
 
@@ -312,3 +314,43 @@ def test_try_deterministic_analysis_falls_back_on_analysis_failure():
         result = chat._try_deterministic_analysis("How did Leclerc beat Lando in qualifying at Suzuka?", [], provider="anthropic")
 
     assert result is None
+
+
+def test_answer_f1_payload_includes_preloaded_race_story_widget():
+    import chat
+
+    resolved = {
+        "suggested_tool": "get_driver_race_story",
+        "round_number": 3,
+        "entity_name": "George Russell",
+        "routing_confidence": "high",
+        "has_explicit_context": True,
+        "used_previous_context": False,
+    }
+    preloaded = {
+        "tool": "get_driver_race_story",
+        "result": {
+            "driver": "George Russell",
+            "code": "RUS",
+            "team": "Mercedes",
+            "event": "Japanese Grand Prix",
+            "race": {"grid_position": 5, "finish_position": 4, "points": 12, "status": "Finished"},
+            "qualifying": {"position": 5},
+            "pit_stops": [],
+            "story_points": ["Gained one place from grid to flag."],
+            "radio_highlights": [],
+            "interval_summary": None,
+            "position_timeline_summary": None,
+            "rivalry_story": [],
+        },
+    }
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = _end_turn_response("Russell ran a tidy race to P4.")
+
+    chat = _load_chat_with_client(mock_client)
+    with patch.object(chat, '_try_deterministic_analysis', return_value=None), \
+         patch.object(chat, '_prepare_resolved_context', return_value=(resolved, preloaded)):
+        payload = chat.answer_f1_payload("How did Russell do at Suzuka?", [])
+
+    assert payload["response"] == "Russell ran a tidy race to P4."
+    assert payload["widgets"][0]["type"] == "race_story"

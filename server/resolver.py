@@ -47,6 +47,8 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
         scope = "energy"
     if "qualifying" in normalized or re.search(r"\bquali\b", normalized) or "pole lap" in normalized or "pole run" in normalized:
         scope = scope or "qualifying"
+    if re.search(r"\bradio\b", normalized) or "team radio" in normalized or "on the radio" in normalized:
+        scope = "radio"
 
     return session_type, scope
 
@@ -174,6 +176,8 @@ def _match_event(normalized: str) -> dict | None:
 
 
 def _suggest_tool(entity_type: str | None, scope: str | None) -> str | None:
+    if scope == "radio":
+        return "get_team_radio"
     if scope == "energy":
         return "analyze_energy_management"
     if entity_type == "driver":

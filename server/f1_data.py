@@ -1088,12 +1088,20 @@ def get_driver_race_story(round_number: int, driver_name: str) -> dict:
     interval_summary = None
     intervals = (openf1.get("race_intervals") or {}).get("intervals") or []
     if intervals:
-        latest = intervals[0]
-        interval_summary = {
-            "latest_gap_to_leader": latest.get("gap_to_leader"),
-            "latest_interval": latest.get("interval"),
-            "sample_count": len(intervals),
-        }
+        interval_summary = _summarize_openf1_intervals(intervals)
+        if interval_summary:
+            trend = interval_summary.get("trend")
+            min_gap = interval_summary.get("min_gap_to_leader_s")
+            if trend == "closing" and min_gap is not None:
+                summary_points.append(
+                    f"Race-shape signal: they closed to roughly +{min_gap:.1f}s to the leader at best."
+                )
+            elif trend == "dropping_back":
+                latest_gap = interval_summary.get("latest_gap_to_leader_s")
+                if latest_gap is not None:
+                    summary_points.append(
+                        f"Race-shape signal: their gap drifted out to about +{latest_gap:.1f}s to the leader."
+                    )
 
     position_timeline_summary = None
     positions = (openf1.get("race_positions") or {}).get("positions") or []
@@ -1226,11 +1234,24 @@ def get_race_report(round_number: int) -> dict:
     race = get_race_results(round_number)
     results = race.get("results", [])
     quali_results = qualifying.get("results", [])
+    openf1_intervals = {}
     safety_car = None
     try:
         safety_car = get_safety_car_periods(round_number, 'R')
     except Exception:
         safety_car = None
+    try:
+        from openf1 import get_intervals
+        for row in results[:5]:
+            code = row.get("code")
+            if not code:
+                continue
+            interval_payload = get_intervals(round_number, code, limit=20)
+            summary = _summarize_openf1_intervals(interval_payload.get("intervals") or [])
+            if summary:
+                openf1_intervals[code.upper()] = summary
+    except Exception:
+        openf1_intervals = {}
 
     by_code_quali = {row.get("code", "").upper(): row for row in quali_results}
     finishers = [row for row in results if row.get("position") is not None]
@@ -1264,6 +1285,18 @@ def get_race_report(round_number: int) -> dict:
         summary_points.append(
             "Podium: " + ", ".join(f"P{idx + 1} {row['driver']}" for idx, row in enumerate(podium)) + "."
         )
+        podium_interval_bits = []
+        for row in podium:
+            summary = openf1_intervals.get((row.get("code") or "").upper())
+            if not summary:
+                continue
+            latest_gap = summary.get("latest_gap_to_leader")
+            if row.get("position") == 1:
+                podium_interval_bits.append(f"{row['driver']} controlled the lead")
+            elif latest_gap:
+                podium_interval_bits.append(f"{row['driver']} finished at {latest_gap}")
+        if podium_interval_bits:
+            summary_points.append("Race gaps: " + ", ".join(podium_interval_bits) + ".")
     if biggest_gainer and biggest_gainer["positions_gained"] > 0:
         summary_points.append(
             f"Biggest gainer: {biggest_gainer['driver']} gained {biggest_gainer['positions_gained']} place(s)."
@@ -1295,6 +1328,7 @@ def get_race_report(round_number: int) -> dict:
         ],
         "fastest_lap": fastest_lap,
         "points_scoring_finishers": points_scoring,
+        "openf1_intervals": openf1_intervals,
         "dnfs": [
             {
                 "driver": row.get("driver"),
@@ -1978,6 +2012,80 @@ def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_
     }
 
 
+def _downsample_speed_trace(samples: list[dict], *, step: int = 200) -> list[dict]:
+    if not samples:
+        return []
+    reduced = []
+    last_distance = None
+    for sample in samples:
+        distance = sample.get("distance_m")
+        if distance is None:
+            continue
+        if last_distance is None or distance - last_distance >= step:
+            reduced.append({
+                "distance_m": distance,
+                "speed_a": sample.get("speed_a"),
+                "speed_b": sample.get("speed_b"),
+                "delta_speed": sample.get("delta_speed"),
+            })
+            last_distance = distance
+    if reduced and reduced[-1]["distance_m"] != samples[-1].get("distance_m"):
+        final = samples[-1]
+        reduced.append({
+            "distance_m": final.get("distance_m"),
+            "speed_a": final.get("speed_a"),
+            "speed_b": final.get("speed_b"),
+            "delta_speed": final.get("delta_speed"),
+        })
+    return reduced
+
+
+def _summarize_openf1_intervals(intervals: list[dict]) -> dict | None:
+    if not intervals:
+        return None
+
+    def _parse_gap(value):
+        if value is None:
+            return None
+        text = str(value).strip().replace("+", "")
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    ordered = list(reversed(intervals))
+    parsed = [_parse_gap(row.get("gap_to_leader")) for row in ordered]
+    valid = [value for value in parsed if value is not None]
+    if not valid:
+        latest = intervals[0]
+        return {
+            "latest_gap_to_leader": latest.get("gap_to_leader"),
+            "latest_interval": latest.get("interval"),
+            "sample_count": len(intervals),
+        }
+
+    earliest_gap = valid[0]
+    latest_gap = valid[-1]
+    min_gap = min(valid)
+    max_gap = max(valid)
+    trend = "stable"
+    if latest_gap < earliest_gap - 0.75:
+        trend = "closing"
+    elif latest_gap > earliest_gap + 0.75:
+        trend = "dropping_back"
+
+    return {
+        "latest_gap_to_leader": intervals[0].get("gap_to_leader"),
+        "latest_interval": intervals[0].get("interval"),
+        "sample_count": len(intervals),
+        "earliest_gap_to_leader_s": round(earliest_gap, 3),
+        "latest_gap_to_leader_s": round(latest_gap, 3),
+        "min_gap_to_leader_s": round(min_gap, 3),
+        "max_gap_to_leader_s": round(max_gap, 3),
+        "trend": trend,
+    }
+
+
 def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -> dict:
     """
     Backend-derived causal summary for a qualifying battle.
@@ -2167,6 +2275,20 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
         )
         strongest_evidence.append(zone_summary)
 
+    speed_trace = _downsample_speed_trace(comparison_samples, step=200) if comparison_samples else []
+    focus_window = []
+    if decisive_distance is not None and comparison_samples:
+        focus_window = [
+            {
+                "distance_m": sample.get("distance_m"),
+                "speed_a": sample.get("speed_a"),
+                "speed_b": sample.get("speed_b"),
+                "delta_speed": sample.get("delta_speed"),
+            }
+            for sample in comparison_samples
+            if abs((sample.get("distance_m") or 0) - decisive_distance) <= 500
+        ]
+
     return {
         "event": sector.get("event"),
         "session": "Q",
@@ -2191,6 +2313,8 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
         "energy_available": energy is not None,
         "caveats": caveats,
         "strongest_evidence": strongest_evidence,
+        "speed_trace": speed_trace,
+        "focus_window_trace": focus_window,
         "sector_comparison": sector,
         "energy_analysis": energy,
     }

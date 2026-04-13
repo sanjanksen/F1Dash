@@ -30,22 +30,22 @@ export default function Sidebar({ sessions, activeId, onSelect, onDelete }) {
   }
 
   return (
-    <aside className="hidden h-full w-[17rem] shrink-0 border-r border-border bg-background md:flex md:flex-col">
-      <div className="border-b border-border px-4 py-3">
-        <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+    <aside className="hidden h-full w-[16rem] shrink-0 border-r border-border/90 bg-background md:flex md:flex-col">
+      <div className="border-b border-border/90 px-4 py-3">
+        <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
           Chat Sessions
         </div>
       </div>
 
       <div className="app-scrollbar min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {sessions.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
+          <div className="rounded-md border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
             No chats yet.
           </div>
         ) : (
           groups.map((group) => (
             <div key={group.label} className="mb-5">
-              <div className="px-2 pb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+              <div className="px-2 pb-2 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
                 {group.label}
               </div>
               <div className="space-y-1">
@@ -62,10 +62,10 @@ export default function Sidebar({ sessions, activeId, onSelect, onDelete }) {
                       }
                     }}
                     className={cn(
-                      'group flex w-full cursor-pointer items-center gap-3 rounded-md border px-3 py-2.5 text-left transition-colors',
+                      'group flex w-full cursor-pointer items-center gap-3 rounded-md border px-3 py-2 text-left transition-colors',
                       session.id === activeId
-                        ? 'border-primary/35 bg-primary/8 text-foreground'
-                        : 'border-transparent text-muted-foreground hover:border-border hover:bg-card hover:text-foreground',
+                        ? 'border-border bg-card text-foreground'
+                        : 'border-transparent text-muted-foreground hover:border-border/80 hover:bg-card hover:text-foreground',
                     )}
                   >
                     <MessageSquareText className="h-4 w-4 shrink-0" />
@@ -74,7 +74,7 @@ export default function Sidebar({ sessions, activeId, onSelect, onDelete }) {
                     </span>
                     <button
                       type="button"
-                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-secondary hover:text-foreground"
+                      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-secondary hover:text-foreground"
                       onClick={(event) => {
                         event.stopPropagation()
                         onDelete(session.id)

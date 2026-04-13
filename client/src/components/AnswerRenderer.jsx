@@ -1,5 +1,7 @@
 import { Badge } from './ui/badge.jsx'
 import { Card, CardContent } from './ui/card.jsx'
+import QualifyingBattleWidget from './chat-widgets/QualifyingBattleWidget.jsx'
+import RaceStoryWidget from './chat-widgets/RaceStoryWidget.jsx'
 
 function splitBlocks(text) {
   return text
@@ -88,7 +90,7 @@ function renderInline(text) {
     }
 
     if (/^P\d+$/.test(part)) {
-      return <Badge key={index} variant="accent" className="mx-0.5 normal-case tracking-normal">{part}</Badge>
+      return <Badge key={index} variant="default" className="mx-0.5 normal-case tracking-normal">{part}</Badge>
     }
 
     if (/^(SC|VSC|Q[123]|FP[123])$/.test(part)) {
@@ -111,7 +113,7 @@ function List({ items, ordered = false }) {
   const Tag = ordered ? 'ol' : 'ul'
 
   return (
-    <Tag className={ordered ? 'space-y-2 pl-5 text-sm leading-7 text-foreground list-decimal' : 'space-y-2 pl-5 text-sm leading-7 text-foreground list-disc'}>
+    <Tag className={ordered ? 'space-y-1.5 pl-5 text-sm leading-7 text-foreground list-decimal' : 'space-y-1.5 pl-5 text-sm leading-7 text-foreground list-disc'}>
       {items.map((item, index) => (
         <li key={index}>{renderInline(item)}</li>
       ))}
@@ -119,16 +121,31 @@ function List({ items, ordered = false }) {
   )
 }
 
-export default function AnswerRenderer({ text }) {
+function WidgetRenderer({ widget }) {
+  if (!widget?.type) return null
+  if (widget.type === 'qualifying_battle') {
+    return <QualifyingBattleWidget widget={widget} />
+  }
+  if (widget.type === 'race_story') {
+    return <RaceStoryWidget widget={widget} />
+  }
+  return null
+}
+
+export default function AnswerRenderer({ text, widgets = [] }) {
   const blocks = splitBlocks(text).map(parseBlock).filter(Boolean)
-  if (blocks.length === 0) return null
+  if (blocks.length === 0 && widgets.length === 0) return null
 
   const [first, ...rest] = blocks
   const hasLead = first?.type === 'paragraph'
   const bodyBlocks = hasLead ? rest : blocks
 
   return (
-    <div className="max-w-3xl space-y-4">
+    <div className="max-w-3xl space-y-3.5">
+      {widgets.map((widget, index) => (
+        <WidgetRenderer key={`${widget.type}-${index}`} widget={widget} />
+      ))}
+
       {hasLead ? (
         <div className="text-[15px] leading-7 text-foreground">
           {renderInline(first.text)}
@@ -173,9 +190,9 @@ export default function AnswerRenderer({ text }) {
                 {block.rows.map((row, rowIndex) => (
                   <div
                     key={rowIndex}
-                    className="grid gap-1 border-b border-border pb-3 last:border-b-0 last:pb-0 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-4"
+                    className="grid gap-1 border-b border-border/80 pb-3 last:border-b-0 last:pb-0 sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-4"
                   >
-                    <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                    <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                       {row.label}
                     </div>
                     <div className="text-sm leading-7 text-foreground">{renderInline(row.value)}</div>
@@ -190,7 +207,7 @@ export default function AnswerRenderer({ text }) {
           return (
             <Card key={index}>
               <CardContent className="p-4">
-                <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                <div className="mb-3 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                   {block.title}
                 </div>
                 <List items={block.items} />

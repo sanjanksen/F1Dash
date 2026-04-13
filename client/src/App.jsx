@@ -40,10 +40,10 @@ export default function App() {
     const history = current.map((message) => ({ role: message.role, content: message.text }))
 
     try {
-      const { response } = await sendChatMessage(text, history)
+      const { response, widgets = [] } = await sendChatMessage(text, history)
       updateMessages(sessionId, [
         ...withUser,
-        { id: crypto.randomUUID(), role: 'assistant', text: response },
+        { id: crypto.randomUUID(), role: 'assistant', text: response, widgets },
       ])
     } catch (error) {
       updateMessages(sessionId, [
@@ -63,14 +63,14 @@ export default function App() {
   return (
     <div className="dark h-full bg-background text-foreground">
       <div className="flex h-full flex-col">
-        <header className="border-b border-border bg-background">
-          <div className="grid h-14 grid-cols-1 md:grid-cols-[17rem_minmax(0,1fr)]">
-            <div className="hidden items-center justify-between border-r border-border px-4 md:flex">
+        <header className="border-b border-border/90 bg-background">
+          <div className="grid h-13 grid-cols-1 md:grid-cols-[16rem_minmax(0,1fr)]">
+            <div className="hidden items-center justify-between border-r border-border/90 px-4 md:flex">
               <div className="min-w-0">
-                <div className="text-sm font-semibold tracking-[-0.02em] text-foreground">
-                  F1 <span className="text-primary">Dash</span>
+                <div className="text-sm font-semibold tracking-[-0.025em] text-foreground">
+                  F1 <span className="text-foreground">Dash</span>
                 </div>
-                <div className="mt-0.5 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+                <div className="mt-0.5 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
                   {year} race intelligence
                 </div>
               </div>
@@ -87,8 +87,8 @@ export default function App() {
             </div>
 
             <div className="flex items-center justify-between gap-3 px-4 md:px-5">
-              <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-                <Activity className="h-3.5 w-3.5 text-primary" />
+              <div className="flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
+                <Activity className="h-3.5 w-3.5 text-muted-foreground" />
                 <span className="truncate uppercase tracking-[0.12em]">FastF1-backed analysis</span>
               </div>
               <div className="flex items-center gap-2">

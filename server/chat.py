@@ -21,6 +21,86 @@ import datetime
 
 CURRENT_YEAR = datetime.date.today().year
 
+
+def _make_qualifying_battle_widget(result: dict) -> dict:
+    return {
+        "type": "qualifying_battle",
+        "title": f"{result.get('driver_a')} vs {result.get('driver_b')}",
+        "event": result.get("event"),
+        "session": result.get("compared_segment") or result.get("session"),
+        "driver_a": result.get("driver_a"),
+        "driver_b": result.get("driver_b"),
+        "faster_driver": result.get("faster_driver"),
+        "overall_gap_s": result.get("overall_gap_s"),
+        "decisive_sector": result.get("decisive_sector"),
+        "decisive_sector_gap_s": result.get("decisive_sector_gap_s"),
+        "decisive_corner": result.get("decisive_corner"),
+        "cause_type": result.get("cause_type"),
+        "cause_explanation": result.get("cause_explanation"),
+        "zone_summary": result.get("zone_summary"),
+        "energy_relevant": result.get("energy_relevant"),
+        "energy_reason": result.get("energy_reason"),
+        "speed_trace": result.get("speed_trace") or [],
+        "focus_window_trace": result.get("focus_window_trace") or [],
+    }
+
+
+def _make_race_story_widget(result: dict) -> dict:
+    race = result.get("race") or {}
+    qualifying = result.get("qualifying") or {}
+    radio = result.get("radio_highlights") or []
+    return {
+        "type": "race_story",
+        "title": result.get("driver"),
+        "subtitle": result.get("event"),
+        "driver_code": result.get("code"),
+        "team": result.get("team"),
+        "grid_position": race.get("grid_position") or qualifying.get("position"),
+        "finish_position": race.get("finish_position"),
+        "points": race.get("points"),
+        "status": race.get("status"),
+        "pit_stops": result.get("pit_stops") or [],
+        "story_points": result.get("story_points") or [],
+        "interval_summary": result.get("interval_summary"),
+        "position_timeline_summary": result.get("position_timeline_summary"),
+        "radio_highlights": radio[:3],
+        "rivalry_story": result.get("rivalry_story") or [],
+    }
+
+
+def _widgets_from_preloaded(preloaded: dict | None) -> list[dict]:
+    if not preloaded or "result" not in preloaded:
+        return []
+    tool = preloaded.get("tool")
+    result = preloaded.get("result") or {}
+    if tool == "get_driver_race_story":
+        return [_make_race_story_widget(result)]
+    if tool == "analyze_qualifying_battle":
+        return [_make_qualifying_battle_widget(result)]
+    return []
+
+
+def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[dict]:
+    widgets = []
+    for item in evidence:
+        if "result" not in item:
+            continue
+        if item.get("tool") == "analyze_qualifying_battle":
+            widgets.append(_make_qualifying_battle_widget(item["result"]))
+        elif item.get("tool") == "get_driver_race_story":
+            widgets.append(_make_race_story_widget(item["result"]))
+    if plan.get("focus") == "race":
+        deduped = []
+        seen = set()
+        for widget in widgets:
+            key = (widget.get("type"), widget.get("title"), widget.get("subtitle"))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(widget)
+        return deduped
+    return widgets
+
 SYSTEM_PROMPT = f"""You are an expert Formula 1 analyst with access to real-time {CURRENT_YEAR} season data through tools.
 
 Your job is to answer questions about the {CURRENT_YEAR} F1 season accurately, using the tools provided to fetch up-to-date data. Do not rely on your training knowledge for current standings, results, or points — always fetch the relevant data first.
@@ -61,9 +141,11 @@ Guidelines:
 - FastF1 does not provide direct ERS state of charge, harvest maps, or deployment maps. For energy questions, clearly distinguish measured telemetry from inference.
 
 Answer quality rules:
-- Stay focused on exactly what was asked. If asked about one driver, lead with that driver — don't pad the answer with other drivers' results unless directly relevant.
-- Use the conversation history to understand follow-up questions. "where did he finish" or "what about Lando" refers to the race or context already discussed.
-- Be concise. Lead with the key fact, then support with numbers."""
+- Lead with the number or the fact, not the interpretation. "Russell finished P3, 8 seconds off the lead" beats "Russell had a solid race finishing in the top 3".
+- Stay focused on exactly what was asked. If asked about one driver, lead with that driver — don't pad with other drivers unless directly relevant.
+- No filler phrases: no "it's worth noting", no "interestingly", no "this suggests that", no "it appears". State things directly.
+- Use the conversation history for follow-up questions. "where did he finish" or "what about Lando" refers to the race already discussed.
+- 3-5 sentences for most answers. Use bullets only when listing genuinely separate items."""
 
 ANALYSIS_SYSTEM_PROMPT = """You are the analysis stage for an F1 product.
 
@@ -71,10 +153,10 @@ You do not answer like a chatbot. You read retrieved evidence and produce a JSON
 
 Rules:
 - Focus on causal explanation, not data recap.
-- Lead with the direct answer to the user's question.
-- Identify the single biggest factor first.
+- direct_answer must state WHERE the gap came from (sector, corner, distance) and HOW MUCH (seconds, kph). Never just "Driver A was faster due to X" — always "Driver A took Xs in SectorN" or "gap opened at Xm where A carried Y kph more".
+- Identify the single biggest factor first. One cause, stated precisely.
 - Use only the strongest evidence from the supplied tool results.
-- If the evidence includes a zone summary, decisive corner, decisive distance, or speed differential, use those concrete details.
+- If the evidence includes a zone summary, decisive corner, decisive distance, or speed differential, those numbers must appear in direct_answer or primary_reason.
 - Do not restate every statistic you see.
 - Keep reasons non-overlapping. Do not repeat the same straight-line or energy point in different wording.
 - Do not claim setup, tyre condition, balance, confidence, or car behavior unless that is explicitly present in the supplied evidence.
@@ -83,7 +165,7 @@ Rules:
 - Output valid JSON only.
 
 Required JSON keys:
-- direct_answer: string
+- direct_answer: string — must include the WHERE and HOW MUCH
 - primary_reason: string
 - secondary_reasons: array of strings
 - strongest_evidence: array of strings
@@ -96,16 +178,14 @@ ANSWER_WRITER_SYSTEM_PROMPT = """You are the final answer writer for an F1 analy
 You will receive a structured analysis JSON object. Write the final user-facing answer.
 
 Rules:
-- Answer the exact question first, in plain English.
-- Sound like an analyst, not a database.
-- Do not dump every field from the evidence.
-- Use only the 2-4 strongest supporting points.
-- Prefer exact location and metric details when available, such as sector, corner, distance marker, and speed differential.
-- Avoid repetition: if two evidence points say the same thing, merge them into one cleaner explanation.
-- If energy is relevant, explain the 2026 mechanism once in plain English, then move back to the specific lap evidence.
-- Never invent unsupported causes like setup or car balance. If the analysis says telemetry is unavailable, keep the answer limited to the supported evidence.
-- Prefer a short verdict paragraph followed by short bullets only when they add clarity.
-- If confidence is limited, say so briefly.
+- Open with the WHERE and HOW MUCH. First sentence must name the sector or distance and the gap or speed delta. Never open with a vague conclusion like "Driver A was faster due to X" — open with "Driver A took 0.3s out of Driver B in Sector 2" or "The gap opened at 800m where A was carrying 15 kph more speed."
+- Then explain the cause in one sentence.
+- Use plain analyst language. No "this advantage allowed", no "pointing to", no "consistent with the notion that", no "provides a high-confidence explanation". State things directly.
+- Do not give a primer on 2026 energy rules. If energy is relevant, say what the telemetry showed and leave it at that.
+- No meta-commentary. Never say "high-confidence", "this evidence suggests", "it appears that". Just state what happened.
+- 3-5 sentences total for most answers. Add a bullet only if there are genuinely separate contributing factors worth separating.
+- Never invent unsupported causes. If telemetry is unavailable, say so in one short clause and move on.
+- If confidence is limited, one brief qualifier at the end is enough.
 """
 
 
@@ -136,6 +216,13 @@ def _suggested_tool_args(resolved: dict) -> dict | None:
     if tool == "get_safety_car_periods":
         session_type = resolved.get("session_type") or "R"
         return {"round_number": round_number, "session_type": session_type}
+
+    if tool == "get_team_radio":
+        session_type = resolved.get("session_type") or "R"
+        args = {"round_number": round_number, "session_type": session_type}
+        if resolved.get("entity_code"):
+            args["driver_ref"] = resolved["entity_code"]
+        return args
 
     if tool == "analyze_energy_management":
         session_type = resolved.get("session_type") or "Q"
@@ -344,7 +431,7 @@ def _build_answer_writer_prompt(question: str, analysis: dict) -> str:
     }, default=str)
 
 
-def _try_deterministic_analysis(question: str, history: list[dict], *, provider: str) -> str | None:
+def _try_deterministic_analysis(question: str, history: list[dict], *, provider: str) -> dict | None:
     previous_context = resolve_context_from_history(history)
     resolved = resolve_query_context(question, previous_context)
     plan = _build_analysis_plan(question, resolved)
@@ -358,10 +445,16 @@ def _try_deterministic_analysis(question: str, history: list[dict], *, provider:
     try:
         if provider == "openai":
             analysis = _run_openai_analysis(question, resolved, plan, evidence)
-            return _run_openai_answer_writer(question, analysis)
+            return {
+                "response": _run_openai_answer_writer(question, analysis),
+                "widgets": _widgets_from_analysis_evidence(plan, evidence),
+            }
 
         analysis = _run_anthropic_analysis(question, resolved, plan, evidence)
-        return _run_anthropic_answer_writer(question, analysis)
+        return {
+            "response": _run_anthropic_answer_writer(question, analysis),
+            "widgets": _widgets_from_analysis_evidence(plan, evidence),
+        }
     except Exception as exc:
         logger.warning("Deterministic analysis failed; falling back to normal tool loop. error=%s", exc)
         return None
@@ -404,7 +497,7 @@ def _run_anthropic_answer_writer(question: str, analysis: dict) -> str:
     return "".join(block.text for block in response.content if hasattr(block, "text")).strip()
 
 
-def _answer_anthropic(message: str, history: list[dict]) -> str:
+def _answer_anthropic(message: str, history: list[dict]) -> dict:
     client = _get_anthropic_client()
     resolved, preloaded = _prepare_resolved_context(message, history)
     request_system_prompt = _build_request_system_prompt(resolved, preloaded)
@@ -423,7 +516,10 @@ def _answer_anthropic(message: str, history: list[dict]) -> str:
         if response.stop_reason == "end_turn":
             for block in response.content:
                 if hasattr(block, "text"):
-                    return block.text
+                    return {
+                        "response": block.text,
+                        "widgets": _widgets_from_preloaded(preloaded),
+                    }
             raise ValueError("Claude returned end_turn but no text content block")
 
         if response.stop_reason == "tool_use":
@@ -493,7 +589,7 @@ def _run_openai_answer_writer(question: str, analysis: dict) -> str:
     return response.choices[0].message.content.strip()
 
 
-def _answer_openai(message: str, history: list[dict]) -> str:
+def _answer_openai(message: str, history: list[dict]) -> dict:
     client = _get_openai_client()
     resolved, preloaded = _prepare_resolved_context(message, history)
     request_system_prompt = _build_request_system_prompt(resolved, preloaded)
@@ -512,7 +608,10 @@ def _answer_openai(message: str, history: list[dict]) -> str:
         choice = response.choices[0]
 
         if choice.finish_reason == "stop":
-            return choice.message.content
+            return {
+                "response": choice.message.content,
+                "widgets": _widgets_from_preloaded(preloaded),
+            }
 
         if choice.finish_reason == "tool_calls":
             # Append the assistant turn (contains the tool_calls)
@@ -544,7 +643,7 @@ def _answer_openai(message: str, history: list[dict]) -> str:
 
 # ── Public interface ─────────────────────────────────────────────────────────
 
-def answer_f1_question(message: str, history: list[dict] | None = None) -> str:
+def answer_f1_payload(message: str, history: list[dict] | None = None) -> dict:
     """
     Answer an F1 question using the configured LLM provider.
 
@@ -559,3 +658,7 @@ def answer_f1_question(message: str, history: list[dict] | None = None) -> str:
     if provider == "openai":
         return _answer_openai(message, prior)
     return _answer_anthropic(message, prior)
+
+
+def answer_f1_question(message: str, history: list[dict] | None = None) -> str:
+    return answer_f1_payload(message, history)["response"]
