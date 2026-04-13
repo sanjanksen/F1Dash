@@ -193,12 +193,17 @@ def _match_event(normalized: str) -> dict | None:
     return best_match if best_score > 0 else None
 
 
-def _suggest_tool(entity_type: str | None, scope: str | None) -> str | None:
+def _suggest_tool(entity_type: str | None, scope: str | None, session_type: str | None = None) -> str | None:
     if scope == "radio":
         return "get_team_radio"
     if scope == "energy":
         return "analyze_energy_management"
+    # Note: scope == "standings" is handled inline in _base_context because
+    # it needs the raw normalized message to distinguish driver vs constructor.
     if entity_type == "driver":
+        # Qualifying questions must not route to race-only tools
+        if session_type == "Q":
+            return "get_driver_weekend_overview"
         if scope in ("overview", "strategy", "safety_car"):
             return "get_driver_race_story"
         return "get_driver_weekend_overview"
@@ -267,7 +272,7 @@ def _base_context(message: str) -> dict:
         "scope": scope,
         "analysis_mode": analysis_mode,
         "analysis_focus": analysis_focus,
-        "suggested_tool": _suggest_tool(entity_type, scope),
+        "suggested_tool": _suggest_tool(entity_type, scope, session_type),
         "has_reference_language": _has_reference_language(normalized),
         "has_explicit_context": any([
             entity_type is not None,
@@ -305,7 +310,7 @@ def _merge_with_previous_context(current: dict, previous: dict | None) -> dict:
             used_previous = True
 
     if merged.get("suggested_tool") is None:
-        merged["suggested_tool"] = _suggest_tool(merged.get("entity_type"), merged.get("scope"))
+        merged["suggested_tool"] = _suggest_tool(merged.get("entity_type"), merged.get("scope"), merged.get("session_type"))
 
     if current.get("analysis_mode") is None and previous.get("analysis_mode") is not None and merged.get("has_reference_language"):
         used_previous = True
