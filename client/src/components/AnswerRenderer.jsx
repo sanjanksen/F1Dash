@@ -65,6 +65,14 @@ function parseBlock(block) {
   }
 }
 
+const BADGE_BLOCKLIST = new Set([
+    'LAP', 'WET', 'DRY', 'FIA', 'ERS', 'PIT', 'CAR', 'RUN', 'END',
+    'ALL', 'THE', 'AND', 'FOR', 'BUT', 'NOT', 'NEW', 'OLD', 'TOP',
+    'ONE', 'TWO', 'SET', 'BOX', 'OFF', 'OWN', 'WAY', 'PUT', 'GET',
+    'GOT', 'HAD', 'HAS', 'WAS', 'CAN', 'DID', 'NOW', 'ITS', 'OUT',
+    'WIN', 'LED', 'GAP', 'AIR', 'KPH', 'MPH', 'KMH', 'TYR', 'AGO',
+])
+
 function renderInline(text) {
   const parts = text.split(
     /(\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|`[^`]+`|\bP\d+\b|\bQ[123]\b|\bSC\b|\bVSC\b|\bFP[123]\b|\b[A-Z]{3}\b|\b\d+\.\d+s\b)/g,
@@ -97,7 +105,7 @@ function renderInline(text) {
       return <Badge key={index} variant="default" className="mx-0.5 normal-case tracking-normal">{part}</Badge>
     }
 
-    if (/^[A-Z]{3}$/.test(part)) {
+    if (/^[A-Z]{3}$/.test(part) && !BADGE_BLOCKLIST.has(part)) {
       return <Badge key={index} variant="muted" className="mx-0.5 tracking-[0.08em]">{part}</Badge>
     }
 
