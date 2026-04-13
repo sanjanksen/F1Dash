@@ -110,7 +110,10 @@ def get_intervals(round_number: int, driver_ref: str | None = None, limit: int =
         params["driver_number"] = driver_number
 
     rows = _openf1_get("intervals", **params)
-    rows = sorted(rows, key=lambda row: row.get("date", ""), reverse=True)[:limit]
+    rows = sorted(rows, key=lambda row: row.get("date", ""))
+    if len(rows) > limit:
+        step = max(1, len(rows) // limit)
+        rows = rows[::step][:limit]
     return {
         "event": session.get("session_name"),
         "country": session.get("country_name"),
