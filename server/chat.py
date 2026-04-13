@@ -14,7 +14,7 @@ import openai as openai_sdk
 from tools import TOOL_DEFINITIONS, OPENAI_TOOL_DEFINITIONS, execute_tool
 from resolver import resolve_query_context, resolve_context_from_history
 
-MAX_TOOL_ROUNDS = 5
+MAX_TOOL_ROUNDS = 8
 logger = logging.getLogger(__name__)
 
 import datetime
