@@ -1,6 +1,15 @@
 import { Badge } from '../ui/badge.jsx'
 import { Card, CardContent } from '../ui/card.jsx'
 
+function formatRadioTime(dateStr) {
+  if (!dateStr) return 'Radio'
+  try {
+    return new Date(dateStr).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+  } catch {
+    return 'Radio'
+  }
+}
+
 function formatPitStop(stop) {
   const lap = stop?.pit_window_after_lap
   const compound = stop?.new_compound
@@ -93,7 +102,7 @@ export default function RaceStoryWidget({ widget }) {
               <ul className="mt-2 space-y-2 text-sm leading-6 text-foreground">
                 {widget.radio_highlights.map((message, index) => (
                   <li key={index} className="border-t border-border/80 pt-2 first:border-t-0 first:pt-0">
-                    <div className="text-xs text-muted-foreground">{message.date ?? 'Radio'}</div>
+                    <div className="text-xs text-muted-foreground">{formatRadioTime(message.date)}</div>
                     {message.recording_url ? (
                       <a href={message.recording_url} target="_blank" rel="noreferrer" className="text-foreground underline underline-offset-4">
                         Open clip
