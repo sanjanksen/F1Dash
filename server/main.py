@@ -12,9 +12,12 @@ from chat import answer_f1_payload, answer_f1_question
 
 app = FastAPI(title="F1 Dashboard API", version="1.0.0")
 
+_cors_env = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:4173")
+_cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:4173"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
