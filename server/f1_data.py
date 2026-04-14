@@ -8,6 +8,7 @@ import requests
 import pandas as pd
 from pandas.api.types import is_numeric_dtype
 from energy_2026 import get_energy_2026_knowledge
+from driver_styles import get_comparison_framing
 
 # Enable FastF1 disk cache
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), 'cache')
@@ -1983,7 +1984,8 @@ def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_
     strongest_min_speed = max(min_speed_candidates, key=lambda s: abs(s.get("delta_speed") or 0), default=None)
     strongest_traction = max(traction_candidates, key=lambda s: abs(s.get("delta_speed") or 0), default=None)
 
-    best = None
+    # Rank all found cause types by their peak speed delta magnitude
+    ranked = []
     for cause_type, sample in (
         ("straight_line_speed", strongest_speed),
         ("braking", strongest_braking),
@@ -1992,25 +1994,26 @@ def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_
     ):
         if sample is None:
             continue
-        magnitude = abs(sample.get("delta_speed") or 0)
-        if best is None or magnitude > best["magnitude"]:
-            best = {"cause_type": cause_type, "sample": sample, "magnitude": magnitude}
+        ranked.append({
+            "cause_type": cause_type,
+            "magnitude": abs(sample.get("delta_speed") or 0),
+            "distance_m": sample.get("distance_m"),
+            "delta_speed_kph": sample.get("delta_speed"),
+            "throttle_a": sample.get("throttle_a"),
+            "throttle_b": sample.get("throttle_b"),
+            "brake_a": sample.get("brake_a"),
+            "brake_b": sample.get("brake_b"),
+            "gear_a": sample.get("gear_a"),
+            "gear_b": sample.get("gear_b"),
+        })
 
-    if not best:
+    ranked.sort(key=lambda x: x["magnitude"], reverse=True)
+    top_causes = ranked[:3]
+
+    if not top_causes:
         return None
 
-    sample = best["sample"]
-    return {
-        "cause_type": best["cause_type"],
-        "distance_m": sample.get("distance_m"),
-        "delta_speed_kph": sample.get("delta_speed"),
-        "throttle_a": sample.get("throttle_a"),
-        "throttle_b": sample.get("throttle_b"),
-        "brake_a": sample.get("brake_a"),
-        "brake_b": sample.get("brake_b"),
-        "gear_a": sample.get("gear_a"),
-        "gear_b": sample.get("gear_b"),
-    }
+    return {"top_causes": top_causes}
 
 
 def _downsample_speed_trace(samples: list[dict], *, step: int = 200) -> list[dict]:
@@ -2180,6 +2183,16 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
     faster_driver = driver_a_code if overall_gap < 0 else driver_b_code
     slower_driver = driver_b_code if faster_driver == driver_a_code else driver_a_code
 
+    # Detect teammate comparison — same car so the analysis framing changes
+    _da_info = _resolve_driver(driver_a)
+    _db_info = _resolve_driver(driver_b)
+    is_teammate_comparison = (
+        _da_info is not None
+        and _db_info is not None
+        and bool(_da_info.get("team"))
+        and _da_info.get("team") == _db_info.get("team")
+    )
+
     sector_rows = [
         ("Sector 1", sector.get("sector1", {}).get("gap_s")),
         ("Sector 2", sector.get("sector2", {}).get("gap_s")),
@@ -2192,36 +2205,84 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
 
     comparison_samples = telemetry.get("comparison", []) if telemetry else []
     telemetry_summary = _summarize_telemetry_battle(comparison_samples, faster_driver, driver_a_code, driver_b_code)
-    strongest_sample = None
-    decisive_distance = telemetry_summary.get("distance_m") if telemetry_summary else None
+    top_causes = (telemetry_summary.get("top_causes") or []) if telemetry_summary else []
 
-    cause_type = "mixed"
-    cause_explanation = "The gap comes from a blend of smaller advantages rather than one clean mechanism."
+    # For teammates: straight-line speed reflects same PU/aero — deprioritise it so
+    # the analysis focuses on braking technique, minimum speed, and traction where
+    # driving style and setup divergence actually show up.
+    if is_teammate_comparison and len(top_causes) > 1:
+        technical = [tc for tc in top_causes if tc["cause_type"] != "straight_line_speed"]
+        speed_only = [tc for tc in top_causes if tc["cause_type"] == "straight_line_speed"]
+        top_causes = (technical + speed_only)[:3]
 
-    if telemetry_summary:
-        cause_type = telemetry_summary["cause_type"]
-        strongest_sample = telemetry_summary
-        if cause_type == "straight_line_speed":
-            cause_explanation = (
-                f"{faster_driver} is still carrying more speed at full throttle late in the straight, "
-                f"so the lap-time gain opens before the braking zone."
+    primary_cause = top_causes[0] if top_causes else None
+    decisive_distance = primary_cause["distance_m"] if primary_cause else None
+
+    earlier_braker = driver_b_code if faster_driver == driver_a_code else driver_a_code
+
+    def _cause_explanation(ct: str, dist: int | None) -> str:
+        loc = f" around {dist}m" if dist is not None else ""
+        if ct == "straight_line_speed":
+            if is_teammate_comparison:
+                return (
+                    f"There's a straight-line speed delta{loc} — on identical machinery this likely reflects "
+                    f"a setup trim difference (wing angle, cooling) or DRS timing rather than "
+                    f"a meaningful car performance gap."
+                )
+            return (
+                f"{faster_driver} carries more speed at full throttle late on the straight{loc}, "
+                f"opening the gap before the braking zone."
             )
-        elif cause_type == "braking":
-            earlier_braker = driver_b_code if faster_driver == driver_a_code else driver_a_code
-            cause_explanation = (
-                f"The main gain comes on corner entry: {earlier_braker} is already on the brake while "
+        if ct == "braking":
+            if is_teammate_comparison:
+                return (
+                    f"Braking technique is the key difference{loc}: {earlier_braker} commits to the brake "
+                    f"earlier while {faster_driver} trails the braking point and carries more entry speed. "
+                    f"On identical hardware this is a pure driving style call."
+                )
+            return (
+                f"Corner entry{loc}: {earlier_braker} is already on the brake while "
                 f"{faster_driver} is still carrying speed into the zone."
             )
-        elif cause_type == "minimum_speed":
-            cause_explanation = (
-                f"The gap looks like minimum-speed performance through the direction change, with {faster_driver} "
-                f"giving up less speed mid-corner and exiting with more momentum."
+        if ct == "minimum_speed":
+            if is_teammate_comparison:
+                return (
+                    f"Mid-corner minimum speed{loc}: {faster_driver} gives up less speed at the direction change. "
+                    f"Between teammates this points to setup divergence (downforce level, diff, ride height) "
+                    f"or a conscious style difference through the apex — not a car advantage."
+                )
+            return (
+                f"{faster_driver} gives up less speed mid-corner{loc} and exits with more momentum."
             )
-        elif cause_type == "traction":
-            cause_explanation = (
-                f"The gain looks like traction on exit: {faster_driver} gets back to speed earlier and carries "
-                f"that advantage down the following section."
+        if ct == "traction":
+            if is_teammate_comparison:
+                return (
+                    f"Traction on exit{loc}: {faster_driver} gets back to full throttle earlier. "
+                    f"Between teammates this usually comes down to throttle application technique "
+                    f"or diff settings — same rear end, different commitment level."
+                )
+            return (
+                f"Traction on exit{loc}: {faster_driver} gets back to full speed earlier "
+                f"and carries that advantage down the following straight."
             )
+        return "Mixed advantages — no single dominant mechanism."
+
+    cause_type = primary_cause["cause_type"] if primary_cause else "mixed"
+    cause_explanation = _cause_explanation(cause_type, primary_cause["distance_m"] if primary_cause else None)
+
+    # Build multi-cause explanation list (up to 3 mechanisms with their telemetry evidence)
+    cause_explanations = [
+        {
+            "cause_type": tc["cause_type"],
+            "rank": i + 1,
+            "distance_m": tc["distance_m"],
+            "delta_speed_kph": tc["delta_speed_kph"],
+            "gear_a": tc["gear_a"],
+            "gear_b": tc["gear_b"],
+            "explanation": _cause_explanation(tc["cause_type"], tc["distance_m"]),
+        }
+        for i, tc in enumerate(top_causes)
+    ]
 
     energy_relevant = False
     energy_reason = None
@@ -2251,9 +2312,11 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
     ]
     if decisive_sector_gap is not None:
         strongest_evidence.append(f"{decisive_sector} accounts for {abs(decisive_sector_gap):.3f}s of the gap.")
-    if strongest_sample and strongest_sample.get("delta_speed") is not None:
+    for i, tc in enumerate(top_causes):
+        prefix = "Primary" if i == 0 else ("Secondary" if i == 1 else "Tertiary")
         strongest_evidence.append(
-            f"Strongest speed separation is {abs(strongest_sample['delta_speed']):.1f} kph around {strongest_sample.get('distance_m')}m."
+            f"{prefix} mechanism — {tc['cause_type']}: "
+            f"{abs(tc['delta_speed_kph']):.1f} kph speed separation around {tc['distance_m']}m."
         )
     if energy_reason:
         strongest_evidence.append(energy_reason)
@@ -2261,7 +2324,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
         strongest_evidence.append(energy_context_explanation)
 
     zone_summary = None
-    if telemetry_summary:
+    if primary_cause:
         location_bits = []
         if decisive_sector:
             location_bits.append(decisive_sector)
@@ -2271,10 +2334,17 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
             location_bits.append(f"around {decisive_distance}m")
         zone_summary = (
             f"{' '.join(location_bits) if location_bits else 'Key zone'}: "
-            f"{faster_driver} has a {abs(telemetry_summary['delta_speed_kph']):.1f} kph speed advantage "
-            f"at roughly {telemetry_summary['distance_m']}m."
+            f"{faster_driver} has a {abs(primary_cause['delta_speed_kph']):.1f} kph speed advantage "
+            f"at roughly {primary_cause['distance_m']}m."
         )
         strongest_evidence.append(zone_summary)
+
+    # Driver style comparison — predicts where each driver's approach should gain/lose
+    style_comparison = None
+    try:
+        style_comparison = get_comparison_framing(driver_a_code, driver_b_code)
+    except Exception:
+        pass
 
     speed_trace = _downsample_speed_trace(comparison_samples, step=200) if comparison_samples else []
     focus_window = []
@@ -2304,8 +2374,15 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
         "decisive_distance_m": decisive_distance,
         "decisive_corner": decisive_corner,
         "zone_summary": zone_summary,
+        "is_teammate_comparison": is_teammate_comparison,
+        "teammate_context": (
+            f"Both drivers race for the same team ({_da_info.get('team')}), so differences "
+            f"reflect driving style, setup divergence (wing angles, ride height, diff settings), "
+            f"and technique — not car performance gaps."
+        ) if is_teammate_comparison and _da_info else None,
         "cause_type": cause_type,
         "cause_explanation": cause_explanation,
+        "cause_explanations": cause_explanations,
         "telemetry_summary": telemetry_summary,
         "energy_relevant": energy_relevant,
         "energy_reason": energy_reason,
@@ -2318,6 +2395,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
         "focus_window_trace": focus_window,
         "sector_comparison": sector,
         "energy_analysis": energy,
+        "style_comparison": style_comparison,
     }
 
 
@@ -2442,9 +2520,15 @@ def get_historical_circuit_performance(round_number: int,
 def get_safety_car_periods(round_number: int, session_type: str) -> dict:
     """
     Find all Safety Car and Virtual Safety Car periods in a session.
-    For each period: when it was deployed (lap number + session time), duration,
-    which drivers pitted just before it (got screwed — lost their gap),
-    and which drivers pitted during it (got a free stop).
+    For each period: deployment lap/time, duration, and three pit-stop impact categories:
+    - pitted_just_before: pitted in the final ~90s — SC immediately erased their gap
+    - pitted_before_extended: pitted within ~5 laps before SC — paid full pit cost but SC
+      neutralised the gap they were building on fresh tyres (the driver IS affected even
+      though they didn't pit under it — rivals who pitted during the SC got a free stop)
+    - pitted_during: free stop under SC
+    Also includes strategic_crossings: explicit list of who was disadvantaged vs who benefited,
+    with a plain-language note explaining the mechanism. Use this to answer questions about
+    drivers being affected by an SC even when they didn't pit under it.
     """
     session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
 
@@ -2494,10 +2578,17 @@ def get_safety_car_periods(round_number: int, session_type: str) -> dict:
         else:
             period['deployed_on_lap'] = None
 
-        # Pit stop impact — who pitted in the 90s before SC (got screwed) vs during (free stop)
+        # Pit stop impact — three categories:
+        # pitted_just_before:     final ~90s before SC — pitted in the closing approach, SC immediately erased gap
+        # pitted_before_extended: pitted within ~5 laps before SC — paid full pit cost, SC neutralised the gap
+        #                         they were building on fresh tyres (the "Piastri case")
+        # pitted_during:          pitted under SC — free stop, minimal track-position cost
+        IMMEDIATE_LOOK_BACK_S = 90
+        EXTENDED_LOOK_BACK_S = 450  # ~5 laps at ~90s/lap
+
         pitted_just_before = []
+        pitted_before_extended = []
         pitted_during = []
-        LOOK_BACK_S = 90
 
         for driver_code in laps['Driver'].unique():
             for _, lap in _pick_driver(laps, str(driver_code)).iterrows():
@@ -2505,23 +2596,57 @@ def get_safety_car_periods(round_number: int, session_type: str) -> dict:
                 if pit_in is None or pd.isna(pit_in):
                     continue
                 pit_s = pit_in.total_seconds()
+                pit_lap = int(lap['LapNumber']) if pd.notna(lap.get('LapNumber')) else None
+                entry = {
+                    'driver': str(lap['Driver']),
+                    'team': str(lap['Team']),
+                    'lap': pit_lap,
+                    'seconds_before_sc': round(start_s - pit_s, 1),
+                }
 
-                if (start_s - LOOK_BACK_S) <= pit_s < start_s:
-                    pitted_just_before.append({
-                        'driver': str(lap['Driver']),
-                        'team': str(lap['Team']),
-                        'lap': int(lap['LapNumber']),
-                        'seconds_before_sc': round(start_s - pit_s, 1),
-                    })
+                if (start_s - IMMEDIATE_LOOK_BACK_S) <= pit_s < start_s:
+                    pitted_just_before.append(entry)
+                elif (start_s - EXTENDED_LOOK_BACK_S) <= pit_s < (start_s - IMMEDIATE_LOOK_BACK_S):
+                    pitted_before_extended.append(entry)
                 elif end_s and start_s <= pit_s <= end_s:
                     pitted_during.append({
                         'driver': str(lap['Driver']),
                         'team': str(lap['Team']),
-                        'lap': int(lap['LapNumber']),
+                        'lap': pit_lap,
                     })
 
+        # Strategic crossings: drivers who paid full pit cost before SC but had rivals
+        # get a free stop during SC — SC erased the gap advantage the early-stopper was building.
+        # This is how a driver can be heavily affected by an SC even without pitting under it.
+        strategic_crossings = []
+        all_before = sorted(
+            pitted_just_before + pitted_before_extended,
+            key=lambda x: x['seconds_before_sc'],
+        )
+        for before in all_before:
+            for during in pitted_during:
+                if before['driver'] == during['driver']:
+                    continue
+                strategic_crossings.append({
+                    'driver_disadvantaged': before['driver'],
+                    'driver_advantaged': during['driver'],
+                    'disadvantaged_pitted_lap': before['lap'],
+                    'advantaged_pitted_lap': during['lap'],
+                    'seconds_before_sc': before['seconds_before_sc'],
+                    'note': (
+                        f"{during['driver']} pitted under the SC (free stop) while "
+                        f"{before['driver']} had already pitted {before['seconds_before_sc']:.0f}s before the SC "
+                        f"(lap {before['lap']}). "
+                        f"The SC neutralised the field gap {before['driver']} was building on fresh tyres, "
+                        f"allowing {during['driver']} to emerge with similar tyre age at almost no track-position cost. "
+                        f"{before['driver']} was directly affected by this SC even though they did not pit under it."
+                    ),
+                })
+
         period['pitted_just_before'] = sorted(pitted_just_before, key=lambda x: x['seconds_before_sc'])
+        period['pitted_before_extended'] = sorted(pitted_before_extended, key=lambda x: x['seconds_before_sc'])
         period['pitted_during'] = pitted_during
+        period['strategic_crossings'] = strategic_crossings
 
     return {
         'event': session.event['EventName'],

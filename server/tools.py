@@ -9,6 +9,7 @@ Tool taxonomy:
 The model should prefer composite recap tools for broad "tell me about..."
 questions and use primitives for focused follow-ups.
 """
+from driver_styles import get_driver_style, get_comparison_framing
 from f1_data import (
     analyze_qualifying_battle,
     analyze_race_pace_battle,
@@ -104,6 +105,22 @@ COMPOSITE_TOOL_DEFINITIONS = [
 
 
 PRIMITIVE_TOOL_DEFINITIONS = [
+    _tool(
+        "get_driver_style_profile",
+        (
+            "PRIMITIVE TOOL. Returns a driver's known driving style profile: corner approach (V-line vs U-line), "
+            "steering consistency, braking commitment, apex style, throttle application, car preference "
+            "(oversteer/understeer), and key telemetry signatures. Use this when analysing qualifying "
+            "differences, corner profiles, or any question about how a driver attacks a corner. "
+            "For a head-to-head comparison, call with both driver codes — the response includes a "
+            "style_prediction describing where each driver should theoretically gain or lose."
+        ),
+        {
+            "driver_a": {"type": "string", "description": "3-letter driver code (e.g. VER, NOR, PIA)."},
+            "driver_b": {"type": "string", "description": "Optional second driver code for a head-to-head style comparison."},
+        },
+        ["driver_a"],
+    ),
     _tool(
         "get_driver_standings",
         "PRIMITIVE TOOL. Current 2026 driver championship standings.",
@@ -615,4 +632,18 @@ def execute_tool(name: str, args: dict):
             args["team_name"],
             args["session_type"],
         )
+    if name == "get_driver_style_profile":
+        driver_b = args.get("driver_b")
+        if driver_b:
+            result = get_comparison_framing(args["driver_a"], driver_b)
+            if result is None:
+                # At least one driver unknown — return whatever we have
+                a = get_driver_style(args["driver_a"])
+                b = get_driver_style(driver_b)
+                return {"driver_a": a, "driver_b": b}
+            return result
+        profile = get_driver_style(args["driver_a"])
+        if profile is None:
+            raise ValueError(f"No style profile found for driver code {args['driver_a']!r}.")
+        return profile
     raise ValueError(f"Unknown tool: {name!r}")

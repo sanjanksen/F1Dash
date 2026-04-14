@@ -33,10 +33,10 @@ export default function ChatView({ messages, loading, onSend }) {
     : 'the latest race'
 
   const suggestions = [
-    { label: 'Race story', text: `How did Russell do at ${shortName}?` },
-    { label: 'Team weekend', text: `How did Ferrari do at ${shortName}?` },
-    { label: 'Race report', text: `Give me the ${shortName} race recap` },
-    { label: 'Qualifying', text: `Why was Norris faster than Leclerc in qualifying at ${shortName}?` },
+    { label: 'Race story', text: `How did Russell do at ${shortName}?`, color: 'hsl(var(--primary))' },
+    { label: 'Team weekend', text: `How did Ferrari do at ${shortName}?`, color: 'hsl(var(--speed))' },
+    { label: 'Race report', text: `Give me the ${shortName} race recap`, color: 'hsl(var(--time))' },
+    { label: 'Qualifying', text: `Why was Norris faster than Leclerc in qualifying at ${shortName}?`, color: 'hsl(var(--primary))' },
   ]
 
   useEffect(() => {
@@ -89,7 +89,16 @@ export default function ChatView({ messages, loading, onSend }) {
                 }}
               >
                 Ask for the{' '}
-                <span style={{ color: 'hsl(var(--primary))' }}>weekend</span>,<br />
+                <span
+                  style={{
+                    background: 'linear-gradient(120deg, hsl(var(--primary)) 0%, hsl(38 95% 62%) 90%)',
+                    WebkitBackgroundClip: 'text',
+                    WebkitTextFillColor: 'transparent',
+                    backgroundClip: 'text',
+                  }}
+                >
+                  weekend
+                </span>,<br />
                 not just the number.
               </h1>
               <p className="mt-5 max-w-lg text-sm leading-7 text-muted-foreground sm:text-[15px]">
@@ -103,11 +112,11 @@ export default function ChatView({ messages, loading, onSend }) {
                   key={suggestion.text}
                   type="button"
                   onClick={() => handleSend(suggestion.text)}
-                  className="suggestion-card group flex items-start justify-between rounded-md border border-border/90 bg-card px-4 py-3.5 text-left"
+                  className="suggestion-card group flex items-start justify-between rounded-md border border-border/70 bg-card px-4 py-3.5 text-left"
                   style={{ animationDelay: `${i * 60}ms` }}
                 >
                   <div>
-                    <div className="text-[9px] font-medium uppercase tracking-[0.2em]" style={{ color: 'hsl(var(--primary) / 0.7)' }}>
+                    <div className="text-[9px] font-medium uppercase tracking-[0.2em]" style={{ color: suggestion.color, opacity: 0.85 }}>
                       {suggestion.label}
                     </div>
                     <div className="mt-1.5 text-sm leading-6 text-foreground">
@@ -146,13 +155,14 @@ export default function ChatView({ messages, loading, onSend }) {
 
                 {message.role === 'assistant' && !message.isError ? (
                   <AnswerRenderer text={message.text} widgets={message.widgets || []} />
+                ) : message.isError ? (
+                  <div className="max-w-3xl rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-7 text-destructive-foreground">
+                    {message.text}
+                  </div>
                 ) : (
                   <div
-                    className={
-                      message.isError
-                        ? 'max-w-3xl rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-7 text-destructive-foreground'
-                        : 'max-w-3xl rounded-md border border-border/90 bg-card px-4 py-3 text-sm leading-7 text-foreground'
-                    }
+                    className="max-w-3xl self-end rounded-md border border-border/60 px-4 py-3 text-sm leading-7 text-foreground"
+                    style={{ background: 'linear-gradient(135deg, hsl(var(--secondary)) 0%, hsl(var(--card)) 100%)' }}
                   >
                     {message.text}
                   </div>
@@ -214,7 +224,7 @@ export default function ChatView({ messages, loading, onSend }) {
               event.preventDefault()
               handleSend(input)
             }}
-            className="rounded-md border bg-card p-1.5 transition-shadow focus-within:shadow-[0_0_0_1px_hsl(var(--primary)/0.35),0_0_12px_hsl(var(--primary)/0.12)]"
+            className="rounded-md border border-border/70 bg-card p-1.5 transition-all duration-200 focus-within:border-primary/40 focus-within:shadow-[0_0_0_1px_hsl(var(--primary)/0.4),0_0_28px_hsl(var(--primary)/0.2),0_0_56px_hsl(var(--primary)/0.08)]"
             style={{ borderColor: 'hsl(var(--border) / 0.9)' }}
           >
             <div className="flex items-center gap-2">

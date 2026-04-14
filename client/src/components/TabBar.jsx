@@ -17,8 +17,8 @@ export default function TabBar({ activeTab, onTabChange }) {
           className={cn(
             'rounded-sm px-3 py-1.5 text-xs font-medium tracking-[0.12em] uppercase transition-colors',
             activeTab === tab
-              ? 'bg-secondary text-foreground'
-              : 'text-muted-foreground hover:text-foreground',
+              ? 'bg-primary/15 text-primary ring-1 ring-inset ring-primary/25'
+              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
           )}
         >
           {tab}

@@ -63,8 +63,15 @@ export default function App() {
   return (
     <div className="dark h-full bg-background text-foreground">
       <div className="flex h-full flex-col">
-        {/* Thin red speed stripe at very top */}
-        <div className="h-[2px] w-full shrink-0 bg-gradient-to-r from-primary/80 via-primary to-primary/40" />
+        {/* Speed stripe — shimmer sweep */}
+        <div
+          className="h-[3px] w-full shrink-0"
+          style={{
+            background: 'linear-gradient(90deg, hsl(var(--primary)/0.4) 0%, hsl(var(--primary)) 25%, hsl(38 95% 62%) 50%, hsl(var(--primary)) 75%, hsl(var(--primary)/0.4) 100%)',
+            backgroundSize: '200% 100%',
+            animation: 'shimmer 5s linear infinite',
+          }}
+        />
         <header className="border-b border-border/90 bg-background/95 backdrop-blur-sm">
           <div className="grid h-12 grid-cols-1 md:grid-cols-[16rem_minmax(0,1fr)]">
             <div className="hidden items-center justify-between border-r border-border/90 px-4 md:flex">

@@ -12,7 +12,10 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('tools.py'\\).read\\(\\)\\); print\\('tools.py OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('chat.py'\\).read\\(\\)\\); print\\('chat.py OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('resolver.py'\\).read\\(\\)\\); print\\('resolver.py OK'\\)\")",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(npm run:*)",
+      "Bash(node_modules/.bin/vite build:*)",
+      "Bash(npm install:*)"
     ]
   }
 }

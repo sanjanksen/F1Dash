@@ -1,6 +1,115 @@
 import re
+import os
+import json
+import logging
+import time
+
+import anthropic
 
 from f1_data import get_circuits, get_drivers
+
+logger = logging.getLogger(__name__)
+
+# ── Canonical data cache ──────────────────────────────────────────────────────
+_drivers_cache: list[dict] = []
+_drivers_cache_time: float = 0.0
+_circuits_cache: list[dict] = []
+_DRIVER_CACHE_TTL = 300  # 5 minutes
+
+
+def _cached_drivers() -> list[dict]:
+    global _drivers_cache, _drivers_cache_time
+    if not _drivers_cache or time.time() - _drivers_cache_time > _DRIVER_CACHE_TTL:
+        try:
+            _drivers_cache = get_drivers()
+            _drivers_cache_time = time.time()
+        except Exception:
+            pass
+    return _drivers_cache
+
+
+def _cached_circuits() -> list[dict]:
+    global _circuits_cache
+    if not _circuits_cache:
+        try:
+            _circuits_cache = get_circuits()
+        except Exception:
+            pass
+    return _circuits_cache
+
+
+# ── Haiku entity extractor ────────────────────────────────────────────────────
+_haiku_client: anthropic.Anthropic | None = None
+
+
+def _get_haiku_client() -> anthropic.Anthropic:
+    global _haiku_client
+    if _haiku_client is None:
+        _haiku_client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    return _haiku_client
+
+
+def _extract_entities_llm(message: str) -> dict:
+    """
+    Use Claude Haiku to extract canonical F1 entities from a free-text message.
+    Handles nicknames, aliases, and paraphrasing that regex can't catch.
+    Returns: {drivers: [3-letter codes], team: str|None, event_country: str|None, round: int|None}
+    Falls back to empty dict on any error so regex path kicks in.
+    """
+    try:
+        drivers = _cached_drivers()
+        circuits = _cached_circuits()
+
+        driver_lines = "\n".join(
+            f"  {d.get('code', '')} | {d.get('full_name', '')} | {d.get('team', '')}"
+            for d in drivers
+        )
+        circuit_lines = "\n".join(
+            f"  {c.get('country', '')} | {c.get('event_name', '')} | {c.get('circuit_name', '')} | round {c.get('round', '')}"
+            for c in circuits
+        )
+
+        system = f"""You extract F1 entities from user messages. Return ONLY a JSON object, no prose.
+
+Current F1 drivers (code | full name | team):
+{driver_lines}
+
+Current circuits (country | event name | circuit name | round):
+{circuit_lines}
+
+From the user message extract:
+- "drivers": list of 3-letter driver codes for any drivers mentioned (by full name, surname, first name, nickname, pronoun, or possessive like "his"). Empty list if none clearly mentioned.
+- "team": exact team name from the driver list above if any team is mentioned by any name/nickname. null if none.
+- "event_country": exact country name from the circuit list if any event, circuit, or location is mentioned. null if none.
+- "round": round number as integer if explicitly mentioned. null if not.
+
+Common aliases to resolve:
+- Prancing Horse / Scuderia / SF-xx → Ferrari
+- Silver Arrows / the stars / Brackley → Mercedes
+- Milton Keynes / RB20 → Red Bull
+- Woking / papaya → McLaren
+- Max / Mad Max → VER  |  Lando → NOR  |  Checo / Sergio → PER
+- Carlos → SAI  |  George → RUS  |  Lewis → HAM  |  Charles → LEC
+- Oscar → PIA  |  Fernando / Alonso → ALO  |  Lance → STR
+
+Return JSON only: {{"drivers": [], "team": null, "event_country": null, "round": null}}"""
+
+        response = _get_haiku_client().messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=150,
+            system=system,
+            messages=[{"role": "user", "content": message}],
+        )
+        text = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
+        # Strip markdown fences if model wraps output
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```\s*$", "", text).strip()
+        result = json.loads(text)
+        logger.debug("LLM entity extraction for %r: %s", message[:60], result)
+        return result
+    except Exception:
+        logger.warning("LLM entity extraction failed, falling back to regex", exc_info=True)
+        return {}
 
 
 def _normalize(text: str) -> str:
@@ -68,7 +177,7 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
 def _match_drivers(normalized: str) -> list[dict]:
     matches = []
     seen = set()
-    for driver in get_drivers():
+    for driver in _cached_drivers():
         names = {
             _normalize(driver.get("full_name", "")),
             _normalize(driver.get("driver_id", "")),
@@ -98,7 +207,7 @@ def _match_driver(normalized: str) -> dict | None:
 
 
 def _match_team(normalized: str) -> str | None:
-    teams = sorted({driver.get("team", "") for driver in get_drivers() if driver.get("team")}, key=len, reverse=True)
+    teams = sorted({driver.get("team", "") for driver in _cached_drivers() if driver.get("team")}, key=len, reverse=True)
     aliases = {
         "merc": "Mercedes",
         "mercedes": "Mercedes",
@@ -170,7 +279,7 @@ def _match_event(normalized: str) -> dict | None:
             token_terms.add(token)
     search_terms.update(token_terms)
 
-    circuits = get_circuits()
+    circuits = _cached_circuits()
     best_match = None
     best_score = 0
     for circuit in circuits:
@@ -273,10 +382,42 @@ def _detect_analysis_mode(normalized: str, matched_drivers: list[dict], session_
 def _base_context(message: str) -> dict:
     normalized = _normalize(message)
     session_type, scope = _detect_session_scope(normalized)
-    matched_drivers = _match_drivers(normalized)
+
+    # ── LLM extraction — handles nicknames, aliases, and paraphrasing ─────────
+    llm = _extract_entities_llm(message)
+
+    # Resolve driver codes → driver dicts; fall back to regex if LLM found none
+    driver_by_code = {d.get("code", "").upper(): d for d in _cached_drivers() if d.get("code")}
+    matched_drivers: list[dict] = [
+        driver_by_code[code.upper()]
+        for code in (llm.get("drivers") or [])
+        if code.upper() in driver_by_code
+    ]
+    if not matched_drivers:
+        matched_drivers = _match_drivers(normalized)
+
+    # Team is only relevant when no single driver is identified
     driver = matched_drivers[0] if len(matched_drivers) == 1 else None
-    team = None if driver else _match_team(normalized)
-    event = _match_event(normalized)
+    if driver:
+        team = None
+    else:
+        team = llm.get("team") or _match_team(normalized)
+
+    # Resolve event: prefer LLM country/round match, fall back to regex
+    event: dict | None = None
+    llm_country = (llm.get("event_country") or "").strip()
+    llm_round = llm.get("round")
+    if llm_country or llm_round:
+        for c in _cached_circuits():
+            if llm_country and _normalize(c.get("country", "")) == _normalize(llm_country):
+                event = c
+                break
+            if llm_round and c.get("round") == llm_round:
+                event = c
+                break
+    if not event:
+        event = _match_event(normalized)
+
     analysis_mode, analysis_focus = _detect_analysis_mode(normalized, matched_drivers, session_type, team)
 
     entity_type = None

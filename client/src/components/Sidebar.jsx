@@ -61,11 +61,14 @@ export default function Sidebar({ sessions, activeId, onSelect, onDelete }) {
                         onSelect(session.id)
                       }
                     }}
+                    style={session.id === activeId
+                      ? { boxShadow: 'inset 2px 0 0 hsl(var(--primary) / 0.8)' }
+                      : undefined}
                     className={cn(
-                      'group flex w-full cursor-pointer items-center gap-3 rounded-md border px-3 py-2 text-left transition-colors',
+                      'group flex w-full cursor-pointer items-center gap-3 rounded-md border px-3 py-2 text-left transition-all duration-150',
                       session.id === activeId
-                        ? 'border-border bg-card text-foreground'
-                        : 'border-transparent text-muted-foreground hover:border-border/80 hover:bg-card hover:text-foreground',
+                        ? 'border-border/80 bg-card text-foreground'
+                        : 'border-transparent text-muted-foreground hover:border-border/60 hover:bg-card/80 hover:text-foreground',
                     )}
                   >
                     <MessageSquareText className="h-4 w-4 shrink-0" />
