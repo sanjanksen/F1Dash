@@ -1569,3 +1569,40 @@ def test_get_driver_strategy_position_start_end_are_first_and_last_lap():
     assert stint['position_end'] == 3, (
         f"position_end should be last lap position (3) not max (5), got {stint['position_end']}"
     )
+
+
+def test_get_race_report_lapped_drivers_not_in_dnfs():
+    """Drivers classified but lapped (+1 Lap etc.) must NOT appear in the dnfs list."""
+    mock_race = {
+        "race_name": "Bahrain Grand Prix",
+        "circuit": "Bahrain International Circuit",
+        "date": "2026-03-16",
+        "results": [
+            {"position": 1, "driver": "Max Verstappen", "code": "VER", "team": "Red Bull",
+             "points": 25.0, "fastest_lap": False, "status": "Finished"},
+            {"position": 2, "driver": "Lando Norris", "code": "NOR", "team": "McLaren",
+             "points": 18.0, "fastest_lap": False, "status": "Finished"},
+            {"position": 18, "driver": "Logan Sargeant", "code": "SAR", "team": "Williams",
+             "points": 0.0, "fastest_lap": False, "status": "+1 Lap"},
+            {"position": 19, "driver": "Zhou Guanyu", "code": "ZHO", "team": "Kick Sauber",
+             "points": 0.0, "fastest_lap": False, "status": "+2 Laps"},
+            {"position": None, "driver": "Kevin Magnussen", "code": "MAG", "team": "Haas",
+             "points": 0.0, "fastest_lap": False, "status": "Engine"},
+        ],
+    }
+    mock_quali = {
+        "race_name": "Bahrain Grand Prix",
+        "date": "2026-03-15",
+        "results": [],
+    }
+
+    with patch('f1_data.get_qualifying_results', return_value=mock_quali), \
+         patch('f1_data.get_race_results', return_value=mock_race), \
+         patch('f1_data.get_safety_car_periods', side_effect=Exception("no sc")), \
+         patch('openf1.get_intervals', side_effect=Exception("no openf1")):
+        result = f1_data.get_race_report(1)
+
+    dnf_codes = [row.get("code") for row in result["dnfs"]]
+    assert "SAR" not in dnf_codes, "+1 Lap classified finisher should not be in DNFs"
+    assert "ZHO" not in dnf_codes, "+2 Laps classified finisher should not be in DNFs"
+    assert "MAG" in dnf_codes, "Genuine retirement (Engine) should be in DNFs"

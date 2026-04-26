@@ -1311,7 +1311,12 @@ def get_race_report(round_number: int) -> dict:
     finishers.sort(key=lambda row: row["position"])
 
     podium = finishers[:3]
-    dnfs = [row for row in results if row.get("status") and row.get("status") != "Finished"]
+    dnfs = [
+        row for row in results
+        if row.get("status")
+        and row.get("status") != "Finished"
+        and not row.get("status", "").startswith("+")
+    ]
 
     movers = []
     for row in finishers:
