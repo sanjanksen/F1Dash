@@ -486,3 +486,75 @@ def test_run_anthropic_answer_writer_uses_current_model():
     assert "claude-opus-4-7" in source, (
         "chat.py must reference the current model claude-opus-4-7"
     )
+
+
+def test_build_analysis_plan_circuit_profile_without_round():
+    """Circuit profile plan is built from country alone — round_number is not required."""
+    import chat as chat_module
+    resolved = {
+        "analysis_mode": "circuit_profile",
+        "country": "United States",
+        "event_name": "Miami Grand Prix",
+        "round_number": None,
+    }
+    plan = chat_module._build_analysis_plan("tell me about the miami circuit", resolved)
+    assert plan is not None
+    assert plan["analysis_mode"] == "circuit_profile"
+    tool_names = [name for name, _ in plan["tool_calls"]]
+    assert "get_circuit_profile" in tool_names
+    profile_args = next(args for name, args in plan["tool_calls"] if name == "get_circuit_profile")
+    assert profile_args["country"] == "United States"
+    assert profile_args["event_name"] == "Miami Grand Prix"
+
+
+def test_make_circuit_profile_widget_maps_all_fields():
+    """_make_circuit_profile_widget passes through all profile fields with type=circuit_profile."""
+    import chat as chat_module
+    profile = {
+        "circuit_key": "miami",
+        "circuit_name": "Miami International Autodrome",
+        "character": "street_like_mixed",
+        "downforce_level": "medium_high",
+        "sector_1": {
+            "type": "medium_speed_hairpin",
+            "description": "T1-T6: hard braking into T1",
+            "style_advantage": "late_braker",
+            "energy_demand": "medium",
+        },
+        "sector_2": {
+            "type": "high_speed_straight_into_heavy_braking",
+            "description": "T7-T11: long back straight",
+            "style_advantage": "late_braker",
+            "energy_demand": "very_high",
+        },
+        "sector_3": {
+            "type": "stop_and_go",
+            "description": "T12-T19: marina hairpins",
+            "style_advantage": "v_line",
+            "energy_demand": "medium",
+        },
+        "energy_profile": {
+            "deployment_demand": "high",
+            "clipping_risk": "medium",
+            "harvesting_opportunity": "medium",
+            "key_straights": ["back_straight"],
+            "notes": "Good harvesting at marina hairpins.",
+        },
+        "style_verdict": {
+            "qualifier": "v_line_late_braker",
+            "explanation": "V-line late-brakers have the structural edge.",
+        },
+        "tyre_challenge": "Heavy rear wear from aggressive traction zones.",
+        "narrative": "Miami is a stop-and-go street-like circuit.",
+    }
+    widget = chat_module._make_circuit_profile_widget(profile)
+
+    assert widget["type"] == "circuit_profile"
+    assert widget["circuit_name"] == "Miami International Autodrome"
+    assert widget["circuit_key"] == "miami"
+    assert widget["character"] == "street_like_mixed"
+    assert widget["sector_1"]["style_advantage"] == "late_braker"
+    assert widget["sector_3"]["style_advantage"] == "v_line"
+    assert widget["energy_profile"]["deployment_demand"] == "high"
+    assert widget["style_verdict"]["qualifier"] == "v_line_late_braker"
+    assert widget["tyre_challenge"] == "Heavy rear wear from aggressive traction zones."

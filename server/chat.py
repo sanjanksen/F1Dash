@@ -135,6 +135,23 @@ def _make_corner_comparison_widget(result: dict) -> dict:
     }
 
 
+def _make_circuit_profile_widget(result: dict) -> dict:
+    return {
+        "type": "circuit_profile",
+        "circuit_name": result.get("circuit_name"),
+        "circuit_key": result.get("circuit_key"),
+        "character": result.get("character"),
+        "downforce_level": result.get("downforce_level"),
+        "sector_1": result.get("sector_1"),
+        "sector_2": result.get("sector_2"),
+        "sector_3": result.get("sector_3"),
+        "energy_profile": result.get("energy_profile"),
+        "style_verdict": result.get("style_verdict"),
+        "tyre_challenge": result.get("tyre_challenge"),
+        "narrative": result.get("narrative"),
+    }
+
+
 def _widgets_from_preloaded(preloaded: dict | None) -> list[dict]:
     if not preloaded or "result" not in preloaded:
         return []
@@ -177,6 +194,8 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
             widgets.append(_make_corner_comparison_widget(item["result"]))
         elif tool == "analyze_team_performance" and isinstance(item["result"].get("corner_comparison"), dict):
             widgets.append(_make_corner_comparison_widget(item["result"]["corner_comparison"]))
+        elif tool == "get_circuit_profile":
+            widgets.append(_make_circuit_profile_widget(item["result"]))
 
     deduped = []
     seen: set = set()
@@ -639,6 +658,27 @@ def _extract_json_object(text: str) -> dict:
 def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
     analysis_mode = resolved.get("analysis_mode")
     round_number = resolved.get("round_number")
+
+    # ── circuit_profile mode ─────────────────────────────────────────────────
+    if analysis_mode == "circuit_profile":
+        country = resolved.get("country")
+        event_name = resolved.get("event_name")
+        if not country:
+            return None
+        tool_calls = [
+            ("get_circuit_profile", {"country": country, "event_name": event_name or ""}),
+        ]
+        if round_number:
+            tool_calls.append(("get_historical_circuit_performance", {"round_number": round_number}))
+        return {
+            "analysis_mode": "circuit_profile",
+            "focus": "circuit",
+            "question": message,
+            "round_number": round_number,
+            "event_name": event_name,
+            "country": country,
+            "tool_calls": tool_calls,
+        }
 
     # ── team_performance mode ────────────────────────────────────────────────
     if analysis_mode == "team_performance":
