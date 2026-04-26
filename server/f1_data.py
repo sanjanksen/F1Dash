@@ -1315,6 +1315,7 @@ def get_race_report(round_number: int) -> dict:
         row for row in results
         if row.get("status")
         and row.get("status") != "Finished"
+        # "+N Lap(s)" = classified finisher who was lapped, not a retirement
         and not row.get("status", "").startswith("+")
     ]
 
