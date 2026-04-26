@@ -811,8 +811,8 @@ def get_driver_strategy(round_number: int, session_type: str, driver_code: str |
                     "best_lap_time": _fmt_td(min((lap.get('LapTime') for lap in laps if lap.get('LapTime') is not None and not pd.isna(lap.get('LapTime'))), default=None)),
                     "tyre_life_start": _normalize_position(first.get('TyreLife')),
                     "tyre_life_end": _normalize_position(last.get('TyreLife')),
-                    "position_start": min(positions) if positions else None,
-                    "position_end": max(positions) if positions else None,
+                    "position_start": positions[0] if positions else None,
+                    "position_end": positions[-1] if positions else None,
                     "ended_with_pit_in": pd.notna(last.get('PitInTime')),
                     "started_from_pit_out": pd.notna(first.get('PitOutTime')),
                 })

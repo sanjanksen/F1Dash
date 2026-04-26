@@ -1522,3 +1522,50 @@ def test_summarize_openf1_intervals_no_valid_gaps_uses_last_entry():
     assert result["latest_gap_to_leader"] == "LAP2", (
         "When all gaps are non-numeric, latest_gap_to_leader should be from the LAST entry (most recent)"
     )
+
+
+def test_get_driver_strategy_position_start_end_are_first_and_last_lap():
+    """position_start must be the position on lap 1 of the stint, position_end on the last lap."""
+    import pandas as pd
+
+    mock_session = MagicMock()
+    mock_session.event = {"EventName": "Bahrain Grand Prix"}
+    mock_session.drivers = ["VER"]
+
+    # Driver starts P5, improves to P2 mid-stint, ends P3
+    # min=2 (best), max=5 (worst), first=5, last=3
+    lap_data = {
+        'LapNumber': [1, 2, 3],
+        'Stint': [1, 1, 1],
+        'Position': [5.0, 2.0, 3.0],
+        'LapTime': [pd.Timedelta(seconds=90), pd.Timedelta(seconds=89), pd.Timedelta(seconds=91)],
+        'Compound': ['MEDIUM', 'MEDIUM', 'MEDIUM'],
+        'FreshTyre': [True, True, True],
+        'TyreLife': [1.0, 2.0, 3.0],
+        'PitInTime': [pd.NaT, pd.NaT, pd.NaT],
+        'PitOutTime': [pd.NaT, pd.NaT, pd.NaT],
+    }
+    fake_laps = pd.DataFrame(lap_data)
+
+    mock_session.laps = MagicMock()
+    mock_session.laps.pick_drivers = lambda codes: fake_laps
+    mock_session.results = pd.DataFrame({
+        'Abbreviation': ['VER'],
+        'DriverNumber': ['33'],
+        'FullName': ['Max Verstappen'],
+        'TeamName': ['Red Bull'],
+        'GridPosition': [1.0],
+        'Position': [3.0],
+    })
+
+    with patch('f1_data._load_session', return_value=mock_session), \
+         patch('f1_data._validate_session_availability', return_value=None):
+        result = f1_data.get_driver_strategy(1, 'R', 'VER')
+
+    stint = result['drivers'][0]['stints'][0]
+    assert stint['position_start'] == 5, (
+        f"position_start should be first lap position (5) not min (2), got {stint['position_start']}"
+    )
+    assert stint['position_end'] == 3, (
+        f"position_end should be last lap position (3) not max (5), got {stint['position_end']}"
+    )
