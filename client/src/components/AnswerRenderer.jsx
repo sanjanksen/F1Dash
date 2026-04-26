@@ -1,7 +1,9 @@
 import { Badge } from './ui/badge.jsx'
-import { Card, CardContent } from './ui/card.jsx'
 import QualifyingBattleWidget from './chat-widgets/QualifyingBattleWidget.jsx'
 import RaceStoryWidget from './chat-widgets/RaceStoryWidget.jsx'
+import RacePaceBattleWidget from './chat-widgets/RacePaceBattleWidget.jsx'
+import CornerComparisonWidget from './chat-widgets/CornerComparisonWidget.jsx'
+import CircuitProfileWidget from './chat-widgets/CircuitProfileWidget.jsx'
 
 function splitBlocks(text) {
   return text
@@ -125,7 +127,7 @@ function List({ items, ordered = false }) {
   const Tag = ordered ? 'ol' : 'ul'
 
   return (
-    <Tag className={ordered ? 'space-y-1.5 pl-5 text-sm leading-7 text-foreground list-decimal' : 'space-y-1.5 pl-5 text-sm leading-7 text-foreground list-disc'}>
+    <Tag className={ordered ? 'space-y-2 pl-5 text-[15px] leading-7 text-foreground list-decimal' : 'space-y-2 pl-5 text-[15px] leading-7 text-foreground list-disc'}>
       {items.map((item, index) => (
         <li key={index}>{renderInline(item)}</li>
       ))}
@@ -141,6 +143,15 @@ function WidgetRenderer({ widget }) {
   if (widget.type === 'race_story') {
     return <RaceStoryWidget widget={widget} />
   }
+  if (widget.type === 'race_pace_battle') {
+    return <RacePaceBattleWidget widget={widget} />
+  }
+  if (widget.type === 'corner_comparison') {
+    return <CornerComparisonWidget widget={widget} />
+  }
+  if (widget.type === 'circuit_profile') {
+    return <CircuitProfileWidget widget={widget} />
+  }
   return null
 }
 
@@ -153,11 +164,11 @@ export default function AnswerRenderer({ text, widgets = [] }) {
   const bodyBlocks = hasLead ? rest : blocks
 
   return (
-    <div className="max-w-3xl space-y-3.5">
+    <div className="max-w-3xl space-y-5">
       {hasLead ? (
-        <div className="text-[15px] leading-7 text-foreground">
+        <p className="text-[15px] leading-7 text-foreground">
           {renderInline(first.text)}
-        </div>
+        </p>
       ) : null}
 
       {widgets.map((widget, index) => (
@@ -172,64 +183,42 @@ export default function AnswerRenderer({ text, widgets = [] }) {
       {bodyBlocks.map((block, index) => {
         if (block.type === 'paragraph') {
           return (
-            <Card key={index}>
-              <CardContent className="p-4 text-sm leading-7 text-foreground">
-                {renderInline(block.text)}
-              </CardContent>
-            </Card>
+            <p key={index} className="text-[15px] leading-7 text-foreground">
+              {renderInline(block.text)}
+            </p>
           )
         }
 
         if (block.type === 'bullet-list') {
-          return (
-            <Card key={index}>
-              <CardContent className="p-4">
-                <List items={block.items} />
-              </CardContent>
-            </Card>
-          )
+          return <List key={index} items={block.items} />
         }
 
         if (block.type === 'number-list') {
-          return (
-            <Card key={index}>
-              <CardContent className="p-4">
-                <List items={block.items} ordered />
-              </CardContent>
-            </Card>
-          )
+          return <List key={index} items={block.items} ordered />
         }
 
         if (block.type === 'kv-grid') {
           return (
-            <Card key={index}>
-              <CardContent className="grid gap-3 p-4">
-                {block.rows.map((row, rowIndex) => (
-                  <div
-                    key={rowIndex}
-                    className="grid gap-1 border-b border-border/80 pb-3 last:border-b-0 last:pb-0 sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-4"
-                  >
-                    <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                      {row.label}
-                    </div>
-                    <div className="text-sm leading-7 text-foreground">{renderInline(row.value)}</div>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
+            <dl key={index} className="space-y-0 border-y border-border/70 py-1">
+              {block.rows.map((row, rowIndex) => (
+                <div
+                  key={rowIndex}
+                  className="grid gap-1 border-b border-border/60 py-3 last:border-b-0 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-4"
+                >
+                  <dt className="text-sm font-medium text-muted-foreground">{row.label}</dt>
+                  <dd className="text-[15px] leading-7 text-foreground">{renderInline(row.value)}</dd>
+                </div>
+              ))}
+            </dl>
           )
         }
 
         if (block.type === 'section-list') {
           return (
-            <Card key={index}>
-              <CardContent className="p-4">
-                <div className="mb-3 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                  {block.title}
-                </div>
-                <List items={block.items} />
-              </CardContent>
-            </Card>
+            <section key={index} className="space-y-3">
+              <h3 className="text-[15px] font-semibold text-foreground">{block.title}</h3>
+              <List items={block.items} />
+            </section>
           )
         }
 
