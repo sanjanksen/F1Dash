@@ -674,6 +674,8 @@ def _make_tel_df(n_points=6, circuit_length_m=500,
         'Brake': [i == 0 for i in range(n_points)],
         'nGear': [4 + min(i, 4) for i in range(n_points)],
         'DRS': [12 if i > 3 else 0 for i in range(n_points)],
+        'X': [float(i * 10) for i in range(n_points)],
+        'Y': [float((i % 3) * 8) for i in range(n_points)],
     })
 
 
@@ -718,6 +720,8 @@ def test_get_telemetry_comparison():
     assert 'brake_a' in first
     assert 'drs_a' in first
     assert 'gear_a' in first
+    assert first['x'] == 0.0
+    assert first['y'] == 0.0
 
 
 def test_get_telemetry_comparison_driver_not_found():
@@ -737,12 +741,92 @@ def test_get_telemetry_comparison_driver_not_found():
             f1_data.get_telemetry_comparison(8, 'Q', 'NOR', 'ZZZ')
 
 
+def test_telemetry_battle_does_not_classify_full_throttle_delta_as_traction():
+    samples = [
+        {
+            "distance_m": 600,
+            "delta_speed": 25.0,
+            "speed_a": 280.0,
+            "speed_b": 255.0,
+            "throttle_a": 100.0,
+            "throttle_b": 100.0,
+            "brake_a": False,
+            "brake_b": False,
+            "gear_a": 8,
+            "gear_b": 8,
+        },
+        {
+            "distance_m": 900,
+            "delta_speed": 8.0,
+            "speed_a": 190.0,
+            "speed_b": 182.0,
+            "throttle_a": 86.0,
+            "throttle_b": 50.0,
+            "brake_a": False,
+            "brake_b": False,
+            "gear_a": 5,
+            "gear_b": 5,
+        },
+    ]
+
+    result = f1_data._summarize_telemetry_battle(samples, "ANT", "ANT", "RUS")
+
+    assert result["top_causes"][0]["cause_type"] == "straight_line_speed"
+    assert result["top_causes"][0]["distance_m"] == 600
+    assert any(cause["cause_type"] == "traction" and cause["distance_m"] == 900 for cause in result["top_causes"])
+
+
+def test_comparative_fade_requires_late_clip_window():
+    samples = [
+        {
+            "distance_m": 600,
+            "delta_speed": 25.0,
+            "speed_a": 280.0,
+            "speed_b": 255.0,
+            "throttle_a": 100.0,
+            "throttle_b": 100.0,
+            "brake_a": False,
+            "brake_b": False,
+        },
+        {
+            "distance_m": 3700,
+            "delta_speed": 11.0,
+            "speed_a": 280.8,
+            "speed_b": 269.8,
+            "throttle_a": 100.0,
+            "throttle_b": 100.0,
+            "brake_a": False,
+            "brake_b": False,
+        },
+    ]
+
+    result = f1_data._strongest_comparative_full_throttle_fade(
+        samples,
+        clip_a=[],
+        clip_b=[{"start_distance_m": 3300, "end_distance_m": 3800}],
+        driver_a="ANT",
+        driver_b="RUS",
+    )
+
+    assert result["distance_m"] == 3700
+    assert result["faded_driver"] == "RUS"
+    assert f1_data._strongest_comparative_full_throttle_fade(
+        samples,
+        clip_a=[],
+        clip_b=[],
+        driver_a="ANT",
+        driver_b="RUS",
+    ) is None
+
+
 def test_analyze_qualifying_battle_derives_causal_summary():
     import f1_data
     telemetry = {
         "comparison": [
             {
                 "distance_m": 300,
+                "x": 0.0,
+                "y": 0.0,
                 "delta_speed": 4.0,
                 "throttle_a": 100.0,
                 "throttle_b": 100.0,
@@ -753,6 +837,8 @@ def test_analyze_qualifying_battle_derives_causal_summary():
             },
             {
                 "distance_m": 1400,
+                "x": 100.0,
+                "y": 60.0,
                 "delta_speed": 12.0,
                 "throttle_a": 100.0,
                 "throttle_b": 100.0,
@@ -804,6 +890,10 @@ def test_analyze_qualifying_battle_derives_causal_summary():
     assert "2026 rules" in result["energy_context_explanation"]
     assert result["telemetry_summary"]["distance_m"] == 1400
     assert "12.0 kph" in result["zone_summary"]
+    assert result["track_map"] == [
+        {"distance_m": 300, "x": 0.0, "y": 0.0},
+        {"distance_m": 1400, "x": 100.0, "y": 60.0},
+    ]
 
 
 def test_analyze_qualifying_battle_gracefully_handles_missing_telemetry():
@@ -1366,3 +1456,69 @@ def test_analyze_team_performance_uses_degradation_event_when_corner_comparison_
     assert result['corner_error'] == 'telemetry unavailable'
     assert result['degradation_a']['driver'] == 'LEC'
     assert result['degradation_b']['driver'] == 'HAM'
+
+
+# ─── _summarize_openf1_intervals tests ──────────────────────
+
+def test_summarize_openf1_intervals_dropping_back():
+    """Driver starts close to leader then falls back — trend must be dropping_back."""
+    # Intervals arrive in ascending chronological order (as get_intervals delivers them)
+    intervals = [
+        {"date": "2026-03-16T14:01:00", "gap_to_leader": "0.5",  "interval": "0.5"},  # earliest
+        {"date": "2026-03-16T14:15:00", "gap_to_leader": "+4.0", "interval": "3.5"},
+        {"date": "2026-03-16T14:30:00", "gap_to_leader": "+9.0", "interval": "5.0"},  # most recent
+    ]
+    result = f1_data._summarize_openf1_intervals(intervals)
+
+    assert result["trend"] == "dropping_back", (
+        f"Expected 'dropping_back' (gap grew from 0.5 to 9.0) but got {result['trend']!r}"
+    )
+    assert result["latest_gap_to_leader"] == "+9.0", (
+        f"Expected '+9.0' (last entry) but got {result['latest_gap_to_leader']!r}"
+    )
+    assert result["latest_gap_to_leader_s"] == pytest.approx(9.0, abs=0.01)
+    assert result["earliest_gap_to_leader_s"] == pytest.approx(0.5, abs=0.01)
+
+
+def test_summarize_openf1_intervals_closing():
+    """Driver starts far back then closes — trend must be closing."""
+    intervals = [
+        {"date": "2026-03-16T14:01:00", "gap_to_leader": "+10.0", "interval": "5.0"},  # earliest
+        {"date": "2026-03-16T14:15:00", "gap_to_leader": "+6.0",  "interval": "3.0"},
+        {"date": "2026-03-16T14:30:00", "gap_to_leader": "+2.0",  "interval": "1.5"},  # most recent
+    ]
+    result = f1_data._summarize_openf1_intervals(intervals)
+
+    assert result["trend"] == "closing", (
+        f"Expected 'closing' (gap shrank from 10.0 to 2.0) but got {result['trend']!r}"
+    )
+    assert result["latest_gap_to_leader"] == "+2.0"
+    assert result["latest_gap_to_leader_s"] == pytest.approx(2.0, abs=0.01)
+    assert result["earliest_gap_to_leader_s"] == pytest.approx(10.0, abs=0.01)
+
+
+def test_summarize_openf1_intervals_stable():
+    """Gap stays within 0.75s — trend must be stable."""
+    intervals = [
+        {"date": "2026-03-16T14:01:00", "gap_to_leader": "+3.0", "interval": "2.0"},
+        {"date": "2026-03-16T14:15:00", "gap_to_leader": "+3.4", "interval": "2.4"},
+        {"date": "2026-03-16T14:30:00", "gap_to_leader": "+3.2", "interval": "2.2"},
+    ]
+    result = f1_data._summarize_openf1_intervals(intervals)
+    assert result["trend"] == "stable"
+
+
+def test_summarize_openf1_intervals_empty_returns_none():
+    assert f1_data._summarize_openf1_intervals([]) is None
+
+
+def test_summarize_openf1_intervals_no_valid_gaps_uses_last_entry():
+    """When no numeric gaps exist, latest_gap_to_leader must come from the last (most recent) entry."""
+    intervals = [
+        {"date": "2026-03-16T14:01:00", "gap_to_leader": "LAP",  "interval": None},  # earliest
+        {"date": "2026-03-16T14:30:00", "gap_to_leader": "LAP2", "interval": None},  # most recent
+    ]
+    result = f1_data._summarize_openf1_intervals(intervals)
+    assert result["latest_gap_to_leader"] == "LAP2", (
+        "When all gaps are non-numeric, latest_gap_to_leader should be from the LAST entry (most recent)"
+    )

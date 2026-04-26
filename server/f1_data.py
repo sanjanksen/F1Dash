@@ -6,7 +6,9 @@ import numbers
 import fastf1
 import requests
 import pandas as pd
+import numpy as np
 from pandas.api.types import is_numeric_dtype
+from scipy.signal import savgol_filter
 from energy_2026 import get_energy_2026_knowledge
 from driver_styles import get_comparison_framing
 
@@ -252,6 +254,52 @@ def _infer_clipping_windows(samples: list[dict], speed_key: str = "speed_kph") -
                 "late_straight_drop_kph": round(end_speed - mid_speed, 1) if mid_speed is not None else None,
             })
     return windows
+
+
+def _in_late_clip_window(distance, windows: list[dict]) -> bool:
+    if distance is None:
+        return False
+    for window in windows:
+        start = window.get("start_distance_m")
+        end = window.get("end_distance_m")
+        if start is None or end is None:
+            continue
+        midpoint = start + ((end - start) / 2)
+        if midpoint <= distance <= end:
+            return True
+    return False
+
+
+def _strongest_comparative_full_throttle_fade(
+    samples: list[dict],
+    clip_a: list[dict],
+    clip_b: list[dict],
+    driver_a: str,
+    driver_b: str,
+) -> dict | None:
+    fade_candidates = []
+    code_a = driver_a.upper()
+    code_b = driver_b.upper()
+    for sample in samples:
+        delta_speed = sample.get("delta_speed") or 0
+        faded_driver = code_a if delta_speed < 0 else code_b
+        faded_windows = clip_a if faded_driver == code_a else clip_b
+        if (
+            (sample.get("throttle_a") or 0) >= 95
+            and (sample.get("throttle_b") or 0) >= 95
+            and not sample.get("brake_a")
+            and not sample.get("brake_b")
+            and abs(delta_speed) >= 8
+            and _in_late_clip_window(sample.get("distance_m"), faded_windows)
+        ):
+            fade_candidates.append({
+                "distance_m": sample.get("distance_m"),
+                "delta_speed_kph": delta_speed,
+                "speed_a": sample.get("speed_a"),
+                "speed_b": sample.get("speed_b"),
+                "faded_driver": faded_driver,
+            })
+    return max(fade_candidates, key=lambda row: abs(row["delta_speed_kph"]), default=None)
 
 
 def _safe_timedelta_seconds(value):
@@ -1713,9 +1761,15 @@ def get_telemetry_comparison(round_number: int, session_type: str,
         gear_b = int(gear_b_raw) if pd.notna(gear_b_raw) else None
         rpm_a = int(rpm_a_raw) if pd.notna(rpm_a_raw) else None
         rpm_b = int(rpm_b_raw) if pd.notna(rpm_b_raw) else None
+        x_a = _normalize_float(row_a.get('X'))
+        y_a = _normalize_float(row_a.get('Y'))
+        x_b = _normalize_float(row_b.get('X'))
+        y_b = _normalize_float(row_b.get('Y'))
 
         samples.append({
             "distance_m": int(dist),
+            "x": x_a if x_a is not None else x_b,
+            "y": y_a if y_a is not None else y_b,
             "speed_a": spd_a,
             "speed_b": spd_b,
             "delta_speed": round(spd_a - spd_b, 1),
@@ -1735,6 +1789,18 @@ def get_telemetry_comparison(round_number: int, session_type: str,
         })
         dist += INTERVAL_M
 
+    sector_boundary_distances = [None, None]
+    try:
+        s1_dur = lap_a.get('Sector1Time')
+        s2_dur = lap_a.get('Sector2Time')
+        if s1_dur is not None and pd.notna(s1_dur) and s2_dur is not None and pd.notna(s2_dur):
+            s1_idx = (tel_a['Time'] - s1_dur).abs().idxmin()
+            s2_idx = (tel_a['Time'] - (s1_dur + s2_dur)).abs().idxmin()
+            sector_boundary_distances[0] = int(tel_a.loc[s1_idx, 'Distance'])
+            sector_boundary_distances[1] = int(tel_a.loc[s2_idx, 'Distance'])
+    except Exception:
+        pass
+
     return {
         "event": session.event['EventName'],
         "session": session_type.upper(),
@@ -1746,6 +1812,7 @@ def get_telemetry_comparison(round_number: int, session_type: str,
         "lap_number_b": int(lap_b['LapNumber']),
         "circuit_length_m": int(total_dist),
         "comparison": samples,
+        "sector_boundary_distances": sector_boundary_distances,
     }
 
 
@@ -1791,23 +1858,13 @@ def analyze_energy_management(round_number: int, session_type: str,
         clip_a = _infer_clipping_windows(driver_a_samples)
         clip_b = _infer_clipping_windows(driver_b_samples)
 
-        fade_candidates = []
-        for sample in samples:
-            if (
-                (sample.get("throttle_a") or 0) >= 95
-                and (sample.get("throttle_b") or 0) >= 95
-                and not sample.get("brake_a")
-                and not sample.get("brake_b")
-                and abs((sample.get("delta_speed") or 0)) >= 8
-            ):
-                fade_candidates.append({
-                    "distance_m": sample.get("distance_m"),
-                    "delta_speed_kph": sample.get("delta_speed"),
-                    "speed_a": sample.get("speed_a"),
-                    "speed_b": sample.get("speed_b"),
-                })
-
-        strongest_fade = max(fade_candidates, key=lambda row: abs(row["delta_speed_kph"]), default=None)
+        strongest_fade = _strongest_comparative_full_throttle_fade(
+            samples,
+            clip_a,
+            clip_b,
+            driver_a,
+            driver_b,
+        )
         inferences = []
         if lico_a:
             inferences.append(f"{driver_a.upper()} shows likely lift-and-coast style early lifts before braking zones.")
@@ -1953,7 +2010,28 @@ def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_
         delta_speed = sample.get("delta_speed") or 0
         return (delta_speed > 0) if faster_is_a else (delta_speed < 0)
 
-    speed_candidates = [s for s in samples if sample_favors_faster(s) and abs(s.get("delta_speed") or 0) >= 5]
+    def _fast(sample, key):
+        suffix = "a" if faster_is_a else "b"
+        return sample.get(f"{key}_{suffix}")
+
+    def _slow(sample, key):
+        suffix = "b" if faster_is_a else "a"
+        return sample.get(f"{key}_{suffix}")
+
+    def _full_throttle(sample) -> bool:
+        return (
+            (_fast(sample, "throttle") or 0) >= 95
+            and (_slow(sample, "throttle") or 0) >= 95
+            and not (_fast(sample, "brake") or False)
+            and not (_slow(sample, "brake") or False)
+        )
+
+    speed_candidates = [
+        s for s in samples
+        if sample_favors_faster(s)
+        and abs(s.get("delta_speed") or 0) >= 5
+        and _full_throttle(s)
+    ]
     braking_candidates = [
         s for s in samples
         if sample_favors_faster(s)
@@ -1965,6 +2043,7 @@ def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_
     min_speed_candidates = [
         s for s in samples
         if sample_favors_faster(s)
+        and not _full_throttle(s)
         and (
             ((s.get("throttle_a") or 0) < 40 and not s.get("brake_a"))
             or ((s.get("throttle_b") or 0) < 40 and not s.get("brake_b"))
@@ -1973,10 +2052,10 @@ def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_
     traction_candidates = [
         s for s in samples
         if sample_favors_faster(s)
-        and (
-            ((s.get("throttle_a") or 0) >= 70 and not s.get("brake_a"))
-            or ((s.get("throttle_b") or 0) >= 70 and not s.get("brake_b"))
-        )
+        and not _full_throttle(s)
+        and (_fast(s, "throttle") or 0) >= 70
+        and ((_fast(s, "throttle") or 0) - (_slow(s, "throttle") or 0)) >= 15
+        and not (_fast(s, "brake") or False)
     ]
 
     strongest_speed = max(speed_candidates, key=lambda s: abs(s.get("delta_speed") or 0), default=None)
@@ -2044,6 +2123,41 @@ def _downsample_speed_trace(samples: list[dict], *, step: int = 200) -> list[dic
     return reduced
 
 
+def _downsample_track_map(samples: list[dict], *, step: int = 100) -> list[dict]:
+    if not samples:
+        return []
+    reduced = []
+    last_distance = None
+    for sample in samples:
+        distance = sample.get("distance_m")
+        x = sample.get("x")
+        y = sample.get("y")
+        if distance is None or x is None or y is None:
+            continue
+        if last_distance is None or distance - last_distance >= step:
+            reduced.append({
+                "distance_m": distance,
+                "x": x,
+                "y": y,
+            })
+            last_distance = distance
+
+    final = samples[-1]
+    final_distance = final.get("distance_m")
+    if (
+        reduced
+        and final_distance != reduced[-1]["distance_m"]
+        and final.get("x") is not None
+        and final.get("y") is not None
+    ):
+        reduced.append({
+            "distance_m": final_distance,
+            "x": final.get("x"),
+            "y": final.get("y"),
+        })
+    return reduced
+
+
 def _summarize_openf1_intervals(intervals: list[dict]) -> dict | None:
     if not intervals:
         return None
@@ -2057,30 +2171,30 @@ def _summarize_openf1_intervals(intervals: list[dict]) -> dict | None:
         except ValueError:
             return None
 
-    ordered = list(reversed(intervals))
-    parsed = [_parse_gap(row.get("gap_to_leader")) for row in ordered]
+    # intervals arrive sorted ascending (earliest first) from get_intervals
+    parsed = [_parse_gap(row.get("gap_to_leader")) for row in intervals]
     valid = [value for value in parsed if value is not None]
     if not valid:
-        latest = intervals[0]
+        latest = intervals[-1]  # most recent entry
         return {
             "latest_gap_to_leader": latest.get("gap_to_leader"),
             "latest_interval": latest.get("interval"),
             "sample_count": len(intervals),
         }
 
-    earliest_gap = valid[0]
-    latest_gap = valid[-1]
+    earliest_gap = valid[0]   # first non-None = chronologically earliest
+    latest_gap = valid[-1]    # last non-None = chronologically most recent
     min_gap = min(valid)
     max_gap = max(valid)
     trend = "stable"
-    if latest_gap < earliest_gap - 0.75:
-        trend = "closing"
-    elif latest_gap > earliest_gap + 0.75:
+    if latest_gap > earliest_gap + 0.75:
         trend = "dropping_back"
+    elif latest_gap < earliest_gap - 0.75:
+        trend = "closing"
 
     return {
-        "latest_gap_to_leader": intervals[0].get("gap_to_leader"),
-        "latest_interval": intervals[0].get("interval"),
+        "latest_gap_to_leader": intervals[-1].get("gap_to_leader"),  # most recent raw value
+        "latest_interval": intervals[-1].get("interval"),
         "sample_count": len(intervals),
         "earliest_gap_to_leader_s": round(earliest_gap, 3),
         "latest_gap_to_leader_s": round(latest_gap, 3),
@@ -2204,20 +2318,22 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
     )
 
     comparison_samples = telemetry.get("comparison", []) if telemetry else []
+    sector_boundary_distances = telemetry.get("sector_boundary_distances", [None, None]) if telemetry else [None, None]
     telemetry_summary = _summarize_telemetry_battle(comparison_samples, faster_driver, driver_a_code, driver_b_code)
     top_causes = (telemetry_summary.get("top_causes") or []) if telemetry_summary else []
+
+    def _sector_for_distance(dist_m):
+        if dist_m is None or sector_boundary_distances[0] is None:
+            return None
+        if dist_m <= sector_boundary_distances[0]:
+            return "sector1"
+        if sector_boundary_distances[1] is None or dist_m <= sector_boundary_distances[1]:
+            return "sector2"
+        return "sector3"
 
     # For teammates: straight-line speed reflects same PU/aero — deprioritise it so
     # the analysis focuses on braking technique, minimum speed, and traction where
     # driving style and setup divergence actually show up.
-    if is_teammate_comparison and len(top_causes) > 1:
-        technical = [tc for tc in top_causes if tc["cause_type"] != "straight_line_speed"]
-        speed_only = [tc for tc in top_causes if tc["cause_type"] == "straight_line_speed"]
-        top_causes = (technical + speed_only)[:3]
-
-    primary_cause = top_causes[0] if top_causes else None
-    decisive_distance = primary_cause["distance_m"] if primary_cause else None
-
     earlier_braker = driver_b_code if faster_driver == driver_a_code else driver_a_code
 
     def _cause_explanation(ct: str, dist: int | None) -> str:
@@ -2232,6 +2348,11 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
             return (
                 f"{faster_driver} carries more speed at full throttle late on the straight{loc}, "
                 f"opening the gap before the braking zone."
+            )
+        if ct == "straight_line_speed_energy_limited":
+            return (
+                f"Late-straight deployment{loc}: {slower_driver} fades while still full throttle, "
+                f"so {faster_driver} keeps accelerating harder before the next braking zone."
             )
         if ct == "braking":
             if is_teammate_comparison:
@@ -2267,6 +2388,48 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
             )
         return "Mixed advantages — no single dominant mechanism."
 
+    energy_relevant = False
+    energy_reason = None
+    energy_context_explanation = None
+    strongest_fade = ((energy.get("comparative_signal") or {}) if energy else {}).get("strongest_full_throttle_speed_fade")
+    if strongest_fade:
+        delta_speed = strongest_fade.get("delta_speed_kph") or 0
+        faded_driver = driver_a_code if delta_speed < 0 else driver_b_code
+        if faded_driver == slower_driver:
+            energy_relevant = True
+            energy_distance = strongest_fade.get("distance_m")
+            energy_reason = (
+                f"{slower_driver} shows the strongest late-straight full-throttle speed fade around "
+                f"{energy_distance}m, which is consistent with clipping or running out of deployment earlier."
+            )
+            energy_context_explanation = (
+                "Under the 2026 rules the electrical contribution is much larger, so if one car reaches the taper in deployment earlier, "
+                "it can remain flat-out but stop accelerating as hard late on the straight."
+            )
+            energy_cause = {
+                "cause_type": "straight_line_speed_energy_limited",
+                "magnitude": abs(delta_speed),
+                "rank_weight": abs(delta_speed) * 1.15,
+                "distance_m": energy_distance,
+                "delta_speed_kph": delta_speed,
+                "throttle_a": None,
+                "throttle_b": None,
+                "brake_a": False,
+                "brake_b": False,
+                "gear_a": None,
+                "gear_b": None,
+            }
+            non_energy_causes = [
+                tc for tc in top_causes
+                if tc.get("cause_type") != "straight_line_speed"
+                or abs((tc.get("distance_m") or 0) - (energy_distance or 0)) > 300
+            ]
+            reranked_causes = [energy_cause, *non_energy_causes]
+            reranked_causes.sort(key=lambda tc: tc.get("rank_weight", tc.get("magnitude", 0)), reverse=True)
+            top_causes = reranked_causes[:3]
+
+    primary_cause = top_causes[0] if top_causes else None
+    decisive_distance = primary_cause["distance_m"] if primary_cause else None
     cause_type = primary_cause["cause_type"] if primary_cause else "mixed"
     cause_explanation = _cause_explanation(cause_type, primary_cause["distance_m"] if primary_cause else None)
 
@@ -2277,33 +2440,13 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
             "rank": i + 1,
             "distance_m": tc["distance_m"],
             "delta_speed_kph": tc["delta_speed_kph"],
-            "gear_a": tc["gear_a"],
-            "gear_b": tc["gear_b"],
+            "gear_a": tc.get("gear_a"),
+            "gear_b": tc.get("gear_b"),
+            "sector": _sector_for_distance(tc["distance_m"]),
             "explanation": _cause_explanation(tc["cause_type"], tc["distance_m"]),
         }
         for i, tc in enumerate(top_causes)
     ]
-
-    energy_relevant = False
-    energy_reason = None
-    energy_context_explanation = None
-    strongest_fade = ((energy.get("comparative_signal") or {}) if energy else {}).get("strongest_full_throttle_speed_fade")
-    if strongest_fade:
-        delta_speed = strongest_fade.get("delta_speed_kph") or 0
-        faded_driver = driver_a_code if delta_speed < 0 else driver_b_code
-        if faded_driver == slower_driver:
-            energy_relevant = True
-            decisive_distance = strongest_fade.get("distance_m") or decisive_distance
-            energy_reason = (
-                f"{slower_driver} shows the strongest late-straight full-throttle speed fade around "
-                f"{strongest_fade.get('distance_m')}m, which is consistent with clipping or running out of deployment earlier."
-            )
-            energy_context_explanation = (
-                "Under the 2026 rules the electrical contribution is much larger, so if one car reaches the taper in deployment earlier, "
-                "it can remain flat-out but stop accelerating as hard late on the straight."
-            )
-            if cause_type == "straight_line_speed":
-                cause_type = "straight_line_speed_energy_limited"
 
     decisive_corner = _nearest_corner_label(round_number, decisive_distance)
 
@@ -2326,7 +2469,10 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
     zone_summary = None
     if primary_cause:
         location_bits = []
-        if decisive_sector:
+        primary_sector = _sector_for_distance(primary_cause.get("distance_m"))
+        if primary_sector:
+            location_bits.append(primary_sector.replace("sector", "Sector "))
+        elif decisive_sector:
             location_bits.append(decisive_sector)
         if decisive_corner:
             location_bits.append(f"near {decisive_corner}")
@@ -2347,6 +2493,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
         pass
 
     speed_trace = _downsample_speed_trace(comparison_samples, step=200) if comparison_samples else []
+    track_map = _downsample_track_map(comparison_samples, step=100) if comparison_samples else []
     focus_window = []
     if decisive_distance is not None and comparison_samples:
         focus_window = [
@@ -2392,7 +2539,9 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
         "caveats": caveats,
         "strongest_evidence": strongest_evidence,
         "speed_trace": speed_trace,
+        "track_map": track_map,
         "focus_window_trace": focus_window,
+        "sector_boundary_distances": sector_boundary_distances,
         "sector_comparison": sector,
         "energy_analysis": energy,
         "style_comparison": style_comparison,
@@ -3638,5 +3787,643 @@ def analyze_team_performance(round_number: int, team_name: str, session_type: st
         result['degradation_b'] = degradation_b
     if deg_error:
         result['degradation_error'] = deg_error
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Cornering load / grip utilisation analysis
+# ---------------------------------------------------------------------------
+
+def _compute_lateral_g(tel: pd.DataFrame) -> np.ndarray:
+    """
+    Derive lateral G from X/Y position: κ = |x'y'' - y'x''| / (x'²+y'²)^1.5 parameterised by distance.
+    lat_G = v² * κ / 9.81.
+
+    FastF1 interpolates GPS position (2-4 Hz) linearly to car-data rate (~240 Hz).
+    Second derivatives of linear interpolation are zero, producing near-zero curvature.
+    Fix: extract only the samples where the GPS position actually moved, compute curvature
+    there at native resolution, then interpolate back to the full telemetry distance array.
+    """
+    s_full = tel['Distance'].to_numpy(dtype=float)
+    x_full = tel['X'].to_numpy(dtype=float)
+    y_full = tel['Y'].to_numpy(dtype=float)
+    v_full = tel['Speed'].to_numpy(dtype=float)
+
+    # Identify samples where the GPS actually reported a new position.
+    pos_step = np.sqrt(np.diff(x_full, prepend=x_full[0])**2 + np.diff(y_full, prepend=y_full[0])**2)
+    gps_idx = np.where(pos_step > 0.3)[0]
+    if len(gps_idx) < 20:
+        gps_idx = np.arange(len(x_full))  # fallback: use all samples
+
+    x_u = x_full[gps_idx]
+    y_u = y_full[gps_idx]
+    s_u = s_full[gps_idx]
+
+    # Smooth the sparse position data
+    n = len(x_u)
+    wl = min(15, n if n % 2 == 1 else n - 1)
+    wl = max(wl, 5)
+    if wl % 2 == 0:
+        wl -= 1
+    polyord = min(3, wl - 1)
+    if n >= wl:
+        x_sm = savgol_filter(x_u, window_length=wl, polyorder=polyord)
+        y_sm = savgol_filter(y_u, window_length=wl, polyorder=polyord)
+    else:
+        x_sm, y_sm = x_u, y_u
+
+    # Curvature parameterised by track distance → units of [1/m]
+    dx = np.gradient(x_sm, s_u)
+    dy = np.gradient(y_sm, s_u)
+    ddx = np.gradient(dx, s_u)
+    ddy = np.gradient(dy, s_u)
+
+    denom = (dx**2 + dy**2) ** 1.5
+    denom = np.where(denom < 1e-12, 1e-12, denom)
+    kappa = np.abs(dx * ddy - dy * ddx) / denom
+    kappa = np.clip(kappa, 0.0, 0.15)  # 0.15 rad/m ≈ 6.7m radius — tightest F1 hairpin
+
+    # Interpolate kappa back to the full telemetry grid
+    kappa_full = np.interp(s_full, s_u, kappa)
+
+    v_mps = v_full / 3.6
+    lat_g_raw = (v_mps**2) * kappa_full / 9.81
+    lat_g_raw = np.clip(lat_g_raw, 0.0, 6.0)
+
+    # Light final smoothing
+    wl_f = min(15, len(lat_g_raw) if len(lat_g_raw) % 2 == 1 else len(lat_g_raw) - 1)
+    if wl_f >= 5:
+        lat_g = savgol_filter(lat_g_raw, window_length=wl_f, polyorder=2)
+    else:
+        lat_g = lat_g_raw
+
+    return np.clip(lat_g, 0.0, 6.0)
+
+
+def _theoretical_max_g(speed_kph: np.ndarray) -> np.ndarray:
+    """Speed-dependent theoretical max lateral G for a 2025-spec F1 car."""
+    return 2.0 + speed_kph * 0.012
+
+
+def _detect_corners(lat_g: np.ndarray, dist: np.ndarray,
+                    threshold: float | None = None, min_samples: int = 5) -> list[tuple[int, int]]:
+    """
+    Return list of (start_idx, end_idx) index pairs for each cornering event.
+    Threshold is adaptive: 25% of observed peak G, clamped to [0.4, 0.8].
+    This handles both slow-corner circuits (high peak G, 0.8 works) and
+    fast-sweeper circuits (lower computed G, needs lower threshold).
+    """
+    if threshold is None:
+        peak = float(lat_g.max())
+        threshold = float(np.clip(0.25 * peak, 0.4, 0.8))
+
+    in_corner = lat_g >= threshold
+    corners = []
+    start = None
+    for i, flag in enumerate(in_corner):
+        if flag and start is None:
+            start = i
+        elif not flag and start is not None:
+            if i - start >= min_samples:
+                corners.append((start, i - 1))
+            start = None
+    if start is not None and len(lat_g) - start >= min_samples:
+        corners.append((start, len(lat_g) - 1))
+    return corners
+
+
+def _corner_metrics(lat_g: np.ndarray, speed_kph: np.ndarray,
+                    dist: np.ndarray, start: int, end: int) -> dict:
+    seg_g = lat_g[start:end + 1]
+    seg_v = speed_kph[start:end + 1]
+    seg_dist = dist[start:end + 1]
+
+    apex_idx_local = int(np.argmin(seg_v))  # apex = min speed
+    peak_idx_local = int(np.argmax(seg_g))
+
+    g_max = _theoretical_max_g(seg_v)
+    util = np.clip(seg_g / np.where(g_max < 0.1, 0.1, g_max), 0.0, 1.0)
+
+    # count sign changes in d(lat_g) as a proxy for steering corrections
+    dlg = np.gradient(seg_g)
+    sign_changes = int(np.sum(np.diff(np.sign(dlg)) != 0))
+
+    return {
+        "entry_g": round(float(seg_g[0]), 3),
+        "apex_g": round(float(seg_g[apex_idx_local]), 3),
+        "peak_g": round(float(seg_g[peak_idx_local]), 3),
+        "exit_g": round(float(seg_g[-1]), 3),
+        "mean_g": round(float(np.mean(seg_g)), 3),
+        "load_variance": round(float(np.std(seg_g)), 3),
+        "correction_count": sign_changes,
+        "mean_grip_util_pct": round(float(np.mean(util) * 100), 1),
+        "pct_time_above_90pct_grip": round(float(np.mean(util >= 0.9) * 100), 1),
+        "entry_dist_m": round(float(seg_dist[0]), 0),
+        "exit_dist_m": round(float(seg_dist[-1]), 0),
+    }
+
+
+def _align_corners(corners_a: list[tuple[int, int]], dist_a: np.ndarray,
+                   corners_b: list[tuple[int, int]], dist_b: np.ndarray,
+                   tolerance_m: float = 200.0) -> list[tuple[tuple, tuple]]:
+    """Match corners from driver A to driver B by entry distance."""
+    pairs = []
+    used_b = set()
+    for ca in corners_a:
+        entry_a = dist_a[ca[0]]
+        best = None
+        best_diff = tolerance_m + 1
+        for j, cb in enumerate(corners_b):
+            if j in used_b:
+                continue
+            diff = abs(dist_b[cb[0]] - entry_a)
+            if diff < best_diff:
+                best_diff = diff
+                best = j
+        if best is not None and best_diff <= tolerance_m:
+            pairs.append((ca, corners_b[best]))
+            used_b.add(best)
+    return pairs
+
+
+def analyze_cornering_loads(round_number: int, session_type: str,
+                             driver_a: str, driver_b: str,
+                             lap_number_a: int | None = None,
+                             lap_number_b: int | None = None) -> dict:
+    """
+    Compare two drivers' lateral G profiles and grip utilisation across all corners.
+
+    Uses X/Y position telemetry to derive curvature-based lateral G (v²/R),
+    then computes grip utilisation against a speed-dependent theoretical maximum.
+    Identifies cornering events and computes per-corner statistics for both drivers.
+
+    Returns summary stats, per-corner breakdown, and a human-readable narrative.
+
+    Caveat: derived from GPS position (not steering angle or IMU), so ±5-10%
+    absolute uncertainty. Comparative rankings are reliable; absolute values less so.
+    """
+    session = _load_session(
+        round_number,
+        session_type,
+        laps=True,
+        telemetry=True,
+        weather=False,
+        messages=_session_needs_race_control_messages(session_type),
+    )
+
+    code_a = driver_a.upper()
+    code_b = driver_b.upper()
+
+    def _get_lap(code: str, lap_num: int | None):
+        laps = _pick_driver(session.laps, code)
+        if laps.empty:
+            raise ValueError(f"No data for driver {code!r}")
+        if lap_num is not None:
+            matching = laps[laps['LapNumber'] == lap_num]
+            if matching.empty:
+                raise ValueError(f"Lap {lap_num} not found for {code!r}")
+            return matching.iloc[0]
+        return _pick_fastest_lap(laps)
+
+    lap_a = _get_lap(code_a, lap_number_a)
+    lap_b = _get_lap(code_b, lap_number_b)
+
+    tel_a = lap_a.get_telemetry().add_distance()
+    tel_b = lap_b.get_telemetry().add_distance()
+
+    # Require X/Y position columns
+    for col in ('X', 'Y', 'Speed'):
+        if col not in tel_a.columns or col not in tel_b.columns:
+            raise ValueError(f"Telemetry missing column '{col}' — position data unavailable for this session.")
+
+    dist_a = tel_a['Distance'].to_numpy(dtype=float)
+    dist_b = tel_b['Distance'].to_numpy(dtype=float)
+    spd_a = tel_a['Speed'].to_numpy(dtype=float)
+    spd_b = tel_b['Speed'].to_numpy(dtype=float)
+
+    lat_g_a = _compute_lateral_g(tel_a)
+    lat_g_b = _compute_lateral_g(tel_b)
+
+    g_max_a = _theoretical_max_g(spd_a)
+    g_max_b = _theoretical_max_g(spd_b)
+    util_a = np.clip(lat_g_a / np.where(g_max_a < 0.1, 0.1, g_max_a), 0.0, 1.0)
+    util_b = np.clip(lat_g_b / np.where(g_max_b < 0.1, 0.1, g_max_b), 0.0, 1.0)
+
+    corners_a = _detect_corners(lat_g_a, dist_a)
+    corners_b = _detect_corners(lat_g_b, dist_b)
+
+    aligned = _align_corners(corners_a, dist_a, corners_b, dist_b)
+
+    per_corner = []
+    for i, (ca, cb) in enumerate(aligned):
+        ma = _corner_metrics(lat_g_a, spd_a, dist_a, ca[0], ca[1])
+        mb = _corner_metrics(lat_g_b, spd_b, dist_b, cb[0], cb[1])
+        per_corner.append({
+            "corner_index": i + 1,
+            "entry_dist_m": int(ma["entry_dist_m"]),
+            code_a: ma,
+            code_b: mb,
+            "peak_g_delta": round(ma["peak_g"] - mb["peak_g"], 3),
+            "mean_grip_util_delta_pct": round(ma["mean_grip_util_pct"] - mb["mean_grip_util_pct"], 1),
+            "load_variance_delta": round(ma["load_variance"] - mb["load_variance"], 3),
+            "corrections_delta": ma["correction_count"] - mb["correction_count"],
+        })
+
+    # Summary stats
+    def _summary(util: np.ndarray, lat_g: np.ndarray, code: str,
+                 corners: list[tuple[int, int]], spd: np.ndarray) -> dict:
+        # Compute utilisation metrics over corner segments only, not whole lap
+        if corners:
+            corner_util = np.concatenate([util[s:e + 1] for s, e in corners])
+        else:
+            corner_util = util
+        pct_above_90 = round(float(np.mean(corner_util >= 0.9) * 100), 1)
+        avg_util = round(float(np.mean(corner_util) * 100), 1)
+        peak_g = round(float(lat_g.max()), 2)
+        # average corrections per matched corner
+        if per_corner:
+            avg_corr = round(sum(c[code]["correction_count"] for c in per_corner) / len(per_corner), 1)
+        else:
+            avg_corr = None
+        # average load variance per corner
+        if per_corner:
+            avg_var = round(sum(c[code]["load_variance"] for c in per_corner) / len(per_corner), 3)
+        else:
+            avg_var = None
+        return {
+            "avg_grip_utilisation_pct": avg_util,
+            "pct_time_above_90pct_grip": pct_above_90,
+            "peak_lateral_g": peak_g,
+            "corners_detected": len(corners),
+            "avg_corrections_per_corner": avg_corr,
+            "avg_load_variance": avg_var,
+        }
+
+    sum_a = _summary(util_a, lat_g_a, code_a, corners_a, spd_a)
+    sum_b = _summary(util_b, lat_g_b, code_b, corners_b, spd_b)
+
+    # Human-readable narrative
+    util_diff = round(sum_a["avg_grip_utilisation_pct"] - sum_b["avg_grip_utilisation_pct"], 1)
+    above90_diff = round(sum_a["pct_time_above_90pct_grip"] - sum_b["pct_time_above_90pct_grip"], 1)
+    higher_util_driver = code_a if util_diff > 0 else code_b
+    lower_util_driver = code_b if util_diff > 0 else code_a
+    abs_util_diff = abs(util_diff)
+    abs_above90_diff = abs(above90_diff)
+
+    higher_var_driver = code_a if (sum_a.get("avg_load_variance") or 0) > (sum_b.get("avg_load_variance") or 0) else code_b
+    lower_var_driver = code_b if higher_var_driver == code_a else code_a
+
+    if per_corner:
+        high_util_corners_a = sum(1 for c in per_corner if c[code_a]["mean_grip_util_pct"] > c[code_b]["mean_grip_util_pct"])
+        high_util_corners_b = len(per_corner) - high_util_corners_a
+    else:
+        high_util_corners_a = high_util_corners_b = 0
+
+    narrative_parts = []
+    lower_var_driver = code_b if higher_var_driver == code_a else code_a
+
+    # --- Confidence / commitment on this lap ---
+    if abs_util_diff >= 1.0:
+        hi_util = max(sum_a['avg_grip_utilisation_pct'], sum_b['avg_grip_utilisation_pct'])
+        lo_util = min(sum_a['avg_grip_utilisation_pct'], sum_b['avg_grip_utilisation_pct'])
+        narrative_parts.append(
+            f"{higher_util_driver} was the more committed driver on this lap — really carrying it into the corners, "
+            f"trusting the front end where {lower_util_driver} kept a bit more in reserve "
+            f"({hi_util:.1f}% vs {lo_util:.1f}% of theoretical grip across {len(aligned)} corners)."
+        )
+    else:
+        narrative_parts.append(
+            f"{code_a} and {code_b} showed similar commitment through the corners on this lap "
+            f"({sum_a['avg_grip_utilisation_pct']:.1f}% vs {sum_b['avg_grip_utilisation_pct']:.1f}% of the tyre's limit "
+            f"across {len(aligned)} corners)."
+        )
+
+    # --- Time on the absolute limit: fully committed, no safety net ---
+    if abs_above90_diff >= 1.0:
+        at_limit_driver = higher_util_driver if above90_diff > 0 else lower_util_driver
+        other_driver = lower_util_driver if above90_diff > 0 else higher_util_driver
+        at_limit_pct = sum_a['pct_time_above_90pct_grip'] if at_limit_driver == code_a else sum_b['pct_time_above_90pct_grip']
+        other_pct = sum_b['pct_time_above_90pct_grip'] if at_limit_driver == code_a else sum_a['pct_time_above_90pct_grip']
+        narrative_parts.append(
+            f"{at_limit_driver} was on the absolute edge — no margin, fully committed — for {at_limit_pct:.1f}% of every corner, "
+            f"vs {other_pct:.1f}% for {other_driver}. "
+            f"That's the difference between carrying the car right to the limit and keeping a small safety window."
+        )
+    else:
+        narrative_parts.append(
+            f"Both were spending similar time right on the edge with no margin "
+            f"({sum_a['pct_time_above_90pct_grip']:.1f}% vs {sum_b['pct_time_above_90pct_grip']:.1f}%)."
+        )
+
+    # --- Smoothness: clean arc vs fighting / correcting ---
+    if sum_a.get("avg_load_variance") and sum_b.get("avg_load_variance"):
+        var_hi = max(sum_a['avg_load_variance'], sum_b['avg_load_variance'])
+        var_lo = min(sum_a['avg_load_variance'], sum_b['avg_load_variance'])
+        if var_hi - var_lo >= 0.01:
+            # Infer what the corrections suggest about car behaviour
+            corr_hi = sum_a.get("avg_corrections_per_corner", 0) if higher_var_driver == code_a else sum_b.get("avg_corrections_per_corner", 0)
+            corr_lo = sum_b.get("avg_corrections_per_corner", 0) if higher_var_driver == code_a else sum_a.get("avg_corrections_per_corner", 0)
+            if corr_hi > corr_lo + 1:
+                balance_desc = (
+                    f"{higher_var_driver} was chasing the balance mid-corner — "
+                    f"the car a bit twitchy through the apex, making corrections rather than committing to one clean arc. "
+                    f"{lower_var_driver} was rotating the car smoothly and holding it — the load profile barely flickered."
+                )
+            else:
+                balance_desc = (
+                    f"{higher_var_driver}'s inputs were less settled through the apex — "
+                    f"more oscillation in the load profile compared to {lower_var_driver}'s cleaner arc. "
+                    f"The car was working harder than it needed to be."
+                )
+            narrative_parts.append(balance_desc)
+
+    # --- Corner spread ---
+    if per_corner and len(per_corner) >= 4:
+        narrative_parts.append(
+            f"{higher_util_driver} had more confidence in {high_util_corners_a if higher_util_driver == code_a else high_util_corners_b} "
+            f"of the {len(per_corner)} matched corners; "
+            f"{lower_util_driver} in {high_util_corners_b if higher_util_driver == code_a else high_util_corners_a}."
+        )
+
+    return {
+        "event": session.event['EventName'],
+        "session": session_type.upper(),
+        "driver_a": code_a,
+        "driver_b": code_b,
+        "lap_a": {"lap_number": int(lap_a['LapNumber']), "lap_time": _fmt_td(lap_a['LapTime'])},
+        "lap_b": {"lap_number": int(lap_b['LapNumber']), "lap_time": _fmt_td(lap_b['LapTime'])},
+        "summary": {
+            code_a: sum_a,
+            code_b: sum_b,
+        },
+        "per_corner": per_corner,
+        "narrative": " ".join(narrative_parts),
+        "caveat": (
+            "Lateral G derived from X/Y GPS position via curvature (v²/R) with Savitzky-Golay smoothing. "
+            "Absolute values carry ±5-10% uncertainty. Comparative rankings between drivers on the same "
+            "session are reliable. No steering angle or IMU data available in FastF1."
+        ),
+    }
+
+
+def _aggregate_lap_cornering_stats(tel: pd.DataFrame) -> dict | None:
+    """
+    Compute aggregate cornering stats for a single lap's telemetry.
+    All metrics are computed only within detected cornering segments (lat_G > 0.8G).
+    Returns None if data is insufficient or missing required columns.
+    """
+    if any(c not in tel.columns for c in ('X', 'Y', 'Speed')):
+        return None
+    if len(tel) < 50:
+        return None
+    try:
+        dist = tel['Distance'].to_numpy(dtype=float) if 'Distance' in tel.columns else np.arange(len(tel), dtype=float)
+        spd = tel['Speed'].to_numpy(dtype=float)
+        lat_g = _compute_lateral_g(tel)
+        corners = _detect_corners(lat_g, dist)
+        if not corners:
+            return None
+
+        corner_util_samples = []
+        corner_corrections = []
+        corner_variances = []
+
+        for c_start, c_end in corners:
+            seg_g = lat_g[c_start:c_end + 1]
+            seg_v = spd[c_start:c_end + 1]
+            seg_gmax = _theoretical_max_g(seg_v)
+            seg_util = np.clip(seg_g / np.where(seg_gmax < 0.1, 0.1, seg_gmax), 0.0, 1.0)
+            corner_util_samples.extend(seg_util.tolist())
+
+            dlg = np.gradient(seg_g)
+            corner_corrections.append(int(np.sum(np.diff(np.sign(dlg)) != 0)))
+            corner_variances.append(float(np.std(seg_g)))
+
+        if not corner_util_samples:
+            return None
+
+        cu = np.array(corner_util_samples)
+        return {
+            "avg_corner_grip_util_pct": round(float(np.mean(cu) * 100), 1),
+            "pct_above_90pct_grip": round(float(np.mean(cu >= 0.9) * 100), 1),
+            "corners_detected": len(corners),
+            "avg_corrections_per_corner": round(float(np.mean(corner_corrections)), 1),
+            "avg_load_variance": round(float(np.mean(corner_variances)), 3),
+        }
+    except Exception:
+        return None
+
+
+def analyze_race_cornering_profile(
+    round_number: int,
+    driver_a: str,
+    driver_b: str,
+) -> dict:
+    """
+    Analyze lateral G and grip utilisation across an entire race for two drivers.
+
+    Processes every clean race lap (excluding pit laps and laps with deleted times)
+    and aggregates cornering stats by stint and overall. All metrics are computed
+    within detected cornering events only (lateral G > 0.8G threshold).
+
+    Returns per-stint breakdown and an overall narrative comparing:
+    - Average corner grip utilisation %
+    - % of cornering time above 90% theoretical grip
+    - Average steering corrections per corner (proxy for driving smoothness)
+    - Average lateral load variance (proxy for tyre thermal stress)
+
+    Caveat: derived from GPS position, ±5-10% absolute uncertainty.
+    Comparative rankings between drivers are reliable.
+    """
+    session = _load_session(
+        round_number,
+        "R",
+        laps=True,
+        telemetry=True,
+        weather=False,
+        messages=False,
+    )
+
+    code_a = driver_a.upper()
+    code_b = driver_b.upper()
+
+    def _get_clean_laps(code: str):
+        laps = _pick_driver(session.laps, code)
+        if laps.empty:
+            raise ValueError(f"No data for driver {code!r}")
+        mask = (
+            laps['LapTime'].notna() &
+            laps['PitInTime'].isna() &
+            laps['PitOutTime'].isna()
+        )
+        if 'Deleted' in laps.columns:
+            mask &= ~laps['Deleted'].fillna(False)
+        return laps[mask].sort_values('LapNumber')
+
+    clean_a = _get_clean_laps(code_a)
+    clean_b = _get_clean_laps(code_b)
+
+    def _process_driver(clean_laps) -> list[dict]:
+        results = []
+        for _, lap in clean_laps.iterrows():
+            try:
+                tel = lap.get_telemetry().add_distance()
+                stats = _aggregate_lap_cornering_stats(tel)
+                if stats is None:
+                    continue
+                stats['lap_number'] = int(lap['LapNumber'])
+                stats['stint'] = int(lap['Stint']) if pd.notna(lap.get('Stint')) else None
+                stats['compound'] = str(lap['Compound']) if pd.notna(lap.get('Compound')) else None
+                results.append(stats)
+            except Exception:
+                continue
+        return results
+
+    laps_a = _process_driver(clean_a)
+    laps_b = _process_driver(clean_b)
+
+    def _aggregate(laps_data: list[dict]) -> dict:
+        if not laps_data:
+            return {"laps_analyzed": 0}
+        return {
+            "laps_analyzed": len(laps_data),
+            "avg_corner_grip_util_pct": round(float(np.mean([l["avg_corner_grip_util_pct"] for l in laps_data])), 1),
+            "pct_above_90pct_grip": round(float(np.mean([l["pct_above_90pct_grip"] for l in laps_data])), 1),
+            "avg_corrections_per_corner": round(float(np.mean([l["avg_corrections_per_corner"] for l in laps_data])), 1),
+            "avg_load_variance": round(float(np.mean([l["avg_load_variance"] for l in laps_data])), 3),
+        }
+
+    def _aggregate_by_stint(laps_data: list[dict]) -> list[dict]:
+        from collections import defaultdict
+        stints: dict = defaultdict(list)
+        for lap in laps_data:
+            key = (lap.get('stint') or 0, lap.get('compound') or '')
+            stints[key].append(lap)
+        out = []
+        for (stint_num, compound), laps in sorted(stints.items()):
+            agg = _aggregate(laps)
+            agg['stint'] = stint_num if stint_num else None
+            agg['compound'] = compound or None
+            out.append(agg)
+        return out
+
+    overall_a = _aggregate(laps_a)
+    overall_b = _aggregate(laps_b)
+    stints_a = _aggregate_by_stint(laps_a)
+    stints_b = _aggregate_by_stint(laps_b)
+
+    # Build narrative
+    util_a = overall_a.get("avg_corner_grip_util_pct", 0.0)
+    util_b = overall_b.get("avg_corner_grip_util_pct", 0.0)
+    above90_a = overall_a.get("pct_above_90pct_grip", 0.0)
+    above90_b = overall_b.get("pct_above_90pct_grip", 0.0)
+    var_a = overall_a.get("avg_load_variance", 0.0)
+    var_b = overall_b.get("avg_load_variance", 0.0)
+    corr_a = overall_a.get("avg_corrections_per_corner", 0.0)
+    corr_b = overall_b.get("avg_corrections_per_corner", 0.0)
+
+    higher_util = code_a if util_a >= util_b else code_b
+    util_diff = abs(util_a - util_b)
+    above90_diff = abs(above90_a - above90_b)
+    higher_above90 = code_a if above90_a >= above90_b else code_b
+    higher_var = code_a if var_a >= var_b else code_b
+
+    lower_util = code_b if higher_util == code_a else code_a
+    lower_var = code_b if higher_var == code_a else code_a
+
+    narrative_parts = []
+    laps_a_count = overall_a.get('laps_analyzed', 0)
+    laps_b_count = overall_b.get('laps_analyzed', 0)
+
+    # --- Race-long commitment / tyre confidence ---
+    if util_diff >= 1.0:
+        narrative_parts.append(
+            f"Over the full race ({laps_a_count} clean laps for {code_a}, {laps_b_count} for {code_b}), "
+            f"{higher_util} was the more committed driver through every corner — leaning on the front, "
+            f"trusting the rubber where {lower_util} kept a bit more margin "
+            f"({max(util_a, util_b):.1f}% vs {min(util_a, util_b):.1f}% of the tyre's lateral limit on average)."
+        )
+    else:
+        narrative_parts.append(
+            f"Over {laps_a_count} laps for {code_a} and {laps_b_count} for {code_b}, "
+            f"both drivers showed similar commitment through corners across the race "
+            f"({util_a:.1f}% vs {util_b:.1f}% of the tyre's lateral limit)."
+        )
+
+    # --- Time on the absolute edge: no margin ---
+    if above90_diff >= 1.0:
+        higher_a90 = code_a if above90_a >= above90_b else code_b
+        lower_a90 = code_b if higher_a90 == code_a else code_a
+        hi_pct = above90_a if higher_a90 == code_a else above90_b
+        lo_pct = above90_b if higher_a90 == code_a else above90_a
+        narrative_parts.append(
+            f"{higher_a90} was on the absolute edge — fully committed, no safety net — for {hi_pct:.1f}% of cornering time "
+            f"vs {lo_pct:.1f}% for {lower_a90}. "
+            f"That's the kind of repeated demand that drains tyre confidence across a stint — "
+            f"the rubber can only hold that level of commitment for so long before the grip starts to go away."
+        )
+
+    # --- Smoothness and balance: clean arc vs chasing / fighting ---
+    if abs(var_a - var_b) >= 0.01:
+        var_hi = max(var_a, var_b)
+        var_lo = min(var_a, var_b)
+        # Combine with correction count for richer language
+        corr_hi_val = corr_a if higher_var == code_a else corr_b
+        corr_lo_val = corr_b if higher_var == code_a else corr_a
+        corr_diff = abs(corr_a - corr_b)
+        if corr_diff >= 0.5:
+            narrative_parts.append(
+                f"{higher_var} was fighting the car more through the apex — making around {corr_hi_val:.1f} corrections per corner "
+                f"vs {corr_lo_val:.1f} for {lower_var}, chasing oversteer or understeer rather than riding one clean committed arc. "
+                f"{lower_var} was rotating the car smoothly, the load barely moving once committed. "
+                f"Those corrections are working the tyre harder than the lap requires — that's what turns a healthy stint into a degradation cliff."
+            )
+        else:
+            narrative_parts.append(
+                f"{higher_var}'s inputs were twitchier mid-corner — the lateral load fluctuating more than {lower_var}'s cleaner arc. "
+                f"Even without significantly more corrections, that oscillation in the load works the tyre harder and builds heat unevenly."
+            )
+
+    # --- Stint-level confidence shifts ---
+    if stints_a and stints_b:
+        a_by_stint = {s['stint']: s for s in stints_a}
+        b_by_stint = {s['stint']: s for s in stints_b}
+        shared_stints = sorted(set(a_by_stint) & set(b_by_stint))
+        for sn in shared_stints:
+            sa = a_by_stint[sn]
+            sb = b_by_stint[sn]
+            stint_diff = abs(sa['avg_corner_grip_util_pct'] - sb['avg_corner_grip_util_pct'])
+            if stint_diff >= 2.0:
+                stint_leader = code_a if sa['avg_corner_grip_util_pct'] >= sb['avg_corner_grip_util_pct'] else code_b
+                stint_trailer = code_b if stint_leader == code_a else code_a
+                compound = sa.get('compound') or sb.get('compound') or 'unknown'
+                narrative_parts.append(
+                    f"Stint {sn} on the {compound}: {stint_leader} had noticeably more confidence — "
+                    f"{stint_diff:.1f}pp more committed through the corners. "
+                    f"{stint_trailer} kept more in reserve, whether by choice or because the tyre wasn't fully in his window."
+                )
+
+    return {
+        "event": session.event['EventName'],
+        "session": "R",
+        "driver_a": code_a,
+        "driver_b": code_b,
+        "overall_summary": {
+            code_a: overall_a,
+            code_b: overall_b,
+        },
+        "stint_breakdown": {
+            code_a: stints_a,
+            code_b: stints_b,
+        },
+        "narrative": " ".join(narrative_parts),
+        "caveat": (
+            "Lateral G derived from X/Y GPS position via curvature (v²/R) with Savitzky-Golay smoothing. "
+            "Metrics are computed within cornering segments only (lateral G > 0.8G). "
+            "Pit laps and laps with deleted times excluded. "
+            "Absolute values carry ±5-10% uncertainty; comparative rankings are reliable."
+        ),
+    }
 
     return result
