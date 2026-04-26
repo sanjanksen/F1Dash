@@ -888,7 +888,7 @@ def test_analyze_qualifying_battle_derives_causal_summary():
     assert result["decisive_corner"] == "Turn 1"
     assert result["energy_relevant"] is True
     assert "2026 rules" in result["energy_context_explanation"]
-    assert result["telemetry_summary"]["distance_m"] == 1400
+    assert result["telemetry_summary"]["top_causes"][0]["distance_m"] == 1400
     assert "12.0 kph" in result["zone_summary"]
     assert result["track_map"] == [
         {"distance_m": 300, "x": 0.0, "y": 0.0},
