@@ -3,6 +3,8 @@ import sys
 import os
 from unittest.mock import MagicMock
 
+import pytest
+
 # Ensure server/ is on the path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -14,3 +16,16 @@ for _mod in ('fastf1', 'fastf1.Cache', 'anthropic'):
 # Prevent accidental real network calls in tests
 if 'requests' not in sys.modules:
     sys.modules['requests'] = MagicMock()
+
+
+@pytest.fixture(autouse=True)
+def reset_resolver_caches():
+    """Reset resolver module-level caches before each test to prevent leakage."""
+    import resolver
+    resolver._circuits_cache = []
+    resolver._drivers_cache = []
+    resolver._drivers_cache_time = 0.0
+    yield
+    resolver._circuits_cache = []
+    resolver._drivers_cache = []
+    resolver._drivers_cache_time = 0.0

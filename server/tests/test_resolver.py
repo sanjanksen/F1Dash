@@ -337,3 +337,36 @@ def test_standings_scope_points_table(mock_circuits, mock_drivers):
     result = resolver.resolve_query_context("Show me the points table")
     assert result["scope"] == "standings"
     assert result["suggested_tool"] == "get_driver_standings"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_resolve_query_context_circuit_scope_tell_me_about(mock_circuits, mock_drivers):
+    """'tell me about the X circuit' sets scope=circuit and analysis_mode=circuit_profile."""
+    mock_drivers.return_value = []
+    mock_circuits.return_value = [
+        {"round": 6, "event_name": "Miami Grand Prix", "circuit_name": "Miami International Autodrome", "country": "United States"},
+    ]
+
+    result = resolver.resolve_query_context("tell me about the miami circuit")
+
+    assert result["scope"] == "circuit"
+    assert result["analysis_mode"] == "circuit_profile"
+    assert result["country"] == "United States"
+    assert result["event_name"] == "Miami Grand Prix"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_resolve_query_context_circuit_scope_circuit_guide(mock_circuits, mock_drivers):
+    """'circuit guide' phrasing also triggers circuit scope."""
+    mock_drivers.return_value = []
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka Circuit", "country": "Japan"},
+    ]
+
+    result = resolver.resolve_query_context("circuit guide for suzuka")
+
+    assert result["scope"] == "circuit"
+    assert result["analysis_mode"] == "circuit_profile"
+    assert result["country"] == "Japan"

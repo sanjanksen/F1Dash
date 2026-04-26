@@ -118,8 +118,15 @@ def _normalize(text: str) -> str:
 
 def _has_reference_language(normalized: str) -> bool:
     reference_terms = (
-        "here", "there", "that race", "that weekend", "that session",
-        "he", "him", "his", "they", "them", "their", "teammate"
+        "here", "there",
+        "that race", "that weekend", "that session", "that gp",
+        "this race", "this weekend", "this session", "this gp",
+        "the race", "the session", "the gp", "the grand prix",
+        "same race", "same weekend", "last race",
+        "he", "him", "his", "she", "her",
+        "they", "them", "their", "both",
+        "it", "its",
+        "teammate",
     )
     return any(re.search(rf"\b{re.escape(term)}\b", normalized) for term in reference_terms)
 
@@ -170,6 +177,13 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
         "leaderboard", "points leader", "championship leader",
     )):
         scope = "standings"
+
+    if any(phrase in normalized for phrase in (
+        "circuit profile", "circuit guide", "track guide", "track profile",
+        "about the circuit", "about this circuit", "circuit breakdown",
+        "about the track", "circuit info", "track info",
+    )) or (re.search(r"\btell me about\b", normalized) and ("circuit" in normalized or "track" in normalized)):
+        scope = "circuit"
 
     return session_type, scope
 
@@ -418,7 +432,10 @@ def _base_context(message: str) -> dict:
     if not event:
         event = _match_event(normalized)
 
-    analysis_mode, analysis_focus = _detect_analysis_mode(normalized, matched_drivers, session_type, team)
+    if scope == "circuit" and event:
+        analysis_mode, analysis_focus = "circuit_profile", None
+    else:
+        analysis_mode, analysis_focus = _detect_analysis_mode(normalized, matched_drivers, session_type, team)
 
     entity_type = None
     entity_name = None
@@ -476,20 +493,29 @@ def _merge_with_previous_context(current: dict, previous: dict | None) -> dict:
     merged = dict(current)
     used_previous = False
 
-    fallback_fields = (
-        "event_name", "round_number", "country", "session_type",
-        "entity_type", "entity_name", "entity_code", "scope",
-        "entity_names", "entity_codes", "analysis_mode", "analysis_focus"
+    # Fields that always carry forward (event/round/location context)
+    unconditional_fields = ("event_name", "round_number", "country", "session_type", "scope")
+    # Fields that only carry forward when the message contains reference language
+    # (pronouns, "that race", "it", etc.) — prevents topic bleeding
+    reference_gated_fields = (
+        "entity_type", "entity_name", "entity_code",
+        "entity_names", "entity_codes",
+        "analysis_mode", "analysis_focus",
     )
 
-    for field in fallback_fields:
+    has_ref = merged.get("has_reference_language", False)
+
+    for field in unconditional_fields + reference_gated_fields:
         current_value = merged.get(field)
         is_missing = current_value is None or current_value == []
-        if is_missing and previous.get(field) is not None:
-            if field in ("entity_type", "entity_name", "entity_code") and not merged.get("has_reference_language"):
-                continue
-            merged[field] = previous[field]
-            used_previous = True
+        if not is_missing:
+            continue
+        if previous.get(field) is None:
+            continue
+        if field in reference_gated_fields and not has_ref:
+            continue
+        merged[field] = previous[field]
+        used_previous = True
 
     if merged.get("suggested_tool") is None:
         if merged.get("scope") == "standings":
@@ -497,9 +523,6 @@ def _merge_with_previous_context(current: dict, previous: dict | None) -> dict:
             merged["suggested_tool"] = "get_constructor_standings" if _is_constructor else "get_driver_standings"
         else:
             merged["suggested_tool"] = _suggest_tool(merged.get("entity_type"), merged.get("scope"), merged.get("session_type"))
-
-    if current.get("analysis_mode") is None and previous.get("analysis_mode") is not None and merged.get("has_reference_language"):
-        used_previous = True
 
     explicit_parts = sum(1 for field in ("entity_name", "event_name", "session_type", "scope") if current.get(field) is not None)
     if explicit_parts >= 2:
@@ -510,17 +533,52 @@ def _merge_with_previous_context(current: dict, previous: dict | None) -> dict:
         resolution_confidence = "low"
 
     single_entity = merged.get("entity_type") in ("driver", "team")
-    if merged.get("suggested_tool") and merged.get("round_number") and single_entity and not merged.get("has_reference_language"):
+    if merged.get("suggested_tool") and merged.get("round_number") and single_entity and not has_ref:
         routing_confidence = "high"
     elif merged.get("suggested_tool") and merged.get("round_number"):
         routing_confidence = "medium"
     else:
         routing_confidence = "low"
 
+    # Detect when we should prompt the model to ask a clarifying question
+    needs_clarification = _detect_clarification_needed(merged)
+
     merged["resolution_confidence"] = resolution_confidence
     merged["routing_confidence"] = routing_confidence
     merged["used_previous_context"] = used_previous
+    merged["needs_clarification"] = needs_clarification
     return merged
+
+
+def _detect_clarification_needed(resolved: dict) -> str | None:
+    """
+    Returns a short description of what's missing, or None if context is clear enough.
+    Called after merging, so 'resolved' already has previous context applied.
+    """
+    scope = resolved.get("scope")
+    round_number = resolved.get("round_number")
+    entity_name = resolved.get("entity_name")
+    entity_names = resolved.get("entity_names") or []
+    has_any_entity = bool(entity_name or entity_names)
+
+    # Scopes that never need a specific round
+    general_scopes = {"standings", "schedule", "general", "drivers", "circuits"}
+    if scope in general_scopes:
+        return None
+
+    # We have a driver/team but absolutely no race context anywhere
+    if has_any_entity and round_number is None and not resolved.get("used_previous_context"):
+        # Only flag if the question seems race-specific (has a session/scope that implies event data)
+        if resolved.get("session_type") or scope in ("race", "qualifying", "overview", "pace", "telemetry"):
+            return "which_race"
+
+    # Extremely vague — no entity, no round, no scope, nothing to work with
+    if (not has_any_entity and round_number is None and scope is None
+            and resolved.get("resolution_confidence") == "low"
+            and not resolved.get("has_explicit_context")):
+        return "general_ambiguity"
+
+    return None
 
 
 def resolve_query_context(message: str, previous_context: dict | None = None) -> dict:
