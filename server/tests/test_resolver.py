@@ -339,9 +339,10 @@ def test_standings_scope_points_table(mock_circuits, mock_drivers):
     assert result["suggested_tool"] == "get_driver_standings"
 
 
+@patch('resolver._extract_entities_llm', return_value={})
 @patch('resolver.get_drivers')
 @patch('resolver.get_circuits')
-def test_resolve_query_context_circuit_scope_tell_me_about(mock_circuits, mock_drivers):
+def test_resolve_query_context_circuit_scope_tell_me_about(mock_circuits, mock_drivers, mock_llm):
     """'tell me about the X circuit' sets scope=circuit and analysis_mode=circuit_profile."""
     mock_drivers.return_value = []
     mock_circuits.return_value = [
@@ -356,9 +357,10 @@ def test_resolve_query_context_circuit_scope_tell_me_about(mock_circuits, mock_d
     assert result["event_name"] == "Miami Grand Prix"
 
 
+@patch('resolver._extract_entities_llm', return_value={})
 @patch('resolver.get_drivers')
 @patch('resolver.get_circuits')
-def test_resolve_query_context_circuit_scope_circuit_guide(mock_circuits, mock_drivers):
+def test_resolve_query_context_circuit_scope_circuit_guide(mock_circuits, mock_drivers, mock_llm):
     """'circuit guide' phrasing also triggers circuit scope."""
     mock_drivers.return_value = []
     mock_circuits.return_value = [

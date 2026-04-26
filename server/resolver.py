@@ -181,8 +181,9 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
     if any(phrase in normalized for phrase in (
         "circuit profile", "circuit guide", "track guide", "track profile",
         "about the circuit", "about this circuit", "circuit breakdown",
-        "about the track", "circuit info", "track info",
-    )) or (re.search(r"\btell me about\b", normalized) and ("circuit" in normalized or "track" in normalized)):
+        "about the track",
+    )) or re.search(r"\bcircuit info\b", normalized) or re.search(r"\btrack info\b", normalized) \
+            or (re.search(r"\btell me about\b", normalized) and ("circuit" in normalized or "track" in normalized)):
         scope = "circuit"
 
     return session_type, scope
@@ -432,7 +433,7 @@ def _base_context(message: str) -> dict:
     if not event:
         event = _match_event(normalized)
 
-    if scope == "circuit" and event:
+    if scope == "circuit":
         analysis_mode, analysis_focus = "circuit_profile", None
     else:
         analysis_mode, analysis_focus = _detect_analysis_mode(normalized, matched_drivers, session_type, team)
