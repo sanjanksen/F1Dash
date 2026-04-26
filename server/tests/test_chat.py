@@ -292,6 +292,56 @@ def test_build_analysis_plan_uses_qualifying_battle_tool_for_qualifying_comparis
     assert tool_names.count("get_team_radio") == 2
 
 
+def test_canonicalize_qualifying_analysis_aligns_answer_with_widget_source():
+    import chat
+
+    analysis = {
+        "direct_answer": "Antonelli won it at 3700m because Russell clipped.",
+        "primary_reason": "Energy clipping was decisive.",
+        "secondary_reasons": [],
+        "strongest_evidence": [],
+        "caveats": [],
+        "confidence": "medium",
+    }
+    evidence = [{
+        "tool": "analyze_qualifying_battle",
+        "result": {
+            "driver_a": "ANT",
+            "driver_b": "RUS",
+            "faster_driver": "ANT",
+            "slower_driver": "RUS",
+            "overall_gap_s": -0.298,
+            "decisive_sector": "Sector 2",
+            "decisive_sector_gap_s": -0.168,
+            "decisive_distance_m": 600,
+            "cause_explanations": [
+                {
+                    "cause_type": "traction",
+                    "rank": 1,
+                    "distance_m": 600,
+                    "delta_speed_kph": 25.0,
+                },
+                {
+                    "cause_type": "braking",
+                    "rank": 2,
+                    "distance_m": 2100,
+                    "delta_speed_kph": 6.0,
+                },
+            ],
+            "strongest_evidence": ["Primary mechanism — traction: 25.0 kph speed separation around 600m."],
+            "telemetry_available": True,
+        },
+    }]
+
+    canonical = chat._canonicalize_qualifying_analysis(analysis, evidence)
+
+    assert "600m" in canonical["direct_answer"]
+    assert "3700m" not in canonical["direct_answer"]
+    assert "25.0 kph" in canonical["primary_reason"]
+    assert "traction" not in canonical["primary_reason"].lower() or "Cause:" in canonical["primary_reason"]
+    assert "2100m" in canonical["secondary_reasons"][0]
+
+
 def test_build_analysis_plan_uses_requested_session_for_race_pace_comparison():
     import chat
 
@@ -408,3 +458,26 @@ def test_answer_f1_payload_includes_preloaded_race_story_widget():
 
     assert payload["response"] == "Russell ran a tidy race to P4."
     assert payload["widgets"][0]["type"] == "race_story"
+
+
+def test_run_anthropic_analysis_uses_current_model():
+    """The analysis call must use a current, non-deprecated Anthropic model ID."""
+    import chat as chat_module
+    # Inspect the source to find the model string used in the analysis call
+    import inspect
+    source = inspect.getsource(chat_module)
+    # claude-opus-4-5 was deprecated; must use claude-opus-4-7 or newer
+    assert "claude-opus-4-5" not in source, (
+        "chat.py still references deprecated model claude-opus-4-5"
+    )
+    assert "claude-opus-4-7" in source or "claude-opus-4-5-20251001" not in source
+
+
+def test_run_anthropic_answer_writer_uses_current_model():
+    """The answer-writer call must use a current, non-deprecated Anthropic model ID."""
+    import chat as chat_module
+    import inspect
+    source = inspect.getsource(chat_module)
+    assert "claude-opus-4-5" not in source, (
+        "chat.py still references deprecated model claude-opus-4-5"
+    )
