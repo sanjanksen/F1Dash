@@ -460,24 +460,29 @@ def test_answer_f1_payload_includes_preloaded_race_story_widget():
     assert payload["widgets"][0]["type"] == "race_story"
 
 
+def _read_chat_source() -> str:
+    chat_path = os.path.join(os.path.dirname(__file__), "..", "chat.py")
+    with open(chat_path) as f:
+        return f.read()
+
+
 def test_run_anthropic_analysis_uses_current_model():
-    """The analysis call must use a current, non-deprecated Anthropic model ID."""
-    import chat as chat_module
-    # Inspect the source to find the model string used in the analysis call
-    import inspect
-    source = inspect.getsource(chat_module)
-    # claude-opus-4-5 was deprecated; must use claude-opus-4-7 or newer
+    """The analysis call must use the current Anthropic model, not a deprecated one."""
+    source = _read_chat_source()
     assert "claude-opus-4-5" not in source, (
         "chat.py still references deprecated model claude-opus-4-5"
     )
-    assert "claude-opus-4-7" in source or "claude-opus-4-5-20251001" not in source
+    assert "claude-opus-4-7" in source, (
+        "chat.py must reference the current model claude-opus-4-7"
+    )
 
 
 def test_run_anthropic_answer_writer_uses_current_model():
-    """The answer-writer call must use a current, non-deprecated Anthropic model ID."""
-    import chat as chat_module
-    import inspect
-    source = inspect.getsource(chat_module)
+    """The answer-writer call must use the current Anthropic model, not a deprecated one."""
+    source = _read_chat_source()
     assert "claude-opus-4-5" not in source, (
         "chat.py still references deprecated model claude-opus-4-5"
+    )
+    assert "claude-opus-4-7" in source, (
+        "chat.py must reference the current model claude-opus-4-7"
     )
