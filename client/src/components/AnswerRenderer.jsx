@@ -4,6 +4,10 @@ import RaceStoryWidget from './chat-widgets/RaceStoryWidget.jsx'
 import RacePaceBattleWidget from './chat-widgets/RacePaceBattleWidget.jsx'
 import CornerComparisonWidget from './chat-widgets/CornerComparisonWidget.jsx'
 import CircuitProfileWidget from './chat-widgets/CircuitProfileWidget.jsx'
+import DataTableWidget from './chat-widgets/DataTableWidget.jsx'
+import PitStopStrategyWidget from './chat-widgets/PitStopStrategyWidget.jsx'
+import DegTrendChart from './chat-widgets/DegTrendChart.jsx'
+import EnergyManagementWidget from './chat-widgets/EnergyManagementWidget.jsx'
 
 function splitBlocks(text) {
   return text
@@ -151,6 +155,18 @@ function WidgetRenderer({ widget }) {
   }
   if (widget.type === 'circuit_profile') {
     return <CircuitProfileWidget widget={widget} />
+  }
+  if (widget.type === 'data_table') {
+    return <DataTableWidget widget={widget} />
+  }
+  if (widget.type === 'pit_stop_strategy') {
+    return <PitStopStrategyWidget widget={widget} />
+  }
+  if (widget.type === 'deg_trend_chart') {
+    return <DegTrendChart widget={widget} />
+  }
+  if (widget.type === 'energy_management') {
+    return <EnergyManagementWidget widget={widget} />
   }
   return null
 }

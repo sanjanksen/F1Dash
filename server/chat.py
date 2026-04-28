@@ -55,6 +55,74 @@ def _make_qualifying_battle_widget(result: dict) -> dict:
         "speed_trace": result.get("speed_trace") or [],
         "track_map": result.get("track_map") or [],
         "focus_window_trace": result.get("focus_window_trace") or [],
+        "grip_commitment": result.get("grip_commitment"),
+    }
+
+
+def _make_grip_commitment_summary(result: dict) -> dict | None:
+    summary = result.get("summary") or {}
+    driver_a = result.get("driver_a")
+    driver_b = result.get("driver_b")
+    a = summary.get(driver_a) if driver_a else None
+    b = summary.get(driver_b) if driver_b else None
+    if not driver_a or not driver_b or not isinstance(a, dict) or not isinstance(b, dict):
+        return None
+
+    def _num(row: dict, key: str):
+        value = row.get(key)
+        return value if isinstance(value, (int, float)) else None
+
+    util_a = _num(a, "avg_grip_utilisation_pct")
+    util_b = _num(b, "avg_grip_utilisation_pct")
+    edge_a = _num(a, "pct_time_above_90pct_grip")
+    edge_b = _num(b, "pct_time_above_90pct_grip")
+    var_a = _num(a, "avg_load_variance")
+    var_b = _num(b, "avg_load_variance")
+    corr_a = _num(a, "avg_corrections_per_corner")
+    corr_b = _num(b, "avg_corrections_per_corner")
+
+    commitment_driver = None
+    if util_a is not None and util_b is not None:
+        commitment_driver = driver_a if util_a >= util_b else driver_b
+    edge_driver = None
+    if edge_a is not None and edge_b is not None:
+        edge_driver = driver_a if edge_a >= edge_b else driver_b
+    smooth_driver = None
+    if var_a is not None and var_b is not None:
+        smooth_driver = driver_a if var_a <= var_b else driver_b
+
+    confidence_read = None
+    if commitment_driver and edge_driver:
+        confidence_read = (
+            f"{commitment_driver} looked more committed overall; "
+            f"{edge_driver} spent more of the cornering phase right on the limit."
+        )
+    elif commitment_driver:
+        confidence_read = f"{commitment_driver} looked more committed through the corners."
+
+    return {
+        "driver_a": driver_a,
+        "driver_b": driver_b,
+        "commitment_driver": commitment_driver,
+        "edge_driver": edge_driver,
+        "smooth_driver": smooth_driver,
+        "confidence_read": confidence_read,
+        "metrics": {
+            driver_a: {
+                "avg_grip_utilisation_pct": util_a,
+                "pct_time_above_90pct_grip": edge_a,
+                "avg_corrections_per_corner": corr_a,
+                "avg_load_variance": var_a,
+            },
+            driver_b: {
+                "avg_grip_utilisation_pct": util_b,
+                "pct_time_above_90pct_grip": edge_b,
+                "avg_corrections_per_corner": corr_b,
+                "avg_load_variance": var_b,
+            },
+        },
+        "narrative": result.get("narrative"),
+        "caveat": result.get("caveat"),
     }
 
 
@@ -110,6 +178,8 @@ def _make_race_pace_battle_widget(result: dict) -> dict:
         "overall_pace_delta_s": result.get("overall_pace_delta_s"),
         "avg_deg_rate_a_s_per_lap": result.get("avg_deg_rate_a_s_per_lap"),
         "avg_deg_rate_b_s_per_lap": result.get("avg_deg_rate_b_s_per_lap"),
+        "tyre_management_a": result.get("tyre_management_a"),
+        "tyre_management_b": result.get("tyre_management_b"),
         "deg_rate_delta": result.get("deg_rate_delta"),
         "decisive_factor": result.get("decisive_factor"),
         "aligned_stints": aligned_stints,
@@ -135,8 +205,8 @@ def _make_corner_comparison_widget(result: dict) -> dict:
     }
 
 
-def _make_circuit_profile_widget(result: dict) -> dict:
-    return {
+def _make_circuit_profile_widget(result: dict, track_map: dict | None = None) -> dict:
+    widget = {
         "type": "circuit_profile",
         "circuit_name": result.get("circuit_name"),
         "circuit_key": result.get("circuit_key"),
@@ -149,6 +219,66 @@ def _make_circuit_profile_widget(result: dict) -> dict:
         "style_verdict": result.get("style_verdict"),
         "tyre_challenge": result.get("tyre_challenge"),
         "narrative": result.get("narrative"),
+    }
+    if track_map:
+        widget["track_map"] = track_map
+    return widget
+
+
+def _make_pit_stop_strategy_widget(result: dict) -> dict:
+    return {
+        "type": "pit_stop_strategy",
+        "title": f"{result.get('event')} strategy",
+        "event": result.get("event"),
+        "session": result.get("session"),
+        "total_laps": result.get("total_laps"),
+        "drivers": result.get("drivers") or [],
+    }
+
+
+def _make_deg_trend_chart_widget(result: dict) -> dict:
+    return {
+        "type": "deg_trend_chart",
+        "title": f"{result.get('driver')} — {result.get('event')} tyre degradation",
+        "driver": result.get("driver"),
+        "event": result.get("event"),
+        "stints": [
+            {
+                "compound": s.get("compound"),
+                "lap_count": s.get("lap_count"),
+                "deg_rate_s_per_lap": s.get("deg_rate_s_per_lap"),
+                "r_squared": s.get("r_squared"),
+                "scatter_data": s.get("scatter_data") or [],
+                "regression_line": s.get("regression_line") or [],
+            }
+            for s in (result.get("stints") or [])
+            if s.get("scatter_data") or s.get("regression_line")
+        ],
+    }
+
+
+def _make_energy_management_widget(result: dict) -> dict:
+    drivers = result.get("drivers") or []
+    driver_a = drivers[0].get("driver") if drivers else None
+    driver_b = drivers[1].get("driver") if len(drivers) > 1 else None
+    label = driver_a or "Energy"
+    if driver_b:
+        label = f"{driver_a} vs {driver_b}"
+    return {
+        "type": "energy_management",
+        "title": f"{label} — {result.get('event')} energy management",
+        "driver_a": driver_a,
+        "driver_b": driver_b,
+        "event": result.get("event"),
+        "session": result.get("session"),
+        "drivers": drivers,
+        "speed_trace_a": result.get("speed_trace_a") or [],
+        "speed_trace_b": result.get("speed_trace_b"),
+        "energy_metrics_a": result.get("energy_metrics_a") or {},
+        "energy_metrics_b": result.get("energy_metrics_b"),
+        "straight_breakdown": result.get("straight_breakdown") or [],
+        "confidence": result.get("confidence"),
+        "inference_summary": result.get("inference_summary") or [],
     }
 
 
@@ -178,12 +308,27 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
             has_primary_qualifying_widget = True
             break
 
+    track_map_result = None
+    grip_commitment = None
+    for item in evidence:
+        if "result" not in item:
+            continue
+        if item.get("tool") == "get_circuit_track_map":
+            track_map_result = item["result"]
+        elif item.get("tool") == "analyze_cornering_loads":
+            grip_commitment = _make_grip_commitment_summary(item["result"])
+        if track_map_result is not None and grip_commitment is not None:
+            break
+
     for item in evidence:
         if "result" not in item:
             continue
         tool = item.get("tool")
         if tool == "analyze_qualifying_battle":
-            widgets.append(_make_qualifying_battle_widget(item["result"]))
+            result = dict(item["result"])
+            if grip_commitment:
+                result["grip_commitment"] = grip_commitment
+            widgets.append(_make_qualifying_battle_widget(result))
         elif tool == "get_driver_race_story":
             widgets.append(_make_race_story_widget(item["result"]))
         elif tool == "analyze_race_pace_battle":
@@ -195,7 +340,19 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
         elif tool == "analyze_team_performance" and isinstance(item["result"].get("corner_comparison"), dict):
             widgets.append(_make_corner_comparison_widget(item["result"]["corner_comparison"]))
         elif tool == "get_circuit_profile":
-            widgets.append(_make_circuit_profile_widget(item["result"]))
+            if plan.get("analysis_mode") == "circuit_profile" and plan.get("emit_context_widget") is False:
+                continue
+            widgets.append(_make_circuit_profile_widget(item["result"], track_map=track_map_result))
+        elif tool == "get_pit_stop_analysis":
+            widgets.append(_make_pit_stop_strategy_widget(item["result"]))
+        elif tool == "analyze_stint_degradation":
+            w = _make_deg_trend_chart_widget(item["result"])
+            if w.get("stints"):
+                widgets.append(w)
+        elif tool == "analyze_energy_management":
+            w = _make_energy_management_widget(item["result"])
+            if w.get("speed_trace_a"):
+                widgets.append(w)
 
     deduped = []
     seen: set = set()
@@ -219,6 +376,112 @@ def _merge_widgets(*groups: list[dict]) -> list[dict]:
             seen.add(key)
             merged.append(widget)
     return merged
+
+
+def _sanitize_data_table_widget(widget: dict) -> dict | None:
+    if not isinstance(widget, dict) or widget.get("type") != "data_table":
+        return None
+
+    raw_rows = widget.get("rows")
+    if not isinstance(raw_rows, list) or not raw_rows:
+        return None
+
+    raw_columns = widget.get("columns")
+    if not isinstance(raw_columns, list) or not raw_columns:
+        keys = []
+        for row in raw_rows:
+            if isinstance(row, dict):
+                for key in row.keys():
+                    if key not in keys:
+                        keys.append(key)
+        raw_columns = [{"key": key, "label": str(key).replace("_", " ").title()} for key in keys]
+
+    columns = []
+    for column in raw_columns[:8]:
+        if not isinstance(column, dict):
+            continue
+        key = str(column.get("key", "")).strip()
+        label = str(column.get("label") or key).strip()
+        if not key or not label:
+            continue
+        align = str(column.get("align", "left")).strip().lower()
+        columns.append({
+            "key": key[:40],
+            "label": label[:48],
+            "align": align if align in ("left", "right", "center") else "left",
+        })
+
+    if not columns:
+        return None
+
+    rows = []
+    for raw_row in raw_rows[:20]:
+        if not isinstance(raw_row, dict):
+            continue
+        row = {}
+        for column in columns:
+            value = raw_row.get(column["key"], "")
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                row[column["key"]] = "" if value is None else str(value)[:160]
+            else:
+                row[column["key"]] = json.dumps(value, default=str)[:160]
+        rows.append(row)
+
+    if not rows:
+        return None
+
+    return {
+        "type": "data_table",
+        "title": str(widget.get("title") or "Table").strip()[:80],
+        "subtitle": str(widget.get("subtitle") or "").strip()[:140],
+        "columns": columns,
+        "rows": rows,
+        "note": str(widget.get("note") or "").strip()[:180],
+    }
+
+
+def _extract_inline_widgets(text: str | None) -> tuple[str, list[dict]]:
+    if not text:
+        return "", []
+
+    widgets = []
+
+    def add_widgets(raw_json: str) -> None:
+        try:
+            parsed = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return
+        candidates = parsed if isinstance(parsed, list) else [parsed]
+        for candidate in candidates:
+            table = _sanitize_data_table_widget(candidate)
+            if table:
+                widgets.append(table)
+
+    def replace_widget(match: re.Match) -> str:
+        add_widgets(match.group("json"))
+        return ""
+
+    cleaned = re.sub(
+        r"```(?:f1-widget|widget|json-widget)\s*(?P<json>\{.*?\}|\[.*?\])\s*```",
+        replace_widget,
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    cleaned = re.sub(
+        r"<f1-widget>\s*(?P<json>\{.*?\}|\[.*?\])\s*</f1-widget>",
+        replace_widget,
+        cleaned,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return cleaned.strip(), widgets
+
+
+def _payload_with_inline_widgets(response: str | None, base_widgets: list[dict] | None = None) -> dict:
+    clean_response, inline_widgets = _extract_inline_widgets(response)
+    return {
+        "response": clean_response,
+        "widgets": _merge_widgets(base_widgets or [], inline_widgets),
+    }
 
 
 def _find_evidence_result(evidence: list[dict], tool_name: str) -> dict | None:
@@ -397,6 +660,7 @@ Guidelines:
 - For structured corner profiles (entry/apex/exit speeds, braking point, gear at apex, traction point, straight acceleration, DRS, clipping) for a single driver: use extract_corner_profiles
 - For comparing two drivers corner-by-corner (where the faster driver gains, cause classification, setup direction, avg straight speeds): use compare_corner_profiles
 - For a team's setup direction or which teammate is stronger through the corners: use analyze_team_performance
+- For historical team/car-circuit fit questions like "what kind of tracks suit Mercedes?", "is McLaren better on high-speed circuits?", or "does Ferrari suit late braking tracks?": use analyze_team_circuit_fit. If a specific round/session is known, also use analyze_team_telemetry_traits. Use get_team_car_profile only as dated public-reporting context, not as proof.
 - For tyre degradation rate, stint deg model, or how a driver's pace degraded per lap on a compound: use analyze_stint_degradation
 - For race pace comparison between two drivers (fuel-corrected pace delta, degradation rates, undercut analysis, decisive factor): use analyze_race_pace_battle. Prefer this over manual lap time inspection for 'why did X pull away from Y in the race?' questions
 - For 2026-style energy questions like lift-and-coast, clipping, super-clipping, deployment taper, or energy recovery behavior: use analyze_energy_management
@@ -420,6 +684,7 @@ Answer quality rules:
 - Stay focused on exactly what was asked. If asked about one driver, lead with that driver.
 - Use the conversation history for follow-up questions.
 - 3-5 sentences for most answers. Use bullets only when listing genuinely separate items.
+- When ranking, comparing many entities, or presenting 3+ rows of structured data, do not use a Markdown table. Add a hidden data table widget at the end of your answer using a fenced `f1-widget` JSON block. The JSON shape is: {{"type":"data_table","title":"Short title","subtitle":"Optional scope","columns":[{{"key":"rank","label":"Rank","align":"right"}},{{"key":"driver","label":"Driver"}}],"rows":[{{"rank":"1","driver":"PIA"}}],"note":"Optional caveat"}}. Keep the prose short and let the widget carry the rows.
 - If you cannot determine which specific race or round the question refers to, ask ONE short clarifying question before calling any data tools. Do not guess a round number and do not call tools with a missing or uncertain race context."""
 
 def _build_analysis_system_prompt() -> str:
@@ -587,6 +852,33 @@ top speed trap, slipstream, tow, drag penalty, sacrificing downforce, high-drag 
 - 3-5 sentences. Use bullets only for genuinely separate contributing factors.
 - For cornering data: NEVER say "lateral load variance", "grip utilisation percentage", "avg_corrections_per_corner". Those are internal metrics. Translate to character language: "Norris had more tyre confidence — really committed, on the absolute limit for a third of every corner" is correct. "Norris had 74% avg_grip_utilisation_pct" is completely wrong.
 - For tyre data: NEVER say "deg_rate_delta" or "fuel-corrected pace". Say "his tyres were dropping off faster" or "once you strip out the fuel, he had the edge on raw pace."
+- When discussing a driver's stints or compounds, always follow chronological race order — first stint first, second stint second. Never reorder stints for narrative effect or to lead with the more impressive number.
+- For tyre-management rankings, always show the actual deg rate if it is available. Rank primarily by lower positive deg rate, then use consistency as the noise check and R² as the trust check. Do not rank by R² alone. If raw pace trend is negative, explain that the car got faster on the stopwatch, but the fuel-corrected deg estimate adds back expected fuel burn to estimate tyre loss. Explain `±0.58s` as lap-to-lap spread around the trend, not time lost per lap.
+- For team/car characterization, rank evidence in this order: current telemetry traits first, historical circuit-fit trends second, sourced public-reporting profiles third. Never turn any one layer into a definitive private setup claim.
+- When the answer ranks drivers, teams, tyres, stints, circuits, or any list with 3+ comparable rows, do not write a Markdown table. Add a hidden `f1-widget` JSON block after the prose with `type: "data_table"`, `title`, optional `subtitle`, `columns`, `rows`, and optional `note`. Use concise strings only; the system will render the widget and remove the JSON from the visible answer.
+- For tyre-management data_table widgets, the table shape is EXACTLY: one deg-rate column per compound used (e.g. "Medium /lap", "Hard /lap"), followed by ONE "Total lost (s)" column taken from `total_deg_loss_all_stints_s` — the total time lost to tyre wear across all stints combined. Example: `columns: ["Driver","Medium /lap","Hard /lap","Total lost (s)"]`. NEVER include finishing position, race position, "Fin", points, or any race-result field in a tyre-management table. The total-loss column must always be present.
+
+## Circuit profile responses
+
+When `analysis_mode` is `circuit_profile`, a visual widget is already showing the sector breakdown, energy profile, style verdict, and tyre challenge. Do NOT re-narrate those. The user can read them.
+
+Write 2–3 sentences maximum:
+1. One sentence on the circuit's overall feel/rhythm — what it actually demands from the car and driver.
+2. One sentence on the most important strategic or competitive angle (which driver type wins here, what the key race factor is, what to watch).
+3. Embed the caveat naturally ("that's the circuit character — how it actually plays out in 2026 depends on track evolution and compound choices").
+
+Never walk through S1/S2/S3 individually. Never repeat the style verdict text. Never list the energy profile rows. The widget has all of that.
+
+## Energy management responses
+
+When `analyze_energy_management` results are present, a widget already shows the speed trace with annotated lift-and-coast and clipping zones, the efficiency metrics, and the per-straight breakdown. Do NOT re-describe zone positions or list straight-by-straight numbers — the widget has all of that.
+
+Write 2–3 sentences:
+1. Who has the better energy balance — fewer clips or more efficient harvesting — and what the estimated time cost shows.
+2. What the straight breakdown reveals: whether one driver is losing time specifically on DRS straights vs shorter sections.
+3. Embed the confidence caveat naturally ("this is inferred from speed/throttle patterns — ERS state isn't directly measured").
+
+Never say "lift_and_coast_events" or "clipping_windows". Use natural language: "runs out of deployment on the main straight", "lifts early before the chicane to harvest", "costs him roughly X seconds across the lap".
 """
 
 
@@ -658,6 +950,7 @@ def _extract_json_object(text: str) -> dict:
 def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
     analysis_mode = resolved.get("analysis_mode")
     round_number = resolved.get("round_number")
+    normalized_message = message.lower()
 
     # ── circuit_profile mode ─────────────────────────────────────────────────
     if analysis_mode == "circuit_profile":
@@ -669,6 +962,7 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
             ("get_circuit_profile", {"country": country, "event_name": event_name or ""}),
         ]
         if round_number:
+            tool_calls.append(("get_circuit_track_map", {"round_number": round_number}))
             tool_calls.append(("get_historical_circuit_performance", {"round_number": round_number}))
         return {
             "analysis_mode": "circuit_profile",
@@ -677,6 +971,10 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
             "round_number": round_number,
             "event_name": event_name,
             "country": country,
+            "emit_context_widget": (
+                bool(resolved.get("has_explicit_context"))
+                or any(term in normalized_message for term in ("widget", "map", "graphic", "profile", "circuit", "track", "show it", "bring it up"))
+            ),
             "tool_calls": tool_calls,
         }
 
@@ -704,6 +1002,37 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
         }
 
     # ── race_pace_comparison mode ────────────────────────────────────────────
+    if analysis_mode == "team_circuit_fit":
+        team = resolved.get("entity_name")
+        if not team:
+            return None
+        normalized_question = message.lower()
+        session_type = "R" if (resolved.get("session_type") == "R" or "race" in normalized_question) else "Q"
+        return {
+            "analysis_mode": "team_circuit_fit",
+            "focus": "team_fit",
+            "question": message,
+            "round_number": round_number,
+            "team": team,
+            "tool_calls": [
+                ("analyze_team_circuit_fit", {
+                    "team_name": team,
+                    "session_type": session_type,
+                }),
+                ("get_team_car_profile", {
+                    "team_name": team,
+                }),
+            ] + (
+                [("analyze_team_telemetry_traits", {
+                    "round_number": round_number,
+                    "team_name": team,
+                    "session_type": session_type,
+                })]
+                if round_number is not None
+                else []
+            ),
+        }
+
     if analysis_mode == "race_pace_comparison":
         codes = resolved.get("entity_codes") or []
         names = resolved.get("entity_names") or []
@@ -768,6 +1097,12 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
                 "driver_b": codes[1],
             }),
             ("compare_corner_profiles", {
+                "round_number": round_number,
+                "session_type": "Q",
+                "driver_a": codes[0],
+                "driver_b": codes[1],
+            }),
+            ("analyze_cornering_loads", {
                 "round_number": round_number,
                 "session_type": "Q",
                 "driver_a": codes[0],
@@ -982,20 +1317,20 @@ def _try_deterministic_analysis(question: str, history: list[dict], *, provider:
                 analysis = _canonicalize_qualifying_analysis(analysis, evidence)
             elif plan.get("analysis_mode") == "race_pace_comparison":
                 analysis = _canonicalize_race_pace_analysis(analysis, evidence)
-            return {
-                "response": _run_openai_answer_writer(question, analysis),
-                "widgets": _widgets_from_analysis_evidence(plan, evidence),
-            }
+            return _payload_with_inline_widgets(
+                _run_openai_answer_writer(question, analysis),
+                _widgets_from_analysis_evidence(plan, evidence),
+            )
 
         analysis = _run_anthropic_analysis(question, resolved, plan, evidence)
         if plan.get("focus") == "qualifying":
             analysis = _canonicalize_qualifying_analysis(analysis, evidence)
         elif plan.get("analysis_mode") == "race_pace_comparison":
             analysis = _canonicalize_race_pace_analysis(analysis, evidence)
-        return {
-            "response": _run_anthropic_answer_writer(question, analysis),
-            "widgets": _widgets_from_analysis_evidence(plan, evidence),
-        }
+        return _payload_with_inline_widgets(
+            _run_anthropic_answer_writer(question, analysis),
+            _widgets_from_analysis_evidence(plan, evidence),
+        )
     except Exception as exc:
         logger.warning("Deterministic analysis failed; falling back to normal tool loop. error=%s", exc)
         return None
@@ -1058,13 +1393,13 @@ def _answer_anthropic(message: str, history: list[dict]) -> dict:
         if response.stop_reason == "end_turn":
             for block in response.content:
                 if hasattr(block, "text"):
-                    return {
-                        "response": block.text,
-                        "widgets": _merge_widgets(
+                    return _payload_with_inline_widgets(
+                        block.text,
+                        _merge_widgets(
                             _widgets_from_preloaded(preloaded),
                             _widgets_from_analysis_evidence({}, executed_evidence),
                         ),
-                    }
+                    )
             raise ValueError("Claude returned end_turn but no text content block")
 
         if response.stop_reason == "tool_use":
@@ -1161,13 +1496,13 @@ def _answer_openai(message: str, history: list[dict]) -> dict:
         choice = response.choices[0]
 
         if choice.finish_reason == "stop":
-            return {
-                "response": choice.message.content,
-                "widgets": _merge_widgets(
+            return _payload_with_inline_widgets(
+                choice.message.content,
+                _merge_widgets(
                     _widgets_from_preloaded(preloaded),
                     _widgets_from_analysis_evidence({}, executed_evidence),
                 ),
-            }
+            )
 
         if choice.finish_reason == "tool_calls":
             # Append the assistant turn (contains the tool_calls)
