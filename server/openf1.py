@@ -78,15 +78,26 @@ def get_team_radio(round_number: int, session_type: str, driver_ref: str | None 
         driver_name = matched["full_name"] if matched else driver_ref
         params["driver_number"] = driver_number
 
-    radios = _openf1_get("team_radio", **params)
+    try:
+        radios = _openf1_get("team_radio", **params)
+        unavailable_reason = None
+    except requests.HTTPError as exc:
+        status_code = getattr(exc.response, "status_code", None)
+        if status_code != 404:
+            raise
+        radios = []
+        unavailable_reason = "OpenF1 has no team radio rows for this session/driver."
     radios = sorted(radios, key=lambda row: row.get("date", ""), reverse=True)[:limit]
     return {
+        "source": "OpenF1",
+        "data_type": "audio_recording_metadata",
         "event": session.get("session_name"),
         "country": session.get("country_name"),
         "circuit": session.get("circuit_short_name"),
         "session_key": session.get("session_key"),
         "driver_number": driver_number,
         "driver": driver_name,
+        "unavailable_reason": unavailable_reason,
         "messages": [
             {
                 "date": row.get("date"),
@@ -162,3 +173,21 @@ def get_live_position_timeline(round_number: int, session_type: str, driver_ref:
             for row in rows
         ],
     }
+
+
+def get_pit_stops(round_number: int) -> list[dict]:
+    """
+    Raw pit stop rows from OpenF1 for a race: driver_number, lap_number, pit_duration_s.
+    Returns an empty list if OpenF1 has no data yet (race not happened).
+    """
+    session = _resolve_openf1_session(round_number, "R")
+    rows = _openf1_get("pit", session_key=session["session_key"])
+    return [
+        {
+            "driver_number": r.get("driver_number"),
+            "lap_number": r.get("lap_number"),
+            "pit_duration_s": round(float(r["pit_duration"]), 2) if r.get("pit_duration") is not None else None,
+        }
+        for r in rows
+        if r.get("driver_number") is not None and r.get("lap_number") is not None
+    ]
