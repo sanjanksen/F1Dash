@@ -476,3 +476,53 @@ def test_strategy_keyword_without_pit_terms_stays_strategy_scope(mock_circuits, 
     result = resolver.resolve_query_context("what was Russell's strategy at Suzuka?")
 
     assert result["scope"] == "strategy"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_fp_scope_routes_to_fp_summary(mock_circuits, mock_drivers):
+    mock_drivers.return_value = []
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+    result = resolver.resolve_query_context("who was fastest in FP1 at Suzuka?")
+    assert result["scope"] == "fp"
+    assert result["suggested_tool"] == "get_fp_summary"
+    assert result["fp_number"] == 1
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_fp2_scope_carries_fp_number(mock_circuits, mock_drivers):
+    mock_drivers.return_value = []
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+    result = resolver.resolve_query_context("what programmes did the drivers run in free practice 2 at Suzuka?")
+    assert result["scope"] == "fp"
+    assert result["fp_number"] == 2
+    assert result["suggested_tool"] == "get_fp_summary"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_speed_trap_scope_routes_to_leaderboard(mock_circuits, mock_drivers):
+    mock_drivers.return_value = []
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+    result = resolver.resolve_query_context("who had the highest top speed in qualifying at Suzuka?")
+    assert result["scope"] == "speed_trap"
+    assert result["suggested_tool"] == "get_speed_trap_leaderboard"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_speed_trap_scope_straight_line_language(mock_circuits, mock_drivers):
+    mock_drivers.return_value = []
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+    result = resolver.resolve_query_context("who was fastest down the straight in the race at Suzuka?")
+    assert result["scope"] == "speed_trap"
+    assert result["suggested_tool"] == "get_speed_trap_leaderboard"

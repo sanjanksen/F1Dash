@@ -131,9 +131,23 @@ def _has_reference_language(normalized: str) -> bool:
     return any(re.search(rf"\b{re.escape(term)}\b", normalized) for term in reference_terms)
 
 
+def _detect_fp_number(normalized: str) -> int | None:
+    """Return 1, 2, or 3 if the message mentions a specific FP session."""
+    if re.search(r"\bfp\s*1\b|\bfree\s+practice\s+1\b|\bpractice\s+1\b", normalized):
+        return 1
+    if re.search(r"\bfp\s*2\b|\bfree\s+practice\s+2\b|\bpractice\s+2\b", normalized):
+        return 2
+    if re.search(r"\bfp\s*3\b|\bfree\s+practice\s+3\b|\bpractice\s+3\b", normalized):
+        return 3
+    return None
+
+
 def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
     session_type = None
-    if (
+    fp_number = _detect_fp_number(normalized)
+    if fp_number is not None:
+        session_type = f"FP{fp_number}"
+    elif (
         "qualifying" in normalized
         or re.search(r"\bq\d\b", normalized)
         or re.search(r"\bquali\b", normalized)
@@ -202,6 +216,20 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
     )) or re.search(r"\bcircuit info\b", normalized) or re.search(r"\btrack info\b", normalized) \
             or (re.search(r"\btell me about\b", normalized) and ("circuit" in normalized or "track" in normalized)):
         scope = "circuit"
+
+    if fp_number is not None or any(term in normalized for term in (
+        "free practice", "fp1", "fp2", "fp3", "practice session",
+        "practice programme", "practice running",
+    )):
+        scope = "fp"
+
+    if any(term in normalized for term in (
+        "top speed", "speed trap", "fastest straight", "straight-line speed",
+        "speed down the straight", "highest speed", "trap speed",
+        "maximum speed", "top speeds", "down the straight",
+        "fastest on the straight", "speed on the straight",
+    )) or re.search(r"\bdrag\b", normalized):
+        scope = "speed_trap"
 
     return session_type, scope
 
@@ -349,6 +377,10 @@ def _match_event(normalized: str) -> dict | None:
 
 
 def _suggest_tool(entity_type: str | None, scope: str | None, session_type: str | None = None) -> str | None:
+    if scope == "fp":
+        return "get_fp_summary"
+    if scope == "speed_trap":
+        return "get_speed_trap_leaderboard"
     if scope == "radio":
         return "get_team_radio"
     if scope == "energy":
@@ -430,6 +462,7 @@ def _detect_analysis_mode(normalized: str, matched_drivers: list[dict], session_
 
 def _base_context(message: str) -> dict:
     normalized = _normalize(message)
+    fp_number = _detect_fp_number(normalized)
     session_type, scope = _detect_session_scope(normalized)
 
     # ── LLM extraction — handles nicknames, aliases, and paraphrasing ─────────
@@ -503,6 +536,7 @@ def _base_context(message: str) -> dict:
         "round_number": event.get("round") if event else None,
         "country": event.get("country") if event else None,
         "session_type": session_type,
+        "fp_number": fp_number,
         "scope": scope,
         "analysis_mode": analysis_mode,
         "analysis_focus": analysis_focus,
