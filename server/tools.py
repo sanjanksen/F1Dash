@@ -10,15 +10,22 @@ The model should prefer composite recap tools for broad "tell me about..."
 questions and use primitives for focused follow-ups.
 """
 from driver_styles import get_driver_style, get_comparison_framing
+from circuit_profiles import get_circuit_profile
+from team_car_profiles import get_team_car_profile
 from f1_data import (
+    analyze_cornering_loads,
+    analyze_race_cornering_profile,
     analyze_qualifying_battle,
     analyze_race_pace_battle,
     analyze_stint_degradation,
+    analyze_team_circuit_fit,
     analyze_team_performance,
+    analyze_team_telemetry_traits,
     compare_corner_profiles,
     extract_corner_profiles,
     get_circuit_corners,
     get_circuit_details,
+    get_circuit_track_map,
     get_circuits,
     get_clean_pace_summary,
     get_constructor_standings,
@@ -45,6 +52,8 @@ from f1_data import (
     get_team_weekend_overview,
     get_telemetry_comparison,
     get_track_position_comparison,
+    get_pit_stop_analysis,
+    analyze_weather_pace_correlation,
 )
 from openf1 import get_intervals, get_live_position_timeline, get_team_radio
 
@@ -282,11 +291,84 @@ PRIMITIVE_TOOL_DEFINITIONS = [
         ["round_number"],
     ),
     _tool(
+        "get_circuit_track_map",
+        "PRIMITIVE TOOL. GPS-derived circuit shape: downsampled {x, y, distance_m} points from the fastest lap plus sector boundary distances. Use for circuit map visualization.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+        },
+        ["round_number"],
+    ),
+    _tool(
         "get_historical_circuit_performance",
         "PRIMITIVE TOOL. Historical quali/race top performers for the same circuit across recent years.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
             "years": {"type": "array", "items": {"type": "integer"}, "description": "Optional years list."},
+        },
+        ["round_number"],
+    ),
+    _tool(
+        "get_circuit_profile",
+        (
+            "PRIMITIVE TOOL. Returns a structured knowledge profile for a circuit: character (power/technical/street), "
+            "per-sector types and style advantages (V-line vs U-line vs late-braker), energy deployment demand, "
+            "clipping risk, tyre challenge, and a narrative summary. "
+            "Use before or alongside telemetry analysis to contextualise WHY a gap opened in a specific sector. "
+            "For example: if Sector 2 is 'high_speed_sweepers' with 'u_line_favored', a minimum-speed advantage "
+            "in that sector is structurally expected for a U-line driver."
+        ),
+        {
+            "country": {"type": "string", "description": "Country name for the circuit (e.g. Japan, Italy, Azerbaijan)."},
+            "event_name": {"type": "string", "description": "Optional event name to disambiguate (e.g. Miami, United States Grand Prix)."},
+        },
+        ["country"],
+    ),
+    _tool(
+        "analyze_team_circuit_fit",
+        "PRIMITIVE TOOL. Derives a team's historical circuit-fit tendencies from real qualifying or race classifications. "
+        "It compares the team's average result at each circuit archetype against that team's own season baseline, "
+        "then reports over/under-performance by character, style verdict, and downforce level. "
+        "Use for questions like 'what kind of tracks does Mercedes suit?', 'is McLaren better at high-speed circuits?', "
+        "or 'does Ferrari historically overperform at late-braker tracks?'. This is not private setup data.",
+        {
+            "team_name": {"type": "string", "description": "Constructor name or close match, e.g. Mercedes, McLaren, Ferrari."},
+            "years": {"type": "array", "items": {"type": "integer"}, "description": "Optional completed seasons. Defaults to the three seasons before the current year."},
+            "session_type": {"type": "string", "description": "Q for qualifying fit or R for race fit. Defaults to Q."},
+        },
+        ["team_name"],
+    ),
+    _tool(
+        "analyze_team_telemetry_traits",
+        "PRIMITIVE TOOL. Session-specific telemetry characterization for a team's current car behavior. "
+        "Compares the team's fastest-lap corner/straight traits against the field median: apex speed, exit speed, "
+        "braking point, straight-line speed, full throttle, braking, and coasting. "
+        "Use with analyze_team_circuit_fit when a specific round/session is known.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "team_name": {"type": "string", "description": "Constructor name or close match."},
+            "session_type": {"type": "string", "description": "Q, R, FP1, FP2, FP3, S, SQ, SS. Defaults to Q."},
+            "field_limit": {"type": "integer", "description": "Fastest field sample size. Defaults to 10."},
+        },
+        ["round_number", "team_name"],
+    ),
+    _tool(
+        "get_team_car_profile",
+        "PRIMITIVE TOOL. Dated, sourced public-reporting context about a team's car strengths or weaknesses. "
+        "This is editorial context, not deterministic telemetry; use it only after or alongside data tools.",
+        {
+            "team_name": {"type": "string", "description": "Constructor name or close match."},
+        },
+        ["team_name"],
+    ),
+    _tool(
+        "get_pit_stop_analysis",
+        "PRIMITIVE TOOL. Pit stop strategy for all classified finishers in a race. "
+        "Returns per-driver stints (compound, start_lap, end_lap, laps), pit stop laps, "
+        "pit durations from OpenF1, and compound changes. Drivers sorted by finish position. "
+        "Use for 'who had the fastest pit stops?', 'show me the strategy', "
+        "'did anyone undercut on the pit stop?'.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
         },
         ["round_number"],
     ),
@@ -353,6 +435,36 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
             "lap_number_b": {"type": "integer", "description": "Optional lap number for driver_b."},
         },
         ["round_number", "session_type", "driver_a"],
+    ),
+    _tool(
+        "analyze_cornering_loads",
+        "DEEP ANALYSIS PRIMITIVE. Compute lateral G and grip utilisation for two drivers across all corners of their fastest laps, "
+        "using curvature derived from X/Y position telemetry. Returns per-corner stats (peak G, apex G, load variance, "
+        "steering correction count, % time above 90% theoretical grip) plus an overall summary and a human-readable narrative "
+        "like 'Piastri was above 90% grip for 34% of cornering time vs Norris's 26%'. "
+        "Use this for qualifying / single-lap grip style comparisons.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
+            "driver_a": {"type": "string", "description": "First driver's 3-letter code."},
+            "driver_b": {"type": "string", "description": "Second driver's 3-letter code."},
+            "lap_number_a": {"type": "integer", "description": "Optional specific lap number for driver_a."},
+            "lap_number_b": {"type": "integer", "description": "Optional specific lap number for driver_b."},
+        },
+        ["round_number", "session_type", "driver_a", "driver_b"],
+    ),
+    _tool(
+        "analyze_race_cornering_profile",
+        "DEEP ANALYSIS PRIMITIVE. Compute lateral G and grip utilisation aggregated across an ENTIRE RACE for two drivers. "
+        "Processes every clean race lap (pit laps excluded) and returns overall summary stats plus a per-stint breakdown. "
+        "Use this when asked about race-long grip usage, tyre stress, or who pushes harder through corners over a full race distance. "
+        "Returns: avg corner grip utilisation %, % cornering time above 90% grip, corrections per corner, load variance per stint.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "driver_a": {"type": "string", "description": "First driver's 3-letter code."},
+            "driver_b": {"type": "string", "description": "Second driver's 3-letter code."},
+        },
+        ["round_number", "driver_a", "driver_b"],
     ),
     _tool(
         "get_lap_telemetry",
@@ -438,8 +550,12 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
         "analyze_stint_degradation",
         "DEEP ANALYSIS PRIMITIVE. Compute tyre degradation model for a driver's race stints. "
         "Fits linear regression on fuel-corrected lap times vs tyre age per stint compound. "
-        "Returns deg_rate_s_per_lap, fuel_corrected_pace_at_age_1_s, r_squared, consistency_std_dev_s. "
-        "Use for questions about tyre wear, degradation rate, or how pace evolved over a stint.",
+        "Returns deg_rate_s_per_lap, fuel_corrected_pace_at_age_1_s, r_squared, consistency_std_dev_s, "
+        "raw_pace_trend_s_per_lap, and a tyre_management summary. The raw trend is what the stopwatch did; "
+        "deg_rate_s_per_lap adds back expected fuel-burn gain to estimate tyre performance loss. "
+        "For tyre-management rankings, lower positive_deg_rate_s_per_lap is the primary signal; "
+        "consistency_std_dev_s is lap-to-lap noise and r_squared is confidence/trust in the trend, not pace. "
+        "Use for questions about tyre wear, degradation rate, tyre management, or how pace evolved over a stint.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
             "driver_code": {"type": "string", "description": "3-letter driver code."},
@@ -452,7 +568,8 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
         "DEEP ANALYSIS PRIMITIVE. Compare race pace and tyre degradation between two drivers. "
         "Race equivalent of analyze_qualifying_battle. Returns fuel-corrected pace delta, "
         "per-compound degradation rate comparison, aligned stints, decisive_factor classification "
-        "(tyre_degradation/raw_pace_advantage/strategy_execution/mixed), and undercut analysis. "
+        "(tyre_degradation/raw_pace_advantage/strategy_execution/mixed), tyre_management summaries with deg rate, "
+        "consistency, and R², and undercut analysis. "
         "Use for questions like 'who had better race pace?' or 'why did Verstappen pull away from Hamilton in the race?'.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
@@ -473,6 +590,19 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
             "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
         },
         ["round_number", "team_name", "session_type"],
+    ),
+    _tool(
+        "analyze_weather_pace_correlation",
+        "DEEP ANALYSIS PRIMITIVE. Correlates track temperature with lap time evolution. "
+        "For qualifying: Q1/Q2/Q3 segments with temperature, best lap, and top-5 average. "
+        "For race: 10-lap blocks with temperature and pace. "
+        "Use reactively to explain anomalies: why Q3 was slower than Q2, why pace fell off mid-race, "
+        "whether a track temperature drop or rainfall explains an unexpected result.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "session_type": {"type": "string", "description": "Q (default) or R."},
+        },
+        ["round_number"],
     ),
 ]
 
@@ -559,8 +689,25 @@ def execute_tool(name: str, args: dict):
         return get_circuit_corners(args["round_number"])
     if name == "get_circuit_details":
         return get_circuit_details(args["round_number"])
+    if name == "get_circuit_track_map":
+        return get_circuit_track_map(args["round_number"])
     if name == "get_historical_circuit_performance":
         return get_historical_circuit_performance(args["round_number"], args.get("years"))
+    if name == "analyze_cornering_loads":
+        return analyze_cornering_loads(
+            args["round_number"],
+            args["session_type"],
+            args["driver_a"],
+            args["driver_b"],
+            args.get("lap_number_a"),
+            args.get("lap_number_b"),
+        )
+    if name == "analyze_race_cornering_profile":
+        return analyze_race_cornering_profile(
+            args["round_number"],
+            args["driver_a"],
+            args["driver_b"],
+        )
     if name == "get_lap_telemetry":
         return get_lap_telemetry(args["round_number"], args["session_type"], args["driver_code"], args.get("lap_number"))
     if name == "analyze_energy_management":
@@ -632,6 +779,34 @@ def execute_tool(name: str, args: dict):
             args["team_name"],
             args["session_type"],
         )
+    if name == "analyze_team_circuit_fit":
+        return analyze_team_circuit_fit(
+            args["team_name"],
+            args.get("years"),
+            args.get("session_type", "Q"),
+        )
+    if name == "analyze_team_telemetry_traits":
+        return analyze_team_telemetry_traits(
+            args["round_number"],
+            args["team_name"],
+            args.get("session_type", "Q"),
+            args.get("field_limit", 10),
+        )
+    if name == "get_team_car_profile":
+        profile = get_team_car_profile(args["team_name"])
+        if profile is None:
+            return {
+                "team_query": args["team_name"],
+                "profile_type": "curated_editorial",
+                "available": False,
+                "caveat": "No sourced public-reporting profile is currently curated for this team.",
+            }
+        return profile
+    if name == "get_circuit_profile":
+        profile = get_circuit_profile(args["country"], args.get("event_name", ""))
+        if profile is None:
+            raise ValueError(f"No circuit profile found for country={args['country']!r}.")
+        return profile
     if name == "get_driver_style_profile":
         driver_b = args.get("driver_b")
         if driver_b:
@@ -646,4 +821,8 @@ def execute_tool(name: str, args: dict):
         if profile is None:
             raise ValueError(f"No style profile found for driver code {args['driver_a']!r}.")
         return profile
+    if name == "get_pit_stop_analysis":
+        return get_pit_stop_analysis(args["round_number"])
+    if name == "analyze_weather_pace_correlation":
+        return analyze_weather_pace_correlation(args["round_number"], args.get("session_type", "Q"))
     raise ValueError(f"Unknown tool: {name!r}")
