@@ -1931,3 +1931,93 @@ def test_analyze_energy_management_includes_speed_trace():
     assert "energy_metrics_a" in result
     assert "clip_count" in result["energy_metrics_a"]
     assert "straight_breakdown" in result
+
+
+# ── Task 1: SC impact enrichment ─────────────────────────────────────────────
+
+def _make_sc_session(pitted_before_s, sc_start_s, sc_end_s, pitted_during_s=None):
+    import pandas as pd
+    from unittest.mock import MagicMock
+
+    ts_data = [
+        {'Time': pd.Timedelta(seconds=0), 'Status': '1', 'Message': 'AllClear'},
+        {'Time': pd.Timedelta(seconds=sc_start_s), 'Status': '4', 'Message': 'SafetyCar'},
+        {'Time': pd.Timedelta(seconds=sc_end_s), 'Status': '1', 'Message': 'AllClear'},
+    ]
+    ts_df = pd.DataFrame(ts_data)
+
+    laps_rows = [
+        {
+            'Driver': 'AAA', 'Team': 'Alpha', 'LapNumber': 10,
+            'LapStartTime': pd.Timedelta(seconds=pitted_before_s - 90),
+            'PitInTime': pd.Timedelta(seconds=pitted_before_s),
+            'PitOutTime': pd.NaT, 'Stint': 1, 'Compound': 'HARD',
+            'TyreLife': 10, 'FreshTyre': True, 'TrackStatus': '1',
+            'LapTime': pd.Timedelta(seconds=90),
+        },
+    ]
+    if pitted_during_s:
+        laps_rows.append({
+            'Driver': 'BBB', 'Team': 'Beta', 'LapNumber': 11,
+            'LapStartTime': pd.Timedelta(seconds=pitted_during_s - 90),
+            'PitInTime': pd.Timedelta(seconds=pitted_during_s),
+            'PitOutTime': pd.NaT, 'Stint': 2, 'Compound': 'SOFT',
+            'TyreLife': 1, 'FreshTyre': True, 'TrackStatus': '4',
+            'LapTime': pd.Timedelta(seconds=90),
+        })
+    laps_df = pd.DataFrame(laps_rows)
+
+    session = MagicMock()
+    session.track_status = ts_df
+    session.laps = laps_df
+    session.event = {'EventName': 'Test GP'}
+    session.drivers = list(laps_df['Driver'].unique())
+    return session
+
+
+def _pick_driver_plain(df, code):
+    """Plain pandas substitute for FastF1's pick_driver/pick_drivers on mock DataFrames."""
+    import pandas as pd
+    return df[df['Driver'] == str(code)]
+
+
+def test_sc_period_narrative_present():
+    session = _make_sc_session(pitted_before_s=100, sc_start_s=150, sc_end_s=300)
+    with patch('f1_data._load_session', return_value=session), \
+         patch('f1_data._pick_driver', side_effect=_pick_driver_plain):
+        result = f1_data.get_safety_car_periods(1, 'R')
+    assert len(result['periods']) == 1
+    assert isinstance(result['periods'][0].get('period_narrative'), str)
+    assert len(result['periods'][0]['period_narrative']) > 0
+
+
+def test_sc_all_victims_populated():
+    session = _make_sc_session(pitted_before_s=100, sc_start_s=150, sc_end_s=300,
+                               pitted_during_s=200)
+    with patch('f1_data._load_session', return_value=session), \
+         patch('f1_data._pick_driver', side_effect=_pick_driver_plain):
+        result = f1_data.get_safety_car_periods(1, 'R')
+    victims = result.get('all_victims', [])
+    assert any(v['driver'] == 'AAA' for v in victims)
+
+
+def test_sc_all_beneficiaries_populated():
+    session = _make_sc_session(pitted_before_s=100, sc_start_s=150, sc_end_s=300,
+                               pitted_during_s=200)
+    with patch('f1_data._load_session', return_value=session), \
+         patch('f1_data._pick_driver', side_effect=_pick_driver_plain):
+        result = f1_data.get_safety_car_periods(1, 'R')
+    beneficiaries = result.get('all_beneficiaries', [])
+    assert any(b['driver'] == 'BBB' for b in beneficiaries)
+
+
+def test_sc_no_beneficiaries_when_nobody_pitted_during():
+    session = _make_sc_session(pitted_before_s=100, sc_start_s=150, sc_end_s=300,
+                               pitted_during_s=None)
+    with patch('f1_data._load_session', return_value=session), \
+         patch('f1_data._pick_driver', side_effect=_pick_driver_plain):
+        result = f1_data.get_safety_car_periods(1, 'R')
+    beneficiaries = result.get('all_beneficiaries', [])
+    assert beneficiaries == []
+    victims = result.get('all_victims', [])
+    assert any(v['driver'] == 'AAA' for v in victims)

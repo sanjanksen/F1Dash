@@ -1168,6 +1168,38 @@ def get_driver_race_story(round_number: int, driver_name: str) -> dict:
             "sample_count": len(positions),
         }
 
+    # Field-wide strategy grid for undercut/overcut reasoning
+    field_strategy = []
+    try:
+        all_strat = get_driver_strategy(round_number, 'R')
+        for drv in all_strat.get("drivers", []):
+            field_strategy.append({
+                "driver": drv.get("abbreviation", "").upper(),
+                "finish_position": drv.get("finish_position"),
+                "grid_position": drv.get("grid_position"),
+                "pit_stop_count": drv.get("pit_stop_count"),
+                "stints": [
+                    {
+                        "compound": s.get("compound"),
+                        "start_lap": s.get("start_lap"),
+                        "end_lap": s.get("end_lap"),
+                        "laps": s.get("laps"),
+                        "tyre_life_start": s.get("tyre_life_start"),
+                    }
+                    for s in drv.get("stints", [])
+                ],
+            })
+        field_strategy.sort(key=lambda d: d.get("finish_position") or 999)
+    except Exception:
+        field_strategy = []
+
+    # Full SC/VSC periods including strategic_crossings for SC strategy reasoning
+    safety_car_full = None
+    try:
+        safety_car_full = get_safety_car_periods(round_number, 'R')
+    except Exception:
+        safety_car_full = None
+
     return {
         "driver": overview["driver"],
         "code": overview["code"],
@@ -1179,6 +1211,8 @@ def get_driver_race_story(round_number: int, driver_name: str) -> dict:
         "pit_stops": overview["pit_stops"],
         "strategy": overview["strategy"],
         "safety_car_impact": overview["safety_car_impact"],
+        "safety_car_full": safety_car_full,
+        "field_strategy": field_strategy,
         "teammate": overview["teammate"],
         "nearby_rivals": overview["nearby_rivals"],
         "race_control_highlights": control_highlights,
@@ -1372,6 +1406,31 @@ def get_race_report(round_number: int) -> dict:
                 f"Neutralisations: {safety_car.get('sc_count', 0)} SC and {safety_car.get('vsc_count', 0)} VSC period(s)."
             )
 
+    # Field-wide strategy grid for undercut/overcut/SC reasoning
+    field_strategy = []
+    try:
+        all_strat = get_driver_strategy(round_number, 'R')
+        for drv in all_strat.get("drivers", []):
+            field_strategy.append({
+                "driver": drv.get("abbreviation", "").upper(),
+                "finish_position": drv.get("finish_position"),
+                "grid_position": drv.get("grid_position"),
+                "pit_stop_count": drv.get("pit_stop_count"),
+                "stints": [
+                    {
+                        "compound": s.get("compound"),
+                        "start_lap": s.get("start_lap"),
+                        "end_lap": s.get("end_lap"),
+                        "laps": s.get("laps"),
+                        "tyre_life_start": s.get("tyre_life_start"),
+                    }
+                    for s in drv.get("stints", [])
+                ],
+            })
+        field_strategy.sort(key=lambda d: d.get("finish_position") or 999)
+    except Exception:
+        field_strategy = []
+
     return {
         "event": race.get("race_name") or qualifying.get("race_name"),
         "round": round_number,
@@ -1401,6 +1460,7 @@ def get_race_report(round_number: int) -> dict:
         "biggest_gainer": biggest_gainer,
         "biggest_loser": biggest_loser,
         "safety_car": safety_car,
+        "field_strategy": field_strategy,
         "summary_points": summary_points,
     }
 
@@ -3471,12 +3531,78 @@ def get_safety_car_periods(round_number: int, session_type: str) -> dict:
         period['pitted_during'] = pitted_during
         period['strategic_crossings'] = strategic_crossings
 
+    def _sc_period_narrative(period: dict) -> str:
+        sc_type = period.get('type', 'SafetyCar')
+        lap = period.get('deployed_on_lap')
+        lap_str = f" lap {lap}" if lap else ""
+        just_before = [e['driver'] for e in period.get('pitted_just_before', [])]
+        extended = [e['driver'] for e in period.get('pitted_before_extended', [])]
+        during = [e['driver'] for e in period.get('pitted_during', [])]
+        parts = []
+        if just_before:
+            parts.append(f"{', '.join(just_before)} pitted in the final ~90s before it (immediately disadvantaged — SC erased fresh-tyre gap)")
+        if extended:
+            parts.append(f"{', '.join(extended)} pitted 1–5 laps before it (paid full pit cost; rivals' free stop erased their fresh-tyre advantage)")
+        if during:
+            parts.append(f"{', '.join(during)} pitted under it (near-free stop)")
+        body = "; ".join(parts) if parts else "no drivers significantly impacted around this period"
+        return f"{sc_type}{lap_str}: {body}."
+
+    for period in periods:
+        period['period_narrative'] = _sc_period_narrative(period)
+
+    seen_victims: set[str] = set()
+    seen_beneficiaries: set[str] = set()
+    all_victims: list[dict] = []
+    all_beneficiaries: list[dict] = []
+
+    for period in periods:
+        sc_type = period.get('type', 'SafetyCar')
+        sc_lap = period.get('deployed_on_lap')
+        for entry in period.get('pitted_just_before', []):
+            drv = entry['driver']
+            if drv not in seen_victims:
+                seen_victims.add(drv)
+                all_victims.append({
+                    'driver': drv,
+                    'team': entry.get('team'),
+                    'sc_type': sc_type,
+                    'sc_lap': sc_lap,
+                    'seconds_before_sc': entry.get('seconds_before_sc'),
+                    'mechanism': 'pitted_just_before',
+                })
+        for entry in period.get('pitted_before_extended', []):
+            drv = entry['driver']
+            if drv not in seen_victims:
+                seen_victims.add(drv)
+                all_victims.append({
+                    'driver': drv,
+                    'team': entry.get('team'),
+                    'sc_type': sc_type,
+                    'sc_lap': sc_lap,
+                    'seconds_before_sc': entry.get('seconds_before_sc'),
+                    'mechanism': 'pitted_before_extended',
+                })
+        for entry in period.get('pitted_during', []):
+            drv = entry['driver']
+            if drv not in seen_beneficiaries:
+                seen_beneficiaries.add(drv)
+                all_beneficiaries.append({
+                    'driver': drv,
+                    'team': entry.get('team'),
+                    'sc_type': sc_type,
+                    'sc_lap': sc_lap,
+                    'mechanism': 'free_stop',
+                })
+
     return {
         'event': session.event['EventName'],
         'session': session_type.upper(),
         'sc_count': len([p for p in periods if p['type'] == 'SafetyCar']),
         'vsc_count': len([p for p in periods if p['type'] == 'VSC']),
         'periods': periods,
+        'all_victims': all_victims,
+        'all_beneficiaries': all_beneficiaries,
     }
 
 
