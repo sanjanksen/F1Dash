@@ -1008,6 +1008,118 @@ def test_get_historical_circuit_performance():
     assert result['history'][1]['year'] == 2025
 
 
+def test_analyze_team_circuit_fit_derives_overperformance_by_profile():
+    def _season_resp(year):
+        m = MagicMock()
+        m.raise_for_status.return_value = None
+        m.json.return_value = {
+            "MRData": {"RaceTable": {"Races": [
+                {
+                    "round": "1",
+                    "raceName": "Canadian Grand Prix",
+                    "Circuit": {
+                        "circuitId": "villeneuve",
+                        "circuitName": "Circuit Gilles Villeneuve",
+                        "Location": {"country": "Canada"},
+                    },
+                    "QualifyingResults": [
+                        {"position": "1", "Driver": {"givenName": "Max", "familyName": "Verstappen", "code": "VER"}, "Constructor": {"name": "Red Bull Racing"}},
+                        {"position": "2" if year == 2023 else "3", "Driver": {"givenName": "George", "familyName": "Russell", "code": "RUS"}, "Constructor": {"name": "Mercedes"}},
+                        {"position": "4" if year == 2023 else "5", "Driver": {"givenName": "Lewis", "familyName": "Hamilton", "code": "HAM"}, "Constructor": {"name": "Mercedes"}},
+                    ],
+                },
+                {
+                    "round": "2",
+                    "raceName": "Japanese Grand Prix",
+                    "Circuit": {
+                        "circuitId": "suzuka",
+                        "circuitName": "Suzuka International Racing Course",
+                        "Location": {"country": "Japan"},
+                    },
+                    "QualifyingResults": [
+                        {"position": "1", "Driver": {"givenName": "Max", "familyName": "Verstappen", "code": "VER"}, "Constructor": {"name": "Red Bull Racing"}},
+                        {"position": "5" if year == 2023 else "6", "Driver": {"givenName": "George", "familyName": "Russell", "code": "RUS"}, "Constructor": {"name": "Mercedes"}},
+                        {"position": "7" if year == 2023 else "8", "Driver": {"givenName": "Lewis", "familyName": "Hamilton", "code": "HAM"}, "Constructor": {"name": "Mercedes"}},
+                    ],
+                },
+            ]}}
+        }
+        return m
+
+    with patch('f1_data.requests.get', side_effect=[_season_resp(2023), _season_resp(2024)]):
+        import f1_data
+        result = f1_data.analyze_team_circuit_fit("Mercedes", years=[2023, 2024], session_type="Q")
+
+    assert result["matched_team_names"] == ["Mercedes"]
+    assert result["sample_count"] == 4
+    assert result["season_baselines"] == {2023: 4.5, 2024: 5.5}
+    best = result["strongest_fit"]
+    assert best["dimension"] == "character"
+    assert best["character"] == "stop_and_go"
+    assert best["avg_fit_delta_position"] == 1.5
+    assert result["weakest_fit"]["character"] == "high_speed_technical"
+
+
+def test_analyze_team_telemetry_traits_compares_team_to_field_median():
+    drivers = [
+        {"full_name": "George Russell", "code": "RUS", "team": "Mercedes"},
+        {"full_name": "Kimi Antonelli", "code": "ANT", "team": "Mercedes"},
+        {"full_name": "Lando Norris", "code": "NOR", "team": "McLaren"},
+        {"full_name": "Charles Leclerc", "code": "LEC", "team": "Ferrari"},
+    ]
+    profiles = {
+        "RUS": {
+            "corner_profiles": {
+                "T1": {"entry_speed_kph": 210, "apex_speed_kph": 130, "exit_speed_kph": 180, "braking_point_m": 110},
+                "T2": {"entry_speed_kph": 220, "apex_speed_kph": 150, "exit_speed_kph": 190, "braking_point_m": 320},
+            },
+            "straight_profiles": [{"max_speed_kph": 320}, {"max_speed_kph": 315}],
+            "lap_summary": {"full_throttle_pct": 66, "braking_pct": 15, "coasting_pct": 19},
+        },
+        "ANT": {
+            "corner_profiles": {
+                "T1": {"entry_speed_kph": 212, "apex_speed_kph": 132, "exit_speed_kph": 182, "braking_point_m": 112},
+                "T2": {"entry_speed_kph": 222, "apex_speed_kph": 152, "exit_speed_kph": 192, "braking_point_m": 322},
+            },
+            "straight_profiles": [{"max_speed_kph": 321}, {"max_speed_kph": 316}],
+            "lap_summary": {"full_throttle_pct": 67, "braking_pct": 14, "coasting_pct": 19},
+        },
+        "NOR": {
+            "corner_profiles": {
+                "T1": {"entry_speed_kph": 205, "apex_speed_kph": 124, "exit_speed_kph": 174, "braking_point_m": 100},
+                "T2": {"entry_speed_kph": 215, "apex_speed_kph": 144, "exit_speed_kph": 184, "braking_point_m": 310},
+            },
+            "straight_profiles": [{"max_speed_kph": 314}, {"max_speed_kph": 309}],
+            "lap_summary": {"full_throttle_pct": 62, "braking_pct": 18, "coasting_pct": 20},
+        },
+        "LEC": {
+            "corner_profiles": {
+                "T1": {"entry_speed_kph": 206, "apex_speed_kph": 126, "exit_speed_kph": 176, "braking_point_m": 102},
+                "T2": {"entry_speed_kph": 216, "apex_speed_kph": 146, "exit_speed_kph": 186, "braking_point_m": 312},
+            },
+            "straight_profiles": [{"max_speed_kph": 316}, {"max_speed_kph": 311}],
+            "lap_summary": {"full_throttle_pct": 63, "braking_pct": 17, "coasting_pct": 20},
+        },
+    }
+
+    mock_session = MagicMock()
+    mock_session.drivers = []
+    mock_session.event = {"EventName": "Test GP"}
+
+    with patch('f1_data.get_drivers', return_value=drivers), \
+         patch('f1_data._load_session', return_value=mock_session), \
+         patch('f1_data.extract_corner_profiles', side_effect=lambda _r, _s, code: profiles[code]):
+        import f1_data
+        result = f1_data.analyze_team_telemetry_traits(3, "Mercedes", session_type="Q", field_limit=4)
+
+    assert result["team"] == "Mercedes"
+    assert result["team_codes"] == ["RUS", "ANT"]
+    assert result["field_sample_count"] == 4
+    assert result["deltas_vs_field_median"]["avg_apex_speed_kph"] > 0
+    assert "high_minimum_speed" in result["trait_flags"]
+    assert "straight_line_speed" in result["trait_flags"]
+
+
 def test_get_session_results():
     mock_session = MagicMock()
     mock_session.event = {'EventName': 'Bahrain Grand Prix'}
@@ -1524,6 +1636,66 @@ def test_summarize_openf1_intervals_no_valid_gaps_uses_last_entry():
     )
 
 
+def test_fit_stint_degradation_exposes_ranking_inputs():
+    clean_laps = [
+        {"lap_number": 10, "lap_time_s": 90.00, "compound": "HARD", "tyre_age": 1},
+        {"lap_number": 11, "lap_time_s": 90.10, "compound": "HARD", "tyre_age": 2},
+        {"lap_number": 12, "lap_time_s": 90.20, "compound": "HARD", "tyre_age": 3},
+        {"lap_number": 13, "lap_time_s": 90.30, "compound": "HARD", "tyre_age": 4},
+    ]
+
+    stints = f1_data._fit_stint_degradation(clean_laps, fuel_correction_s_per_lap=0.0)
+
+    assert stints[0]["raw_pace_trend_s_per_lap"] == pytest.approx(0.1)
+    assert stints[0]["deg_rate_s_per_lap"] == pytest.approx(0.1)
+    assert stints[0]["positive_deg_rate_s_per_lap"] == pytest.approx(0.1)
+    assert stints[0]["r_squared"] == pytest.approx(1.0)
+    assert "raw_pace_trend_s_per_lap is what the stopwatch did" in stints[0]["ranking_basis"]
+
+
+def test_fit_stint_degradation_adds_back_fuel_burn_for_improving_raw_pace():
+    clean_laps = [
+        {"lap_number": 10, "lap_time_s": 90.00, "compound": "HARD", "tyre_age": 1},
+        {"lap_number": 11, "lap_time_s": 89.98, "compound": "HARD", "tyre_age": 2},
+        {"lap_number": 12, "lap_time_s": 89.96, "compound": "HARD", "tyre_age": 3},
+        {"lap_number": 13, "lap_time_s": 89.94, "compound": "HARD", "tyre_age": 4},
+    ]
+
+    stints = f1_data._fit_stint_degradation(clean_laps, fuel_correction_s_per_lap=0.04)
+
+    assert stints[0]["raw_pace_trend_s_per_lap"] == pytest.approx(-0.02)
+    assert stints[0]["deg_rate_s_per_lap"] == pytest.approx(0.02)
+    assert stints[0]["positive_deg_rate_s_per_lap"] == pytest.approx(0.02)
+
+
+def test_summarize_tyre_management_weights_deg_consistency_and_r2():
+    stints = [
+        {
+            "lap_count": 10,
+            "deg_rate_s_per_lap": 0.05,
+            "positive_deg_rate_s_per_lap": 0.05,
+            "consistency_std_dev_s": 0.4,
+            "r_squared": 0.8,
+            "tyre_management_score": 75.0,
+        },
+        {
+            "lap_count": 20,
+            "deg_rate_s_per_lap": 0.10,
+            "positive_deg_rate_s_per_lap": 0.10,
+            "consistency_std_dev_s": 0.7,
+            "r_squared": 0.5,
+            "tyre_management_score": 50.0,
+        },
+    ]
+
+    summary = f1_data._summarize_tyre_management(stints)
+
+    assert summary["weighted_deg_rate_s_per_lap"] == pytest.approx(0.0833)
+    assert summary["weighted_consistency_std_dev_s"] == pytest.approx(0.6)
+    assert summary["weighted_r_squared"] == pytest.approx(0.6)
+    assert "R² is the trust level" in summary["score_explanation"]
+
+
 def test_get_driver_strategy_position_start_end_are_first_and_last_lap():
     """position_start must be the position on lap 1 of the stint, position_end on the last lap."""
     import pandas as pd
@@ -1606,3 +1778,156 @@ def test_get_race_report_lapped_drivers_not_in_dnfs():
     assert "SAR" not in dnf_codes, "+1 Lap classified finisher should not be in DNFs"
     assert "ZHO" not in dnf_codes, "+2 Laps classified finisher should not be in DNFs"
     assert "MAG" in dnf_codes, "Genuine retirement (Engine) should be in DNFs"
+
+
+def _make_fastf1_pit_laps():
+    import pandas as pd
+    return pd.DataFrame({
+        "DriverNumber": ["63"] * 5,
+        "Driver": ["RUS"] * 5,
+        "LapNumber": [1, 2, 3, 4, 5],
+        "Compound": ["MEDIUM", "MEDIUM", "HARD", "HARD", "HARD"],
+        "PitInTime": [pd.NaT, pd.Timedelta("0:23:00"), pd.NaT, pd.NaT, pd.NaT],
+        "PitOutTime": [pd.NaT, pd.NaT, pd.Timedelta("0:23:02.5"), pd.NaT, pd.NaT],
+        "Position": [5, 5, 6, 6, 5],
+    })
+
+def test_get_pit_stop_analysis_structure():
+    mock_session = MagicMock()
+    mock_session.laps = _make_fastf1_pit_laps()
+    mock_session.event = {"EventName": "Test GP"}
+
+    with patch('f1_data._validate_session_availability'), \
+         patch('f1_data._load_session', return_value=mock_session), \
+         patch('f1_data.get_session_results', return_value={"results": [
+             {"driver_number": "63", "abbreviation": "RUS", "position": 4}
+         ]}), \
+         patch('f1_data._openf1_pit_fetch', return_value={(63, 2): 2.41}):
+        result = f1_data.get_pit_stop_analysis(4)
+
+    assert result["event"] == "Test GP"
+    assert isinstance(result["drivers"], list)
+    rus = result["drivers"][0]
+    assert rus["driver"] == "RUS"
+    assert len(rus["stints"]) == 2
+    assert rus["stints"][0]["compound"] == "MEDIUM"
+    assert rus["stints"][1]["compound"] == "HARD"
+    assert len(rus["pit_stops"]) == 1
+    assert rus["pit_stops"][0]["lap"] == 2
+    assert rus["pit_stops"][0]["duration_s"] == 2.41
+
+
+def test_fit_stint_degradation_includes_scatter_data():
+    laps = [
+        {"lap_number": i, "lap_time_s": 82.0 + i * 0.01, "compound": "HARD", "tyre_age": i}
+        for i in range(1, 8)
+    ]
+    result = f1_data._fit_stint_degradation(laps)
+    assert len(result) == 1
+    stint = result[0]
+    assert "scatter_data" in stint, "scatter_data missing"
+    assert "regression_line" in stint, "regression_line missing"
+    assert len(stint["scatter_data"]) == 7
+    assert all("tyre_age" in pt and "lap_time_s" in pt and "lap_number" in pt for pt in stint["scatter_data"])
+    assert len(stint["regression_line"]) == 2
+    assert stint["regression_line"][0]["tyre_age"] <= stint["regression_line"][1]["tyre_age"]
+
+
+def _make_weather_df():
+    import pandas as pd
+    return pd.DataFrame({
+        "Time": pd.to_timedelta(["0:05:00", "0:12:00", "0:18:00", "0:25:00", "0:32:00", "0:38:00"]),
+        "TrackTemp": [38.0, 39.0, 40.0, 41.0, 42.0, 43.0],
+        "AirTemp":   [28.0, 28.5, 29.0, 29.5, 30.0, 30.5],
+        "Rainfall":  [False, False, False, False, False, False],
+    })
+
+def _make_quali_laps_weather():
+    import pandas as pd
+    rows = []
+    for i, (seg, lt) in enumerate([
+        ("Q1", 82.5), ("Q1", 82.3),
+        ("Q2", 81.8), ("Q2", 81.6),
+        ("Q3", 81.2), ("Q3", 81.0),
+    ]):
+        rows.append({
+            "Driver": "RUS", "LapNumber": i + 1,
+            "LapTime": pd.Timedelta(seconds=lt),
+            "Session": seg,
+            "Deleted": False,
+            "Time": pd.Timedelta(seconds=(i + 1) * 400),
+        })
+    return pd.DataFrame(rows)
+
+def test_analyze_weather_pace_correlation_qualifying():
+    mock_session = MagicMock()
+    mock_session.laps = _make_quali_laps_weather()
+    mock_session.weather_data = _make_weather_df()
+    mock_session.event = {"EventName": "Test GP"}
+
+    with patch('f1_data._validate_session_availability'), \
+         patch('f1_data._load_session', return_value=mock_session):
+        result = f1_data.analyze_weather_pace_correlation(4, "Q")
+
+    assert result["session"] == "Q"
+    assert "segments" in result
+    segs = result["segments"]
+    assert len(segs) > 0
+    for seg in segs:
+        assert "avg_track_temp_c" in seg
+        assert "best_lap_s" in seg
+        assert "segment" in seg
+
+
+def _make_speed_samples(n=30, base_speed=290, clip_at=15):
+    """Simulate a straight where speed peaks then drops (clipping in second half)."""
+    samples = []
+    for i in range(n):
+        speed = base_speed + i * 1.5 if i < clip_at else base_speed + clip_at * 1.5 - (i - clip_at) * 0.5
+        samples.append({
+            "distance_m": i * 20.0,
+            "speed_kph": round(speed, 1),
+            "throttle_pct": 100,
+            "brake": False,
+            "gear": 8,
+            "rpm": 12000,
+            "drs_open": True,
+        })
+    return samples
+
+def test_compute_energy_metrics_clip_detection():
+    samples = _make_speed_samples()
+    clip_windows = f1_data._infer_clipping_windows(samples)
+    lico_events = []
+    metrics = f1_data._compute_energy_metrics(samples, lico_events, clip_windows)
+    assert "clip_count" in metrics
+    assert "estimated_time_lost_to_clipping_s" in metrics
+    assert "lico_count" in metrics
+    assert "total_harvest_distance_m" in metrics
+    assert metrics["clip_count"] >= 0
+    assert metrics["estimated_time_lost_to_clipping_s"] >= 0.0
+
+def test_extract_major_straights_finds_high_speed_sections():
+    samples = [{"distance_m": i * 10.0, "speed_kph": 290 if 20 <= i <= 50 else 150} for i in range(80)]
+    straights = f1_data._extract_major_straights(samples, speed_threshold_kph=275, min_length_m=200)
+    assert len(straights) == 1
+    assert straights[0]["start_m"] == 200
+    assert straights[0]["length_m"] >= 200
+
+def test_analyze_energy_management_includes_speed_trace():
+    mock_telemetry = {
+        "event": "Test GP", "session": "Q", "driver": "NOR", "lap_number": 5,
+        "telemetry": [
+            {"distance_m": i * 5.0, "speed_kph": 200 + i, "throttle_pct": 80,
+             "brake": False, "gear": 7, "rpm": 11000, "drs_open": False}
+            for i in range(20)
+        ]
+    }
+    with patch('f1_data.get_lap_telemetry', return_value=mock_telemetry), \
+         patch('f1_data.get_energy_2026_knowledge', return_value={}):
+        result = f1_data.analyze_energy_management(4, "Q", "NOR")
+    assert "speed_trace_a" in result
+    assert isinstance(result["speed_trace_a"], list)
+    assert "energy_metrics_a" in result
+    assert "clip_count" in result["energy_metrics_a"]
+    assert "straight_breakdown" in result

@@ -11,6 +11,7 @@ from pandas.api.types import is_numeric_dtype
 from scipy.signal import savgol_filter
 from energy_2026 import get_energy_2026_knowledge
 from driver_styles import get_comparison_framing
+from circuit_profiles import get_circuit_profile
 
 # Enable FastF1 disk cache
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), 'cache')
@@ -1822,6 +1823,172 @@ def get_telemetry_comparison(round_number: int, session_type: str,
     }
 
 
+def _extract_major_straights(
+    samples: list[dict],
+    speed_threshold_kph: float = 275,
+    min_length_m: float = 200,
+) -> list[dict]:
+    """
+    Find sections of track where speed >= threshold for >= min_length_m.
+    Returns list of {start_m, end_m, length_m}, sorted by start_m.
+    """
+    straights: list[dict] = []
+    in_straight = False
+    start_m: float | None = None
+
+    for s in samples:
+        speed = s.get("speed_kph") or 0
+        dist = s.get("distance_m") or 0
+        if speed >= speed_threshold_kph and not in_straight:
+            in_straight = True
+            start_m = dist
+        elif speed < speed_threshold_kph and in_straight:
+            length = dist - (start_m or 0)
+            if length >= min_length_m:
+                straights.append({"start_m": round(start_m), "end_m": round(dist), "length_m": round(length)})
+            in_straight = False
+
+    if in_straight and start_m is not None and samples:
+        end_m = samples[-1].get("distance_m") or 0
+        length = end_m - start_m
+        if length >= min_length_m:
+            straights.append({"start_m": round(start_m), "end_m": round(end_m), "length_m": round(length)})
+
+    return straights
+
+
+def _compute_energy_metrics(
+    samples: list[dict],
+    lico_events: list[dict],
+    clip_windows: list[dict],
+) -> dict:
+    """
+    Quantify ERS energy management from inferred lift-and-coast and clipping signals.
+
+    Clipping metrics: how often and how severely the MGU-K runs out.
+    Harvest metrics: how aggressively the driver lifts before corners to recover energy.
+    """
+    clip_count = len(clip_windows)
+    total_clip_distance_m = sum(
+        ((c.get("end_distance_m") or 0) - (c.get("start_distance_m") or 0))
+        for c in clip_windows
+    )
+    total_late_drop_kph = sum(
+        abs(c.get("late_straight_drop_kph") or 0)
+        for c in clip_windows
+        if (c.get("late_straight_drop_kph") or 0) < 0
+    )
+
+    est_time_lost = 0.0
+    for c in clip_windows:
+        drop_kph = c.get("late_straight_drop_kph") or 0
+        if drop_kph >= 0:
+            continue
+        half_window_m = ((c.get("end_distance_m") or 0) - (c.get("start_distance_m") or 0)) / 2
+        avg_speed_kph = c.get("mid_speed_kph") or 300
+        avg_speed_ms = max(avg_speed_kph / 3.6, 1.0)
+        drop_ms = abs(drop_kph) / 3.6
+        est_time_lost += (drop_ms * half_window_m) / (avg_speed_ms ** 2)
+
+    lico_count = len(lico_events)
+    harvest_zones: list[dict] = []
+    if lico_events:
+        zone_start = lico_events[0].get("distance_m") or 0
+        zone_end = zone_start
+        for ev in lico_events[1:]:
+            d = ev.get("distance_m") or 0
+            if d - zone_end < 50:
+                zone_end = d
+            else:
+                harvest_zones.append({
+                    "start_m": round(zone_start),
+                    "end_m": round(zone_end),
+                    "length_m": round(zone_end - zone_start),
+                })
+                zone_start = d
+                zone_end = d
+        harvest_zones.append({
+            "start_m": round(zone_start),
+            "end_m": round(zone_end),
+            "length_m": round(zone_end - zone_start),
+        })
+    total_harvest_distance_m = sum(z["length_m"] for z in harvest_zones)
+
+    return {
+        "clip_count": clip_count,
+        "total_clip_distance_m": round(total_clip_distance_m, 1),
+        "total_late_speed_drop_kph": round(total_late_drop_kph, 2),
+        "estimated_time_lost_to_clipping_s": round(est_time_lost, 3),
+        "lico_count": lico_count,
+        "total_harvest_distance_m": round(total_harvest_distance_m, 1),
+        "harvest_zones": harvest_zones,
+    }
+
+
+def _analyze_straights_energy(
+    samples_a: list[dict],
+    samples_b: list[dict] | None,
+    clip_a: list[dict],
+    clip_b: list[dict] | None,
+    driver_a: str,
+    driver_b: str | None,
+) -> list[dict]:
+    """
+    Per-major-straight comparison: peak speed, end speed, clipping for each driver.
+    Straights detected from samples_a. Returns up to 6 straights.
+    """
+    straights = _extract_major_straights(samples_a)
+    results: list[dict] = []
+
+    for straight in straights[:6]:
+        start_m, end_m = straight["start_m"], straight["end_m"]
+        pts_a = [s for s in samples_a if start_m <= (s.get("distance_m") or -1) <= end_m]
+        if not pts_a:
+            continue
+
+        speeds_a = [p["speed_kph"] for p in pts_a if p.get("speed_kph")]
+        peak_a = max(speeds_a) if speeds_a else None
+        end_kph_a = pts_a[-1].get("speed_kph")
+        drs_a = any(p.get("drs_open") for p in pts_a)
+        clipped_a = any(
+            (c.get("start_distance_m") or 0) >= start_m and (c.get("start_distance_m") or 0) <= end_m
+            for c in clip_a
+        )
+
+        row: dict = {
+            "start_m": start_m,
+            "length_m": straight["length_m"],
+            "drs": drs_a,
+            "driver_a": {
+                "code": driver_a.upper(),
+                "peak_kph": round(peak_a, 1) if peak_a else None,
+                "end_kph": round(end_kph_a, 1) if end_kph_a else None,
+                "clipped": clipped_a,
+            },
+        }
+
+        if samples_b:
+            pts_b = [s for s in samples_b if start_m <= (s.get("distance_m") or -1) <= end_m]
+            if pts_b:
+                speeds_b = [p["speed_kph"] for p in pts_b if p.get("speed_kph")]
+                peak_b = max(speeds_b) if speeds_b else None
+                end_kph_b = pts_b[-1].get("speed_kph")
+                clipped_b = any(
+                    (c.get("start_distance_m") or 0) >= start_m and (c.get("start_distance_m") or 0) <= end_m
+                    for c in (clip_b or [])
+                )
+                row["driver_b"] = {
+                    "code": driver_b.upper() if driver_b else None,
+                    "peak_kph": round(peak_b, 1) if peak_b else None,
+                    "end_kph": round(end_kph_b, 1) if end_kph_b else None,
+                    "clipped": clipped_b,
+                }
+
+        results.append(row)
+
+    return results
+
+
 def analyze_energy_management(round_number: int, session_type: str,
                               driver_a: str,
                               driver_b: str | None = None,
@@ -1863,6 +2030,22 @@ def analyze_energy_management(round_number: int, session_type: str,
         lico_b = _infer_lift_and_coast_samples(driver_b_samples)
         clip_a = _infer_clipping_windows(driver_a_samples)
         clip_b = _infer_clipping_windows(driver_b_samples)
+
+        metrics_a = _compute_energy_metrics(driver_a_samples, lico_a, clip_a)
+        metrics_b = _compute_energy_metrics(driver_b_samples, lico_b, clip_b)
+        straight_breakdown = _analyze_straights_energy(
+            driver_a_samples, driver_b_samples, clip_a, clip_b, driver_a, driver_b
+        )
+        trace_a = [
+            {"distance_m": s["distance_m"], "speed_kph": s["speed_a"],
+             "throttle_pct": s.get("throttle_a"), "drs_open": s.get("drs_a")}
+            for s in samples[::5]
+        ]
+        trace_b = [
+            {"distance_m": s["distance_m"], "speed_kph": s["speed_b"],
+             "throttle_pct": s.get("throttle_b"), "drs_open": s.get("drs_b")}
+            for s in samples[::5]
+        ]
 
         strongest_fade = _strongest_comparative_full_throttle_fade(
             samples,
@@ -1917,12 +2100,28 @@ def analyze_energy_management(round_number: int, session_type: str,
             "harvesting_inference": harvest_inference,
             "inference_summary": inferences,
             "confidence": confidence,
+            "speed_trace_a": trace_a,
+            "speed_trace_b": trace_b,
+            "energy_metrics_a": metrics_a,
+            "energy_metrics_b": metrics_b,
+            "straight_breakdown": straight_breakdown,
         }
 
     telemetry = get_lap_telemetry(round_number, session_type, driver_a, lap_number_a)
     samples = telemetry["telemetry"]
     lico = _infer_lift_and_coast_samples(samples)
     clip = _infer_clipping_windows(samples)
+    metrics_a = _compute_energy_metrics(samples, lico, clip)
+    straight_breakdown = _analyze_straights_energy(samples, None, clip, None, driver_a, None)
+    trace_a = [
+        {
+            "distance_m": s["distance_m"],
+            "speed_kph": s["speed_kph"],
+            "throttle_pct": s.get("throttle_pct"),
+            "drs_open": s.get("drs_open"),
+        }
+        for s in samples[::5]
+    ]
     inferences = []
     if lico:
         inferences.append("There are likely lift-and-coast style early lifts before braking on this lap.")
@@ -1955,6 +2154,11 @@ def analyze_energy_management(round_number: int, session_type: str,
         "harvesting_inference": harvest_inference,
         "inference_summary": inferences,
         "confidence": confidence,
+        "speed_trace_a": trace_a,
+        "speed_trace_b": None,
+        "energy_metrics_a": metrics_a,
+        "energy_metrics_b": None,
+        "straight_breakdown": straight_breakdown,
     }
 
 
@@ -2589,6 +2793,88 @@ def get_circuit_details(round_number: int) -> dict:
     }
 
 
+def get_circuit_track_map(round_number: int) -> dict:
+    """
+    GPS-derived circuit shape for visualization.
+    Returns downsampled {x, y, distance_m} points from the fastest qualifying lap
+    and sector boundary distances from marshal_sectors.
+    Falls back to previous seasons if the current-year race hasn't happened yet.
+    """
+    schedule = fastf1.get_event_schedule(CURRENT_YEAR, include_testing=False)
+    matching = schedule[schedule["RoundNumber"] == round_number]
+    if matching.empty:
+        raise ValueError(f"Round {round_number} not found in {CURRENT_YEAR} schedule")
+    location = str(matching.iloc[0].get("Location", ""))
+
+    def _try_load(year, gp_ref, session_type):
+        try:
+            s = fastf1.get_session(year, gp_ref, session_type)
+            s.load(laps=True, telemetry=True, weather=False, messages=False)
+            if s.laps is None or s.laps.empty:
+                return None
+            return s
+        except Exception:
+            return None
+
+    session = None
+    for session_type in ('Q', 'R'):
+        session = _try_load(CURRENT_YEAR, round_number, session_type)
+        if session is not None:
+            break
+        for year in (CURRENT_YEAR - 1, CURRENT_YEAR - 2, CURRENT_YEAR - 3):
+            session = _try_load(year, location, session_type)
+            if session is not None:
+                break
+        if session is not None:
+            break
+
+    if session is None:
+        raise ValueError(f"No session data available for round {round_number}")
+
+    laps = session.laps
+    valid_laps = laps.dropna(subset=['LapTime'])
+    if valid_laps.empty:
+        raise ValueError(f"No valid laps for round {round_number}")
+
+    fastest = _pick_fastest_lap(valid_laps)
+    tel = fastest.get_telemetry().add_distance()
+
+    if 'X' not in tel.columns or 'Y' not in tel.columns:
+        raise ValueError(f"No GPS telemetry available for round {round_number}")
+
+    dist_arr = tel['Distance'].to_numpy(dtype=float)
+    x_arr = tel['X'].to_numpy(dtype=float)
+    y_arr = tel['Y'].to_numpy(dtype=float)
+    total_dist = float(dist_arr[-1])
+
+    targets = np.arange(0, total_dist, 50.0)
+    indices = np.clip(np.searchsorted(dist_arr, targets), 0, len(dist_arr) - 1)
+
+    points = []
+    for i, idx in enumerate(indices):
+        x = float(x_arr[idx])
+        y = float(y_arr[idx])
+        if not (np.isnan(x) or np.isnan(y)):
+            points.append({"x": round(x, 1), "y": round(y, 1), "distance_m": int(targets[i])})
+
+    try:
+        circuit_info = session.get_circuit_info()
+        all_markers = _extract_track_markers(getattr(circuit_info, 'marshal_sectors', None))
+        sector_boundaries = [
+            {"number": m["number"], "distance_m": m["distance_m"]}
+            for m in all_markers
+            if m.get("number") is not None and m.get("distance_m") is not None
+        ]
+    except Exception:
+        sector_boundaries = []
+
+    return {
+        "points": points,
+        "sector_boundaries": sector_boundaries,
+        "total_distance_m": int(total_dist),
+    }
+
+
 def get_historical_circuit_performance(round_number: int,
                                         years: list[int] | None = None) -> dict:
     """
@@ -2669,6 +2955,388 @@ def get_historical_circuit_performance(round_number: int,
         "circuit_name": circuit_name,
         "race_name": race_name,
         "history": history,
+    }
+
+
+def _fetch_year_classifications(year: int, session_type: str) -> list[dict]:
+    session = str(session_type or "Q").strip().upper()
+    endpoint = "qualifying" if session == "Q" else "results"
+    resp = requests.get(
+        f"{JOLPICA_BASE}/{year}/{endpoint}.json?limit=1000",
+        timeout=20,
+    )
+    resp.raise_for_status()
+    races = resp.json()["MRData"]["RaceTable"]["Races"]
+
+    classifications = []
+    for race in races:
+        rows = race.get("QualifyingResults" if endpoint == "qualifying" else "Results", [])
+        if not rows:
+            continue
+        country = ((race.get("Circuit") or {}).get("Location") or {}).get("country", "")
+        profile = get_circuit_profile(country, race.get("raceName", ""))
+        if profile is None:
+            continue
+        entries = []
+        for row in rows:
+            position = _normalize_position(row.get("position"))
+            if position is None:
+                continue
+            entries.append({
+                "position": position,
+                "team": (row.get("Constructor") or {}).get("name", ""),
+                "driver": f"{(row.get('Driver') or {}).get('givenName', '')} {(row.get('Driver') or {}).get('familyName', '')}".strip(),
+                "code": (row.get("Driver") or {}).get("code", ""),
+            })
+        if entries:
+            classifications.append({
+                "year": year,
+                "round": _normalize_position(race.get("round")),
+                "race_name": race.get("raceName", ""),
+                "country": country,
+                "circuit_key": profile.get("circuit_key"),
+                "circuit_name": profile.get("circuit_name"),
+                "character": profile.get("character"),
+                "style_verdict": (profile.get("style_verdict") or {}).get("qualifier"),
+                "downforce_level": profile.get("downforce_level"),
+                "entries": entries,
+            })
+    return classifications
+
+
+def _historical_team_matches(team_name: str, candidate: str) -> bool:
+    needle = (team_name or "").lower().strip()
+    haystack = (candidate or "").lower().strip()
+    if not needle or not haystack:
+        return False
+    return needle in haystack or haystack in needle
+
+
+def _confidence_from_samples(sample_count: int, year_count: int) -> str:
+    if sample_count >= 8 and year_count >= 3:
+        return "high"
+    if sample_count >= 4 and year_count >= 2:
+        return "medium"
+    return "low"
+
+
+def analyze_team_circuit_fit(
+    team_name: str,
+    years: list[int] | None = None,
+    session_type: str = "Q",
+) -> dict:
+    """
+    Derive a team's historical circuit-fit tendencies from real classifications.
+
+    This does not claim the car is mechanically "a late-braking car". It compares
+    the team's average result at each circuit archetype against that team's own
+    season baseline, then reports where it over/under-performed.
+    """
+    if years is None:
+        years = [y for y in range(CURRENT_YEAR - 3, CURRENT_YEAR) if y >= 1950]
+    years = sorted({int(y) for y in years if int(y) < CURRENT_YEAR})
+    if not years:
+        raise ValueError("Provide at least one completed historical season.")
+
+    session = str(session_type or "Q").strip().upper()
+    if session not in {"Q", "R"}:
+        raise ValueError("session_type must be Q or R.")
+
+    team_races = []
+    season_rows: dict[int, list[dict]] = {}
+    matched_names: set[str] = set()
+    fetch_errors = []
+
+    for year in years:
+        try:
+            races = _fetch_year_classifications(year, session)
+        except Exception as exc:
+            fetch_errors.append({"year": year, "error": str(exc)})
+            continue
+
+        year_rows = []
+        for race in races:
+            team_entries = [
+                entry for entry in race["entries"]
+                if _historical_team_matches(team_name, entry.get("team", ""))
+            ]
+            if not team_entries:
+                continue
+            matched_names.update(entry.get("team", "") for entry in team_entries if entry.get("team"))
+            avg_position = sum(entry["position"] for entry in team_entries) / len(team_entries)
+            row = {
+                "year": year,
+                "race_name": race["race_name"],
+                "country": race["country"],
+                "circuit_key": race["circuit_key"],
+                "circuit_name": race["circuit_name"],
+                "character": race["character"],
+                "style_verdict": race["style_verdict"],
+                "downforce_level": race["downforce_level"],
+                "avg_position": round(avg_position, 3),
+                "cars_counted": len(team_entries),
+                "drivers": [
+                    {
+                        "driver": entry.get("driver"),
+                        "code": entry.get("code"),
+                        "position": entry.get("position"),
+                    }
+                    for entry in team_entries
+                ],
+            }
+            team_races.append(row)
+            year_rows.append(row)
+        if year_rows:
+            season_rows[year] = year_rows
+
+    if not team_races:
+        raise ValueError(f"No historical {session} results found for team {team_name!r} in {years}.")
+
+    season_baselines = {
+        year: sum(row["avg_position"] for row in rows) / len(rows)
+        for year, rows in season_rows.items()
+        if rows
+    }
+
+    for row in team_races:
+        baseline = season_baselines.get(row["year"])
+        row["season_baseline_position"] = round(baseline, 3) if baseline is not None else None
+        row["fit_delta_position"] = round(baseline - row["avg_position"], 3) if baseline is not None else None
+
+    def _group_fit(key: str) -> list[dict]:
+        grouped: dict[str, list[dict]] = {}
+        for row in team_races:
+            value = row.get(key)
+            delta = row.get("fit_delta_position")
+            if value is None or delta is None:
+                continue
+            grouped.setdefault(value, []).append(row)
+
+        summaries = []
+        for value, rows in grouped.items():
+            years_seen = sorted({row["year"] for row in rows})
+            avg_delta = sum(row["fit_delta_position"] for row in rows) / len(rows)
+            summaries.append({
+                key: value,
+                "avg_fit_delta_position": round(avg_delta, 3),
+                "interpretation": "overperforms" if avg_delta > 0.25 else ("underperforms" if avg_delta < -0.25 else "neutral"),
+                "sample_count": len(rows),
+                "years": years_seen,
+                "confidence": _confidence_from_samples(len(rows), len(years_seen)),
+                "examples": sorted(
+                    [
+                        {
+                            "year": row["year"],
+                            "race_name": row["race_name"],
+                            "avg_position": row["avg_position"],
+                            "season_baseline_position": row["season_baseline_position"],
+                            "fit_delta_position": row["fit_delta_position"],
+                        }
+                        for row in rows
+                    ],
+                    key=lambda item: item["fit_delta_position"],
+                    reverse=True,
+                )[:3],
+            })
+        return sorted(summaries, key=lambda item: item["avg_fit_delta_position"], reverse=True)
+
+    by_character = _group_fit("character")
+    by_style_verdict = _group_fit("style_verdict")
+    by_downforce_level = _group_fit("downforce_level")
+
+    all_groups = [
+        {"dimension": "character", **item} for item in by_character
+    ] + [
+        {"dimension": "style_verdict", **item} for item in by_style_verdict
+    ] + [
+        {"dimension": "downforce_level", **item} for item in by_downforce_level
+    ]
+    reliable_groups = [g for g in all_groups if g.get("sample_count", 0) >= 2]
+    strongest_fit = max(reliable_groups, key=lambda g: g["avg_fit_delta_position"], default=None)
+    weakest_fit = min(reliable_groups, key=lambda g: g["avg_fit_delta_position"], default=None)
+
+    caveats = [
+        "This is derived from classifications, not private setup or aerodynamic data.",
+        "It blends car, drivers, operations, reliability, and race execution; it is a team-circuit tendency, not a pure car trait.",
+    ]
+    if max(years) <= CURRENT_YEAR - 1:
+        caveats.append("Historical seasons are only a proxy for the current regulation package.")
+    if fetch_errors:
+        caveats.append("Some seasons could not be fetched and were excluded.")
+
+    return {
+        "team_query": team_name,
+        "matched_team_names": sorted(matched_names),
+        "session": session,
+        "years": years,
+        "season_baselines": {
+            year: round(value, 3)
+            for year, value in season_baselines.items()
+        },
+        "sample_count": len(team_races),
+        "by_character": by_character,
+        "by_style_verdict": by_style_verdict,
+        "by_downforce_level": by_downforce_level,
+        "strongest_fit": strongest_fit,
+        "weakest_fit": weakest_fit,
+        "race_samples": sorted(team_races, key=lambda row: (row["year"], row["race_name"])),
+        "fetch_errors": fetch_errors,
+        "method": "For each season, average the team's two-car classification at every profiled circuit, compare it with that team's season average, then aggregate the over/under-performance by circuit archetype.",
+        "caveats": caveats,
+    }
+
+
+def _median(values: list[float]) -> float | None:
+    clean = sorted(v for v in values if v is not None)
+    if not clean:
+        return None
+    mid = len(clean) // 2
+    if len(clean) % 2:
+        return clean[mid]
+    return (clean[mid - 1] + clean[mid]) / 2
+
+
+def _profile_trait_summary(profile: dict) -> dict:
+    corners = list((profile.get("corner_profiles") or {}).values())
+    straights = profile.get("straight_profiles") or []
+    lap_summary = profile.get("lap_summary") or {}
+
+    def avg(key: str, rows: list[dict]) -> float | None:
+        values = [row.get(key) for row in rows if row.get(key) is not None]
+        return round(sum(values) / len(values), 3) if values else None
+
+    return {
+        "avg_entry_speed_kph": avg("entry_speed_kph", corners),
+        "avg_apex_speed_kph": avg("apex_speed_kph", corners),
+        "avg_exit_speed_kph": avg("exit_speed_kph", corners),
+        "avg_braking_point_m": avg("braking_point_m", corners),
+        "avg_straight_max_speed_kph": avg("max_speed_kph", straights),
+        "full_throttle_pct": lap_summary.get("full_throttle_pct"),
+        "braking_pct": lap_summary.get("braking_pct"),
+        "coasting_pct": lap_summary.get("coasting_pct"),
+    }
+
+
+def analyze_team_telemetry_traits(
+    round_number: int,
+    team_name: str,
+    session_type: str = "Q",
+    field_limit: int = 10,
+) -> dict:
+    """
+    Compare one team's fastest-lap telemetry traits against the field median.
+
+    This characterizes visible behavior in a specific session: straight-line
+    speed, minimum speed, exit speed, braking point, and throttle/brake usage.
+    It still blends car, setup, and driver inputs.
+    """
+    resolved_team = _resolve_team(team_name)
+    if resolved_team is None:
+        raise ValueError(f"Team not found: {team_name!r}. Try the current constructor name.")
+
+    drivers = get_drivers()
+    team_codes = [
+        (driver.get("code") or driver.get("driver_id", "").upper())
+        for driver in drivers
+        if (driver.get("team") or "").lower() == resolved_team.lower()
+    ]
+    if not team_codes:
+        raise ValueError(f"No current-season drivers found for team {resolved_team!r}.")
+
+    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    fastest_rows = []
+    for code in getattr(session, "drivers", []) or []:
+        try:
+            laps = _pick_driver(session.laps, str(code))
+            if laps.empty:
+                continue
+            lap = _pick_fastest_lap(laps)
+            lap_time = _safe_timedelta_seconds(lap.get("LapTime"))
+            abbr = str(lap.get("Driver") or code).upper()
+            if lap_time is not None:
+                fastest_rows.append((abbr, lap_time))
+        except Exception:
+            continue
+
+    if fastest_rows:
+        field_codes = [code for code, _ in sorted(fastest_rows, key=lambda item: item[1])[:max(field_limit, len(team_codes))]]
+    else:
+        field_codes = [driver.get("code") for driver in drivers if driver.get("code")][:field_limit]
+
+    for code in team_codes:
+        if code not in field_codes:
+            field_codes.append(code)
+
+    driver_summaries = []
+    errors = []
+    for code in field_codes:
+        try:
+            profile = extract_corner_profiles(round_number, session_type, code)
+            summary = _profile_trait_summary(profile)
+            summary["driver"] = code
+            summary["team"] = next((d.get("team") for d in drivers if (d.get("code") or "").upper() == code.upper()), None)
+            summary["is_target_team"] = code.upper() in {c.upper() for c in team_codes}
+            driver_summaries.append(summary)
+        except Exception as exc:
+            errors.append({"driver": code, "error": str(exc)})
+
+    target_rows = [row for row in driver_summaries if row.get("is_target_team")]
+    if not target_rows:
+        raise ValueError(f"No telemetry profiles available for {resolved_team} in round {round_number} {session_type}.")
+
+    metrics = [
+        "avg_entry_speed_kph",
+        "avg_apex_speed_kph",
+        "avg_exit_speed_kph",
+        "avg_braking_point_m",
+        "avg_straight_max_speed_kph",
+        "full_throttle_pct",
+        "braking_pct",
+        "coasting_pct",
+    ]
+    field_medians = {metric: _median([row.get(metric) for row in driver_summaries]) for metric in metrics}
+    team_averages = {}
+    deltas = {}
+    for metric in metrics:
+        values = [row.get(metric) for row in target_rows if row.get(metric) is not None]
+        team_value = round(sum(values) / len(values), 3) if values else None
+        baseline = field_medians.get(metric)
+        team_averages[metric] = team_value
+        deltas[metric] = round(team_value - baseline, 3) if team_value is not None and baseline is not None else None
+
+    trait_flags = []
+    if (deltas.get("avg_straight_max_speed_kph") or 0) >= 2.0:
+        trait_flags.append("straight_line_speed")
+    if (deltas.get("avg_apex_speed_kph") or 0) >= 1.5:
+        trait_flags.append("high_minimum_speed")
+    if (deltas.get("avg_exit_speed_kph") or 0) >= 1.5:
+        trait_flags.append("corner_exit_traction")
+    if (deltas.get("avg_braking_point_m") or 0) >= 5.0:
+        trait_flags.append("late_braking")
+    if (deltas.get("braking_pct") or 0) <= -2.0 and (deltas.get("coasting_pct") or 0) >= 1.5:
+        trait_flags.append("coast_or_brake_avoidance")
+    if not trait_flags:
+        trait_flags.append("balanced_or_inconclusive")
+
+    return {
+        "team": resolved_team,
+        "round_number": round_number,
+        "session": str(session_type).upper(),
+        "event": getattr(session, "event", {}).get("EventName") if hasattr(session, "event") else None,
+        "team_codes": team_codes,
+        "field_codes": field_codes,
+        "field_sample_count": len(driver_summaries),
+        "team_averages": team_averages,
+        "field_medians": field_medians,
+        "deltas_vs_field_median": deltas,
+        "trait_flags": trait_flags,
+        "driver_summaries": driver_summaries,
+        "errors": errors,
+        "method": "Extract fastest-lap corner and straight profiles for the target team and a fastest-lap field sample, then compare team averages with the field median.",
+        "caveats": [
+            "This is session telemetry, so it blends car, setup, and driver execution.",
+            "It is stronger than historical trend evidence for this specific round, but weaker than private team setup and sensor data.",
+        ],
     }
 
 
@@ -3268,7 +3936,7 @@ def _linear_regression(x_vals: list[float], y_vals: list[float]) -> tuple[float,
     return (round(slope, 4), round(intercept, 3), round(r_squared, 3))
 
 
-def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: float = 0.03) -> list[dict]:
+def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: float = 0.04) -> list[dict]:
     """
     Group clean laps by compound block, fit linear regression per stint.
     Returns list of stint dicts with deg_rate_s_per_lap, fuel_corrected_pace, r_squared.
@@ -3302,8 +3970,11 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
         raw_times = [l['lap_time_s'] for l in laps]
         min_lap = min(lap_nums)
 
+        # Later laps are naturally faster because the car burns fuel. Add that
+        # expected fuel-burn gain back to later laps so the remaining slope is
+        # tyre performance loss rather than fuel weight.
         fuel_corrected = [
-            t - fuel_correction_s_per_lap * (n - min_lap)
+            t + fuel_correction_s_per_lap * (n - min_lap)
             for t, n in zip(raw_times, lap_nums)
         ]
 
@@ -3312,6 +3983,7 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
             for l, n in zip(laps, lap_nums)
         ]
 
+        raw_slope, _, _ = _linear_regression(tyre_ages, raw_times)
         slope, intercept, r_sq = _linear_regression(tyre_ages, fuel_corrected)
         pace_at_age_1 = round(slope * 1 + intercept, 3)
 
@@ -3319,18 +3991,119 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
         variance = sum((t - mean_t) ** 2 for t in fuel_corrected) / len(fuel_corrected)
         std_dev = round(variance ** 0.5, 3)
 
+        positive_deg = max(0.0, slope)
+        total_deg_loss = round(positive_deg * len(laps), 3)
+
         results.append({
             'compound': stint['compound'],
             'lap_count': len(laps),
             'lap_numbers': lap_nums,
             'avg_raw_pace_s': round(sum(raw_times) / len(raw_times), 3),
-            'deg_rate_s_per_lap': slope,
+            'raw_pace_trend_s_per_lap': round(raw_slope, 4),
+            'fuel_burn_gain_assumption_s_per_lap': fuel_correction_s_per_lap,
+            'deg_rate_s_per_lap': round(slope, 4),
+            'positive_deg_rate_s_per_lap': round(positive_deg, 4),
+            'total_deg_loss_s': total_deg_loss,
             'fuel_corrected_pace_at_age_1_s': pace_at_age_1,
-            'r_squared': r_sq,
+            'r_squared': round(r_sq, 3),
             'consistency_std_dev_s': std_dev,
+            'ranking_basis': (
+                "raw_pace_trend_s_per_lap is what the stopwatch did — the raw slope of lap times over "
+                "tyre age. deg_rate_s_per_lap adds back expected fuel-burn gain; positive values estimate "
+                "tyre performance loss per lap. Only compare deg rates between stints on the same compound — "
+                "different compounds degrade at different baseline rates and cannot be directly compared. "
+                "Lower positive_deg_rate_s_per_lap is better within the same compound."
+            ),
+            'scatter_data': [
+                {'tyre_age': ta, 'lap_time_s': round(fc, 3), 'lap_number': ln}
+                for ta, fc, ln in zip(tyre_ages, fuel_corrected, lap_nums)
+            ],
+            'regression_line': [
+                {'tyre_age': tyre_ages[0],  'lap_time_s': round(slope * tyre_ages[0]  + intercept, 3)},
+                {'tyre_age': tyre_ages[-1], 'lap_time_s': round(slope * tyre_ages[-1] + intercept, 3)},
+            ],
         })
 
     return results
+
+
+def _summarize_tyre_management(stints: list[dict]) -> dict | None:
+    if not stints:
+        return None
+    total = sum(s.get('lap_count', 0) for s in stints)
+    if total <= 0:
+        return None
+
+    # Group by compound — deg rates are only meaningful within the same compound.
+    by_compound: dict[str, list[dict]] = {}
+    for s in stints:
+        comp = (s.get('compound') or 'UNKNOWN').upper()
+        by_compound.setdefault(comp, []).append(s)
+
+    per_compound: dict[str, dict] = {}
+    for comp, comp_stints in by_compound.items():
+        comp_laps = sum(s.get('lap_count', 0) for s in comp_stints)
+        if comp_laps <= 0:
+            continue
+
+        def _wt(key: str) -> float | None:
+            rows = [(s.get(key), s.get('lap_count', 0)) for s in comp_stints
+                    if isinstance(s.get(key), (int, float)) and s.get('lap_count', 0) > 0]
+            w = sum(weight for _, weight in rows)
+            return sum(v * weight for v, weight in rows) / w if w > 0 else None
+
+        total_deg_loss = sum(
+            s.get('total_deg_loss_s', 0) for s in comp_stints
+            if isinstance(s.get('total_deg_loss_s'), (int, float))
+        )
+        per_compound[comp] = {
+            'lap_count': comp_laps,
+            'deg_rate_s_per_lap': round(_wt('deg_rate_s_per_lap'), 4) if _wt('deg_rate_s_per_lap') is not None else None,
+            'positive_deg_rate_s_per_lap': round(_wt('positive_deg_rate_s_per_lap'), 4) if _wt('positive_deg_rate_s_per_lap') is not None else None,
+            'total_deg_loss_s': round(total_deg_loss, 2),
+            'r_squared': round(_wt('r_squared'), 3) if _wt('r_squared') is not None else None,
+        }
+
+    # Consistency (lap-to-lap spread) is not compound-specific — aggregate across all stints
+    cons_rows = [(s.get('consistency_std_dev_s'), s.get('lap_count', 0)) for s in stints
+                 if isinstance(s.get('consistency_std_dev_s'), (int, float)) and s.get('lap_count', 0) > 0]
+    cons_laps = sum(w for _, w in cons_rows)
+    consistency = sum(v * w for v, w in cons_rows) / cons_laps if cons_laps > 0 else None
+
+    total_deg_loss_all = round(sum(
+        v['total_deg_loss_s'] for v in per_compound.values()
+        if isinstance(v.get('total_deg_loss_s'), (int, float))
+    ), 2)
+
+    # Cross-compound weighted averages for top-level summary
+    def _wt_all(key: str) -> float | None:
+        rows = [(s.get(key), s.get('lap_count', 0)) for s in stints
+                if isinstance(s.get(key), (int, float)) and s.get('lap_count', 0) > 0]
+        w = sum(weight for _, weight in rows)
+        return sum(v * weight for v, weight in rows) / w if w > 0 else None
+
+    w_deg = _wt_all('positive_deg_rate_s_per_lap')
+    w_r2 = _wt_all('r_squared')
+
+    return {
+        'total_modelled_laps': total,
+        'per_compound': per_compound,
+        'total_deg_loss_all_stints_s': total_deg_loss_all,
+        'weighted_deg_rate_s_per_lap': round(w_deg, 4) if w_deg is not None else None,
+        'weighted_consistency_std_dev_s': round(consistency, 3) if consistency is not None else None,
+        'weighted_r_squared': round(w_r2, 3) if w_r2 is not None else None,
+        'score_explanation': (
+            "R² is the trust level for the deg rate fit — higher means the linear trend explains more of "
+            "the lap-time variance. weighted_deg_rate_s_per_lap is lap-count-weighted across all compounds. "
+            "Deg rates are compound-specific — only compare stints on the same compound."
+        ),
+        'note': (
+            "Deg rates are compound-specific — only compare stints on the same compound. "
+            "Lower positive_deg_rate_s_per_lap means less tyre performance loss per lap within that compound. "
+            "total_deg_loss_all_stints_s is the total time lost to tyre wear across ALL stints combined. "
+            "consistency_std_dev_s is lap-to-lap spread around the deg trend."
+        ),
+    }
 
 
 def _align_stints_by_compound(stints_a: list[dict], stints_b: list[dict]) -> list[dict]:
@@ -3353,8 +4126,9 @@ def _align_stints_by_compound(stints_a: list[dict], stints_b: list[dict]) -> lis
         used_b.add(match_b_idx)
         sb = stints_b[match_b_idx]
 
-        deg_a = stint_a.get('deg_rate_s_per_lap') or 0.0
-        deg_b = sb.get('deg_rate_s_per_lap') or 0.0
+        # Use positive_deg_rate (clamped at 0) so delta reflects real tyre wear, not noise artifacts
+        deg_a = stint_a.get('positive_deg_rate_s_per_lap') or 0.0
+        deg_b = sb.get('positive_deg_rate_s_per_lap') or 0.0
         pace_a = stint_a.get('fuel_corrected_pace_at_age_1_s')
         pace_b = sb.get('fuel_corrected_pace_at_age_1_s')
 
@@ -3362,7 +4136,7 @@ def _align_stints_by_compound(stints_a: list[dict], stints_b: list[dict]) -> lis
             'compound': comp_a,
             'stint_a': stint_a,
             'stint_b': sb,
-            'deg_rate_delta': round(deg_a - deg_b, 4),
+            'deg_rate_delta': round(deg_a - deg_b, 4),  # positive = driver_a degrades faster
             'pace_delta_s': round(pace_a - pace_b, 3) if pace_a is not None and pace_b is not None else None,
         })
 
@@ -3610,6 +4384,7 @@ def analyze_stint_degradation(round_number: int, driver_code: str, session_type:
     stints = _fit_stint_degradation(clean_laps)
 
     total_laps = sum(s['lap_count'] for s in stints)
+    tyre_management = _summarize_tyre_management(stints)
     weighted_pace = None
     if total_laps > 0 and stints:
         weighted_pace = round(
@@ -3626,9 +4401,16 @@ def analyze_stint_degradation(round_number: int, driver_code: str, session_type:
         'driver': driver_code.upper(),
         'total_clean_laps': len(clean_laps),
         'stints': stints,
+        'tyre_management': tyre_management,
         'weighted_avg_fuel_corrected_pace_s': weighted_pace,
         'highest_degradation_stint': worst_stint,
         'lowest_degradation_stint': best_stint,
+        'how_to_read': (
+            "raw_pace_trend_s_per_lap is what the stopwatch did through the stint. deg_rate_s_per_lap adds back "
+            "the expected fuel-burn gain, so positive values estimate tyre performance loss per lap; lower is "
+            "better. consistency_std_dev_s is not time lost per lap; it is lap-to-lap spread around the trend. "
+            "r_squared says how trustworthy the trend is."
+        ),
     }
 
 
@@ -3663,6 +4445,8 @@ def analyze_race_pace_battle(
     laps_b, clean_b, stints_b, rep_lap_b = _driver_data(driver_b)
 
     aligned = _align_stints_by_compound(stints_a, stints_b)
+    tyre_management_a = _summarize_tyre_management(stints_a)
+    tyre_management_b = _summarize_tyre_management(stints_b)
 
     def _weighted_pace(stints: list[dict]) -> float | None:
         total = sum(s['lap_count'] for s in stints)
@@ -3674,8 +4458,15 @@ def analyze_race_pace_battle(
     pace_b = _weighted_pace(stints_b)
     overall_delta = round(pace_a - pace_b, 3) if pace_a is not None and pace_b is not None else None
 
-    avg_deg_a = (sum(s['deg_rate_s_per_lap'] for s in stints_a) / len(stints_a)) if stints_a else None
-    avg_deg_b = (sum(s['deg_rate_s_per_lap'] for s in stints_b) / len(stints_b)) if stints_b else None
+    # Compute deg averages only from compound-matched aligned stints.
+    # Cross-compound averaging is meaningless — soft and hard degrade at different baseline rates.
+    if aligned:
+        laps_a_matched = sum(a['stint_a'].get('lap_count', 1) for a in aligned)
+        laps_b_matched = sum(a['stint_b'].get('lap_count', 1) for a in aligned)
+        avg_deg_a = sum(a['stint_a'].get('positive_deg_rate_s_per_lap', 0) * a['stint_a'].get('lap_count', 1) for a in aligned) / laps_a_matched if laps_a_matched else None
+        avg_deg_b = sum(a['stint_b'].get('positive_deg_rate_s_per_lap', 0) * a['stint_b'].get('lap_count', 1) for a in aligned) / laps_b_matched if laps_b_matched else None
+    else:
+        avg_deg_a = avg_deg_b = None
     deg_delta = round(avg_deg_a - avg_deg_b, 4) if avg_deg_a is not None and avg_deg_b is not None else None
 
     decisive_factor = 'mixed'
@@ -3716,6 +4507,8 @@ def analyze_race_pace_battle(
         'total_clean_laps_b': len(clean_b),
         'stints_a': stints_a,
         'stints_b': stints_b,
+        'tyre_management_a': tyre_management_a,
+        'tyre_management_b': tyre_management_b,
         'aligned_stints': aligned,
         'fuel_corrected_pace_a_s': round(pace_a, 3) if pace_a is not None else None,
         'fuel_corrected_pace_b_s': round(pace_b, 3) if pace_b is not None else None,
@@ -3729,6 +4522,13 @@ def analyze_race_pace_battle(
         'undercut_opportunity': undercut_opportunity,
         'representative_lap_a': rep_lap_a,
         'representative_lap_b': rep_lap_b,
+        'how_to_read_degradation': (
+            "deg_rate_s_per_lap adds back the expected fuel-burn gain so the remaining slope estimates tyre "
+            "performance loss per lap. Only compare deg rates between stints on the same compound — different "
+            "compounds have different baseline rates and cannot be averaged together. "
+            "avg_deg_rate_a/b_s_per_lap are lap-weighted averages across matched compounds only. "
+            "Lower positive_deg_rate_s_per_lap means less tyre wear within that compound."
+        ),
     }
 
 
@@ -4433,3 +5233,227 @@ def analyze_race_cornering_profile(
     }
 
     return result
+
+
+def _openf1_pit_fetch(round_number: int) -> dict:
+    """
+    Returns {(driver_number_int, lap_number_int): pit_duration_s} from OpenF1.
+    Falls back to empty dict on any error so the caller always gets valid data.
+    Local import avoids circular dependency (openf1.py imports from f1_data.py).
+    """
+    try:
+        from openf1 import get_pit_stops
+        rows = get_pit_stops(round_number)
+        return {
+            (int(r["driver_number"]), int(r["lap_number"])): r["pit_duration_s"]
+            for r in rows
+            if r.get("driver_number") is not None and r.get("lap_number") is not None
+        }
+    except Exception:
+        return {}
+
+
+def get_pit_stop_analysis(round_number: int) -> dict:
+    """
+    Pit stop strategy for all classified finishers in a race.
+    Returns per-driver stints (compound, start_lap, end_lap, laps) and pit stops
+    (lap, duration_s from OpenF1, compound_in, compound_out).
+    Drivers are sorted by finish position.
+    """
+    _validate_session_availability(round_number, "R", telemetry=False)
+    session = _load_session(round_number, "R", laps=True)
+
+    session_results = get_session_results(round_number, "R")
+    results_list = session_results.get("results", [])
+    num_to_code = {
+        int(r["driver_number"]): r["abbreviation"].upper()
+        for r in results_list
+        if r.get("driver_number") and r.get("abbreviation")
+    }
+    finish_order = {
+        r["abbreviation"].upper(): _normalize_position(r.get("position")) or 99
+        for r in results_list
+        if r.get("abbreviation")
+    }
+
+    pit_durations = _openf1_pit_fetch(round_number)
+
+    drivers_data = []
+    all_codes = session.laps["Driver"].dropna().unique() if not session.laps.empty else []
+
+    for code in all_codes:
+        code = str(code).upper()
+        driver_laps = session.laps[session.laps["Driver"] == code]
+        if driver_laps.empty:
+            continue
+
+        driver_laps = driver_laps.sort_values("LapNumber")
+        stints: list[dict] = []
+        pit_stops: list[dict] = []
+        current_compound: str | None = None
+        stint_start: int | None = None
+        driver_num_int = next((n for n, c in num_to_code.items() if c == code), None)
+
+        for _, lap in driver_laps.iterrows():
+            lap_num = int(lap["LapNumber"])
+            compound = str(lap.get("Compound") or "UNKNOWN").upper()
+
+            if current_compound is None:
+                current_compound = compound
+                stint_start = lap_num
+            elif compound != current_compound:
+                stints.append({
+                    "compound": current_compound,
+                    "start_lap": stint_start,
+                    "end_lap": lap_num - 1,
+                    "laps": lap_num - 1 - stint_start + 1,
+                })
+                duration = (
+                    pit_durations.get((driver_num_int, lap_num - 1))
+                    if driver_num_int is not None else None
+                )
+                pit_stops.append({
+                    "lap": lap_num - 1,
+                    "duration_s": duration,
+                    "compound_in": current_compound,
+                    "compound_out": compound,
+                })
+                current_compound = compound
+                stint_start = lap_num
+
+        if current_compound and stint_start is not None:
+            max_lap = int(driver_laps["LapNumber"].max())
+            stints.append({
+                "compound": current_compound,
+                "start_lap": stint_start,
+                "end_lap": max_lap,
+                "laps": max_lap - stint_start + 1,
+            })
+
+        if stints:
+            drivers_data.append({
+                "driver": code,
+                "stints": stints,
+                "pit_stops": pit_stops,
+                "_finish": finish_order.get(code, 99),
+            })
+
+    drivers_data.sort(key=lambda d: d.pop("_finish"))
+    total_laps = int(session.laps["LapNumber"].max()) if not session.laps.empty else None
+
+    return {
+        "event": session.event["EventName"],
+        "session": "R",
+        "total_laps": total_laps,
+        "drivers": drivers_data,
+    }
+
+
+def analyze_weather_pace_correlation(round_number: int, session_type: str = "Q") -> dict:
+    """
+    Correlates track temperature with lap time evolution through the session.
+    For qualifying: Q1/Q2/Q3 segments — temperature and best lap per segment.
+    For race: 10-lap blocks — temperature and top-5 average pace per block.
+    Primary use: explain anomalies (Q3 slower than Q2, pace drop mid-race).
+    """
+    _validate_session_availability(round_number, session_type, telemetry=False)
+    session = _load_session(round_number, session_type, laps=True, weather=True)
+
+    if session.weather_data is None or session.weather_data.empty:
+        raise ValueError(f"No weather data available for round {round_number} {session_type}.")
+
+    weather = session.weather_data.copy()
+    laps = session.laps.copy()
+    st = session_type.upper()
+
+    def _nearest_weather(time_td):
+        if weather.empty or time_td is None or pd.isna(time_td):
+            return None, None
+        diffs = (weather["Time"] - time_td).abs()
+        row = weather.loc[diffs.idxmin()]
+        return _normalize_float(row.get("TrackTemp")), _normalize_float(row.get("AirTemp"))
+
+    segments = []
+
+    if st == "Q":
+        for q_seg in ["Q1", "Q2", "Q3"]:
+            if "Session" in laps.columns:
+                seg_laps = laps[laps["Session"] == q_seg]
+            else:
+                total = len(laps)
+                thirds = [laps.iloc[:total//3], laps.iloc[total//3:2*total//3], laps.iloc[2*total//3:]]
+                seg_laps = thirds[["Q1","Q2","Q3"].index(q_seg)]
+
+            valid = seg_laps[
+                seg_laps["LapTime"].notna()
+                & ~seg_laps.get("Deleted", pd.Series(False, index=seg_laps.index))
+            ]
+            if valid.empty:
+                continue
+
+            lap_times_s = sorted([lt.total_seconds() for lt in valid["LapTime"] if pd.notna(lt)])
+            best = round(lap_times_s[0], 3) if lap_times_s else None
+            top5_avg = round(sum(lap_times_s[:5]) / min(5, len(lap_times_s)), 3) if lap_times_s else None
+            mid_time = valid["Time"].median() if "Time" in valid.columns else None
+            track_temp, air_temp = _nearest_weather(mid_time)
+
+            segments.append({
+                "segment": q_seg,
+                "avg_track_temp_c": track_temp,
+                "avg_air_temp_c": air_temp,
+                "best_lap_s": best,
+                "top5_avg_pace_s": top5_avg,
+                "lap_count": len(valid),
+            })
+    else:
+        max_lap = int(laps["LapNumber"].max()) if not laps.empty else 0
+        for start in range(1, max_lap + 1, 10):
+            end = min(start + 9, max_lap)
+            block = laps[(laps["LapNumber"] >= start) & (laps["LapNumber"] <= end)]
+            valid = block[block["LapTime"].notna()]
+            if valid.empty:
+                continue
+            lap_times_s = sorted([
+                lt.total_seconds() for lt in valid["LapTime"]
+                if pd.notna(lt) and lt.total_seconds() < 200
+            ])
+            if not lap_times_s:
+                continue
+            mid_time = valid["Time"].median() if "Time" in valid.columns else None
+            track_temp, air_temp = _nearest_weather(mid_time)
+            segments.append({
+                "segment": f"Laps {start}–{end}",
+                "avg_track_temp_c": track_temp,
+                "avg_air_temp_c": air_temp,
+                "best_lap_s": round(lap_times_s[0], 3),
+                "top5_avg_pace_s": round(sum(lap_times_s[:5]) / min(5, len(lap_times_s)), 3),
+                "lap_count": len(valid),
+            })
+
+    first = next((s for s in segments if s["best_lap_s"]), None)
+    last  = next((s for s in reversed(segments) if s["best_lap_s"]), None)
+    track_evolution_s = (
+        round(last["best_lap_s"] - first["best_lap_s"], 3)
+        if first and last and first is not last else None
+    )
+    first_temp = first["avg_track_temp_c"] if first else None
+    last_temp  = last["avg_track_temp_c"]  if last  else None
+    temp_change_c = (
+        round(last_temp - first_temp, 1)
+        if first_temp is not None and last_temp is not None else None
+    )
+    rainfall = bool((weather.get("Rainfall") == True).any()) if not weather.empty else False
+
+    return {
+        "event": session.event["EventName"],
+        "session": st,
+        "segments": segments,
+        "track_evolution_s": track_evolution_s,
+        "temp_change_c": temp_change_c,
+        "rainfall_recorded": rainfall,
+        "how_to_read": (
+            "track_evolution_s: negative = track got faster across the session. "
+            "Use temp_change_c alongside track_evolution_s to separate rubber-laid grip from temperature effect. "
+            "top5_avg_pace_s is more robust than best_lap_s when a single hotlap distorts the sample."
+        ),
+    }
