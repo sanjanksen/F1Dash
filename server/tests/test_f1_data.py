@@ -2021,3 +2021,182 @@ def test_sc_no_beneficiaries_when_nobody_pitted_during():
     assert beneficiaries == []
     victims = result.get('all_victims', [])
     assert any(v['driver'] == 'AAA' for v in victims)
+
+
+# ── Task 2: FP summary ───────────────────────────────────────────────────────
+
+def _make_fp_session():
+    import pandas as pd
+    from unittest.mock import MagicMock
+
+    laps_rows = []
+    # Driver AAA: 10-lap long run on HARD (race sim)
+    for i in range(1, 11):
+        laps_rows.append({
+            'Driver': 'AAA', 'Team': 'Alpha', 'LapNumber': i,
+            'LapStartTime': pd.Timedelta(seconds=i * 90),
+            'PitInTime': pd.NaT if i < 10 else pd.Timedelta(seconds=10 * 90 + 20),
+            'PitOutTime': pd.Timedelta(seconds=90) if i == 1 else pd.NaT,
+            'Stint': 1, 'Compound': 'HARD', 'FreshTyre': True,
+            'TrackStatus': '1', 'LapTime': pd.Timedelta(seconds=92 + i * 0.1),
+            'SpeedST': 300.0, 'SpeedFL': 295.0, 'SpeedI1': 285.0, 'SpeedI2': 290.0,
+        })
+    # Driver AAA: 2-lap quali sim on fresh SOFT
+    for i in range(11, 13):
+        laps_rows.append({
+            'Driver': 'AAA', 'Team': 'Alpha', 'LapNumber': i,
+            'LapStartTime': pd.Timedelta(seconds=i * 90),
+            'PitInTime': pd.NaT if i < 12 else pd.Timedelta(seconds=12 * 90 + 20),
+            'PitOutTime': pd.Timedelta(seconds=11 * 90) if i == 11 else pd.NaT,
+            'Stint': 2, 'Compound': 'SOFT', 'FreshTyre': True,
+            'TrackStatus': '1', 'LapTime': pd.Timedelta(seconds=88),
+            'SpeedST': 310.0, 'SpeedFL': 305.0, 'SpeedI1': 290.0, 'SpeedI2': 295.0,
+        })
+
+    laps_df = pd.DataFrame(laps_rows)
+
+    session = MagicMock()
+    session.laps = laps_df
+    session.drivers = ['AAA']
+    session.event = {'EventName': 'Test GP'}
+    return session, laps_df
+
+
+def test_get_fp_summary_structure():
+    import f1_data
+    session, laps_df = _make_fp_session()
+    with patch('f1_data._load_session', return_value=session), \
+         patch('f1_data._pick_driver', side_effect=_pick_driver_plain), \
+         patch('f1_data._driver_lookup', return_value={'AAA': {'FullName': 'Alice A', 'TeamName': 'Alpha'}}):
+        result = f1_data.get_fp_summary(1, 2)
+    assert result['session'] == 'FP2'
+    assert isinstance(result['drivers'], list)
+    assert len(result['drivers']) > 0
+    assert isinstance(result['session_notes'], list)
+    assert len(result['session_notes']) > 0
+
+
+def test_get_fp_summary_classifies_long_run():
+    import f1_data
+    session, laps_df = _make_fp_session()
+    with patch('f1_data._load_session', return_value=session), \
+         patch('f1_data._pick_driver', side_effect=_pick_driver_plain), \
+         patch('f1_data._driver_lookup', return_value={'AAA': {'FullName': 'Alice A', 'TeamName': 'Alpha'}}):
+        result = f1_data.get_fp_summary(1, 2)
+    driver = result['drivers'][0]
+    long_runs = [s for s in driver['stints'] if s['classification'] == 'long_run']
+    assert len(long_runs) >= 1
+
+
+def test_get_fp_summary_classifies_quali_sim():
+    import f1_data
+    session, laps_df = _make_fp_session()
+    with patch('f1_data._load_session', return_value=session), \
+         patch('f1_data._pick_driver', side_effect=_pick_driver_plain), \
+         patch('f1_data._driver_lookup', return_value={'AAA': {'FullName': 'Alice A', 'TeamName': 'Alpha'}}):
+        result = f1_data.get_fp_summary(1, 2)
+    driver = result['drivers'][0]
+    quali_sims = [s for s in driver['stints'] if s['classification'] == 'quali_sim']
+    assert len(quali_sims) >= 1
+
+
+def test_get_fp_summary_best_lap_from_quickest_lap():
+    import f1_data
+    session, laps_df = _make_fp_session()
+    with patch('f1_data._load_session', return_value=session), \
+         patch('f1_data._pick_driver', side_effect=_pick_driver_plain), \
+         patch('f1_data._driver_lookup', return_value={'AAA': {'FullName': 'Alice A', 'TeamName': 'Alpha'}}):
+        result = f1_data.get_fp_summary(1, 2)
+    driver = result['drivers'][0]
+    # Fastest lap is 88.0s (SOFT stint), not the HARD long-run laps
+    assert driver['best_lap_time_s'] == pytest.approx(88.0, abs=0.01)
+    assert driver['best_lap_compound'] == 'SOFT'
+
+
+# ---------------------------------------------------------------------------
+# Speed trap leaderboard tests
+# ---------------------------------------------------------------------------
+
+def _make_speed_trap_session():
+    """Two drivers with differing peak speeds on different laps."""
+    laps_rows = []
+    # Driver AAA: lap 1 SpeedST=310, lap 2 SpeedST=305
+    laps_rows.append({
+        'Driver': 'AAA', 'LapNumber': 1, 'Compound': 'SOFT',
+        'SpeedST': 310.0, 'SpeedFL': 290.0, 'SpeedI1': 280.0, 'SpeedI2': 285.0,
+    })
+    laps_rows.append({
+        'Driver': 'AAA', 'LapNumber': 2, 'Compound': 'SOFT',
+        'SpeedST': 305.0, 'SpeedFL': 295.0, 'SpeedI1': 285.0, 'SpeedI2': 290.0,
+    })
+    # Driver BBB: lap 1 SpeedST=308, lap 2 SpeedST=315 (peak on lap 2)
+    laps_rows.append({
+        'Driver': 'BBB', 'LapNumber': 1, 'Compound': 'MEDIUM',
+        'SpeedST': 308.0, 'SpeedFL': 292.0, 'SpeedI1': 282.0, 'SpeedI2': 287.0,
+    })
+    laps_rows.append({
+        'Driver': 'BBB', 'LapNumber': 2, 'Compound': 'MEDIUM',
+        'SpeedST': 315.0, 'SpeedFL': 288.0, 'SpeedI1': 278.0, 'SpeedI2': 283.0,
+    })
+
+    laps_df = pd.DataFrame(laps_rows)
+    session = MagicMock()
+    session.laps = laps_df
+    session.drivers = ['AAA', 'BBB']
+    session.event = {'EventName': 'Speed GP'}
+    return session, laps_df
+
+
+def test_speed_trap_leaderboard_structure():
+    import f1_data
+    session, _ = _make_speed_trap_session()
+    with patch('f1_data._load_session', return_value=session), \
+         patch('f1_data._pick_driver', side_effect=_pick_driver_plain), \
+         patch('f1_data._driver_lookup', return_value={
+             'AAA': {'FullName': 'Alice A', 'TeamName': 'Alpha'},
+             'BBB': {'FullName': 'Bob B', 'TeamName': 'Beta'},
+         }):
+        result = f1_data.get_speed_trap_leaderboard(1, 'Q')
+    assert result['session'] == 'Q'
+    assert 'speed_st' in result
+    assert 'speed_fl' in result
+    assert 'speed_i1' in result
+    assert 'speed_i2' in result
+    assert isinstance(result['speed_st'], list)
+    assert len(result['speed_st']) == 2
+
+
+def test_speed_trap_leaderboard_ranked_descending():
+    import f1_data
+    session, _ = _make_speed_trap_session()
+    with patch('f1_data._load_session', return_value=session), \
+         patch('f1_data._pick_driver', side_effect=_pick_driver_plain), \
+         patch('f1_data._driver_lookup', return_value={
+             'AAA': {'FullName': 'Alice A', 'TeamName': 'Alpha'},
+             'BBB': {'FullName': 'Bob B', 'TeamName': 'Beta'},
+         }):
+        result = f1_data.get_speed_trap_leaderboard(1, 'Q')
+    st = result['speed_st']
+    # BBB has 315 peak, AAA has 310 — BBB should rank 1
+    assert st[0]['driver'] == 'BBB'
+    assert st[0]['speed_kph'] == pytest.approx(315.0)
+    assert st[0]['rank'] == 1
+    assert st[1]['driver'] == 'AAA'
+    assert st[1]['rank'] == 2
+
+
+def test_speed_trap_leaderboard_peak_per_trap_independent():
+    """Each trap's peak is found independently — driver may top different traps."""
+    import f1_data
+    session, _ = _make_speed_trap_session()
+    with patch('f1_data._load_session', return_value=session), \
+         patch('f1_data._pick_driver', side_effect=_pick_driver_plain), \
+         patch('f1_data._driver_lookup', return_value={
+             'AAA': {'FullName': 'Alice A', 'TeamName': 'Alpha'},
+             'BBB': {'FullName': 'Bob B', 'TeamName': 'Beta'},
+         }):
+        result = f1_data.get_speed_trap_leaderboard(1, 'Q')
+    # AAA has highest SpeedFL (295 on lap 2 vs BBB's 292/288)
+    fl = result['speed_fl']
+    assert fl[0]['driver'] == 'AAA'
+    assert fl[0]['speed_kph'] == pytest.approx(295.0)

@@ -5583,3 +5583,162 @@ def analyze_weather_pace_correlation(round_number: int, session_type: str = "Q")
             "top5_avg_pace_s is more robust than best_lap_s when a single hotlap distorts the sample."
         ),
     }
+
+
+def get_fp_summary(round_number: int, fp_number: int) -> dict:
+    """Return a structured summary of a free practice session with stint classification."""
+    session_type = f"FP{fp_number}"
+    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    driver_info = _driver_lookup(session)
+
+    _SOFT_COMPOUNDS = {"SOFT", "SUPERSOFT", "ULTRASOFT", "HYPERSOFT"}
+
+    def _classify_stint(laps_in_stint: list, stint_no: int) -> str:
+        lc = len(laps_in_stint)
+        first = laps_in_stint[0]
+        compound = str(first.get("Compound", "")) if pd.notna(first.get("Compound")) else ""
+        fresh = bool(first.get("FreshTyre")) if pd.notna(first.get("FreshTyre")) else False
+        is_pit_out = pd.notna(first.get("PitOutTime"))
+        if lc == 1 and is_pit_out and stint_no == 1:
+            return "installation"
+        if lc >= 8:
+            return "long_run"
+        if lc <= 2 and fresh and compound.upper() in _SOFT_COMPOUNDS:
+            return "quali_sim"
+        return "short_run"
+
+    driver_results = []
+    for code in session.drivers:
+        driver_laps = _pick_driver(session.laps, str(code))
+        if getattr(driver_laps, "empty", True):
+            continue
+
+        groups: dict[int, list] = {}
+        for _, lap in driver_laps.iterrows():
+            stint_key = int(lap["Stint"]) if pd.notna(lap.get("Stint")) else 1
+            groups.setdefault(stint_key, []).append(lap)
+
+        stints = []
+        for stint_no in sorted(groups):
+            laps_in = groups[stint_no]
+            first = laps_in[0]
+            last = laps_in[-1]
+            compound = str(first.get("Compound")) if pd.notna(first.get("Compound")) else None
+            fresh = bool(first.get("FreshTyre")) if pd.notna(first.get("FreshTyre")) else None
+            valid_times = [
+                l["LapTime"].total_seconds()
+                for l in laps_in
+                if l.get("LapTime") is not None and not pd.isna(l["LapTime"])
+            ]
+            stints.append({
+                "stint": stint_no,
+                "compound": compound,
+                "fresh_tyre": fresh,
+                "laps": len(laps_in),
+                "classification": _classify_stint(laps_in, stint_no),
+                "start_lap": int(first["LapNumber"]) if pd.notna(first.get("LapNumber")) else None,
+                "end_lap": int(last["LapNumber"]) if pd.notna(last.get("LapNumber")) else None,
+                "best_lap_s": round(min(valid_times), 3) if valid_times else None,
+                "avg_lap_s": round(sum(valid_times) / len(valid_times), 3) if valid_times else None,
+            })
+
+        all_valid = sorted(
+            [l for _, l in driver_laps.iterrows() if l.get("LapTime") is not None and not pd.isna(l["LapTime"])],
+            key=lambda l: l["LapTime"],
+        )
+        best = all_valid[0] if all_valid else None
+        info = driver_info.get(str(code).upper(), {})
+
+        driver_results.append({
+            "driver": info.get("FullName") or str(code).upper(),
+            "code": str(code).upper(),
+            "team": info.get("TeamName"),
+            "stints": stints,
+            "best_lap_time": _fmt_td(best["LapTime"]) if best is not None else None,
+            "best_lap_time_s": round(best["LapTime"].total_seconds(), 3) if best is not None else None,
+            "best_lap_compound": str(best["Compound"]) if best is not None and pd.notna(best.get("Compound")) else None,
+            "speed_st": round(float(best["SpeedST"]), 1) if best is not None and pd.notna(best.get("SpeedST")) else None,
+            "long_run_count": sum(1 for s in stints if s["classification"] == "long_run"),
+            "quali_sim_count": sum(1 for s in stints if s["classification"] == "quali_sim"),
+            "compounds_used": list({s["compound"] for s in stints if s.get("compound")}),
+        })
+
+    driver_results.sort(key=lambda d: d.get("best_lap_time_s") or float("inf"))
+
+    return {
+        "event": session.event["EventName"],
+        "session": session_type,
+        "drivers": driver_results,
+        "session_notes": [
+            "Fuel load is not measured — FastF1 does not provide fuel load for FP sessions.",
+            "Long-run stints (8+ laps, same compound) approximate race pace but are run on heavier fuel than the race.",
+            "Quali-sim stints (1-2 laps on fresh soft, fast time) approximate single-lap pace.",
+            "Installation laps (first pit-out lap of session) are included in stints but excluded from pace context.",
+            "FP lap times are not directly comparable to qualifying times due to fuel load and tyre program differences.",
+        ],
+    }
+
+
+def get_speed_trap_leaderboard(round_number: int, session_type: str) -> dict:
+    """Scan all laps and return peak speed at each trap (ST, FL, I1, I2) per driver."""
+    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    driver_info = _driver_lookup(session)
+
+    traps = {
+        "speed_st": "SpeedST",
+        "speed_fl": "SpeedFL",
+        "speed_i1": "SpeedI1",
+        "speed_i2": "SpeedI2",
+    }
+
+    # For each trap, build {driver_code: {speed, lap_number, compound}}
+    trap_bests: dict[str, dict[str, dict]] = {t: {} for t in traps}
+
+    for code in session.drivers:
+        driver_laps = _pick_driver(session.laps, str(code))
+        if getattr(driver_laps, "empty", True):
+            continue
+        code_upper = str(code).upper()
+        for trap_key, col in traps.items():
+            if col not in driver_laps.columns:
+                continue
+            valid = driver_laps[driver_laps[col].notna() & (driver_laps[col] > 0)]
+            if valid.empty:
+                continue
+            best_row = valid.loc[valid[col].idxmax()]
+            trap_bests[trap_key][code_upper] = {
+                "speed_kph": round(float(best_row[col]), 1),
+                "lap_number": int(best_row["LapNumber"]) if pd.notna(best_row.get("LapNumber")) else None,
+                "compound": str(best_row["Compound"]) if pd.notna(best_row.get("Compound")) else None,
+            }
+
+    def _ranked(trap_key: str) -> list[dict]:
+        entries = []
+        for code_upper, data in trap_bests[trap_key].items():
+            info = driver_info.get(code_upper, {})
+            entries.append({
+                "driver": code_upper,
+                "team": info.get("TeamName"),
+                "speed_kph": data["speed_kph"],
+                "lap_number": data["lap_number"],
+                "compound": data["compound"],
+            })
+        entries.sort(key=lambda e: e["speed_kph"], reverse=True)
+        for i, e in enumerate(entries):
+            e["rank"] = i + 1
+        return entries
+
+    return {
+        "event": session.event["EventName"],
+        "session": session_type,
+        "trap_labels": {
+            "speed_st": "Speed Trap (main straight)",
+            "speed_fl": "Finish Line",
+            "speed_i1": "Intermediate 1",
+            "speed_i2": "Intermediate 2",
+        },
+        "speed_st": _ranked("speed_st"),
+        "speed_fl": _ranked("speed_fl"),
+        "speed_i1": _ranked("speed_i1"),
+        "speed_i2": _ranked("speed_i2"),
+    }
