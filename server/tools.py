@@ -54,6 +54,8 @@ from f1_data import (
     get_track_position_comparison,
     get_pit_stop_analysis,
     analyze_weather_pace_correlation,
+    get_fp_summary,
+    get_speed_trap_leaderboard,
 )
 from openf1 import get_intervals, get_live_position_timeline, get_team_radio
 
@@ -371,6 +373,36 @@ PRIMITIVE_TOOL_DEFINITIONS = [
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
         },
         ["round_number"],
+    ),
+    _tool(
+        "get_fp_summary",
+        "PRIMITIVE TOOL. Free practice session summary with stint classification. "
+        "Each driver's stints are labelled long_run (8+ laps same compound, race-pace sim), "
+        "quali_sim (1-2 laps on fresh soft, best single-lap pace), short_run (setup/balance), "
+        "or installation (first pit-out lap). Returns best_lap_time_s, best_lap_compound, "
+        "speed_st, long_run_count, quali_sim_count per driver, sorted fastest to slowest. "
+        "Includes session_notes explaining fuel load and programme-type caveats. "
+        "Use for any FP1/FP2/FP3 question: fastest driver, programme analysis, race pace estimation.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "fp_number": {"type": "integer", "description": "Free practice number: 1, 2, or 3."},
+        },
+        ["round_number", "fp_number"],
+    ),
+    _tool(
+        "get_speed_trap_leaderboard",
+        "PRIMITIVE TOOL. Peak speed at each timing trap for every driver, scanning all laps. "
+        "Returns four ranked lists: speed_st (main straight), speed_fl (finish line), "
+        "speed_i1 (intermediate 1), speed_i2 (intermediate 2). Each entry: driver, team, "
+        "speed_kph, lap_number, compound, rank. A driver's fastest ST may come on a different "
+        "lap than their fastest FL — each trap is ranked independently. "
+        "Use for 'who had the highest top speed?', 'speed trap leaderboard', "
+        "'who was fastest down the straight?', 'drag/straight-line speed' questions.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
+        },
+        ["round_number", "session_type"],
     ),
 ]
 
@@ -825,4 +857,8 @@ def execute_tool(name: str, args: dict):
         return get_pit_stop_analysis(args["round_number"])
     if name == "analyze_weather_pace_correlation":
         return analyze_weather_pace_correlation(args["round_number"], args.get("session_type", "Q"))
+    if name == "get_fp_summary":
+        return get_fp_summary(args["round_number"], args["fp_number"])
+    if name == "get_speed_trap_leaderboard":
+        return get_speed_trap_leaderboard(args["round_number"], args["session_type"])
     raise ValueError(f"Unknown tool: {name!r}")
