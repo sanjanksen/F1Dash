@@ -372,3 +372,107 @@ def test_resolve_query_context_circuit_scope_circuit_guide(mock_circuits, mock_d
     assert result["scope"] == "circuit"
     assert result["analysis_mode"] == "circuit_profile"
     assert result["country"] == "Japan"
+
+
+@patch('resolver._extract_entities_llm', return_value={})
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_resolve_query_context_team_circuit_fit(mock_circuits, mock_drivers, mock_llm):
+    mock_circuits.return_value = []
+    mock_drivers.return_value = [
+        {"full_name": "George Russell", "code": "RUS", "driver_id": "russell", "team": "Mercedes"},
+        {"full_name": "Kimi Antonelli", "code": "ANT", "driver_id": "antonelli", "team": "Mercedes"},
+    ]
+
+    result = resolver.resolve_query_context("what kind of tracks suit Mercedes")
+
+    assert result["entity_type"] == "team"
+    assert result["entity_name"] == "Mercedes"
+    assert result["analysis_mode"] == "team_circuit_fit"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_pit_strategy_scope_routes_to_pit_stop_analysis(mock_circuits, mock_drivers):
+    mock_drivers.return_value = []
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+
+    result = resolver.resolve_query_context("who had the fastest pit stop at Suzuka?")
+
+    assert result["scope"] == "pit_strategy"
+    assert result["suggested_tool"] == "get_pit_stop_analysis"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_undercut_scope_routes_to_pit_stop_analysis(mock_circuits, mock_drivers):
+    mock_drivers.return_value = []
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+
+    result = resolver.resolve_query_context("did anyone undercut at the Japanese GP?")
+
+    assert result["scope"] == "pit_strategy"
+    assert result["suggested_tool"] == "get_pit_stop_analysis"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_weather_pace_scope_routes_to_weather_correlation(mock_circuits, mock_drivers):
+    mock_drivers.return_value = []
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+
+    result = resolver.resolve_query_context("did the track temperature drop affect pace in qualifying at Suzuka?")
+
+    assert result["scope"] == "weather_pace"
+    assert result["suggested_tool"] == "analyze_weather_pace_correlation"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_degradation_scope_with_driver_routes_to_stint_degradation(mock_circuits, mock_drivers):
+    mock_drivers.return_value = [
+        {"full_name": "George Russell", "code": "RUS", "driver_id": "russell", "team": "Mercedes"},
+    ]
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+
+    result = resolver.resolve_query_context("how was Russell's tyre degradation at Suzuka?")
+
+    assert result["scope"] == "degradation"
+    assert result["suggested_tool"] == "analyze_stint_degradation"
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_degradation_scope_without_driver_returns_no_tool(mock_circuits, mock_drivers):
+    mock_drivers.return_value = []
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+
+    result = resolver.resolve_query_context("how was tyre degradation at Suzuka?")
+
+    assert result["scope"] == "degradation"
+    assert result.get("suggested_tool") is None
+
+
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_strategy_keyword_without_pit_terms_stays_strategy_scope(mock_circuits, mock_drivers):
+    mock_drivers.return_value = [
+        {"full_name": "George Russell", "code": "RUS", "driver_id": "russell", "team": "Mercedes"},
+    ]
+    mock_circuits.return_value = [
+        {"round": 3, "event_name": "Japanese Grand Prix", "circuit_name": "Suzuka", "country": "Japan"},
+    ]
+
+    result = resolver.resolve_query_context("what was Russell's strategy at Suzuka?")
+
+    assert result["scope"] == "strategy"

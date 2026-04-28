@@ -934,6 +934,23 @@ def _suggested_tool_args(resolved: dict) -> dict | None:
                 "driver_b": codes[1],
             }
 
+    if tool == "get_pit_stop_analysis":
+        return {"round_number": round_number}
+
+    if tool == "analyze_weather_pace_correlation":
+        session_type = resolved.get("session_type") or "Q"
+        return {"round_number": round_number, "session_type": session_type}
+
+    if tool == "analyze_stint_degradation":
+        if not resolved.get("entity_code"):
+            return None
+        session_type = resolved.get("session_type") or "R"
+        return {
+            "round_number": round_number,
+            "driver_code": resolved["entity_code"],
+            "session_type": session_type,
+        }
+
     return None
 
 

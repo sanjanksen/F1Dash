@@ -159,6 +159,11 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
         scope = "safety_car"
     if "strategy" in normalized or "pit" in normalized:
         scope = "strategy"
+    if any(term in normalized for term in (
+        "pit stop", "pit stops", "fastest stop", "fastest pit", "pit timing",
+        "pit duration", "undercut", "overcut", "pit window",
+    )):
+        scope = "pit_strategy"
     if any(term in normalized for term in ("lift and coast", "lift-and-coast", "lico", "clipping", "super clipping", "super-clipping", "energy recovery", "deployment")):
         scope = "energy"
     if "qualifying" in normalized or re.search(r"\bquali\b", normalized) or "pole lap" in normalized or "pole run" in normalized:
@@ -166,12 +171,24 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
     if re.search(r"\bradio\b", normalized) or "team radio" in normalized or "on the radio" in normalized:
         scope = "radio"
     if any(term in normalized for term in (
+        "track temperature", "track temp", "air temperature", "air temp",
+        "track condition", "temperature affect", "temperature effect",
+        "rainfall affect", "weather affect", "rain affect", "rain effect",
+        "temperature drop", "temperature change",
+    )):
+        scope = "weather_pace"
+    if any(term in normalized for term in (
         "corner profile", "braking point", "apex speed", "traction point",
         "gear at", "corner analysis", "corner comparison", "setup direction",
-        "corner heavy", "straight heavy", "degradation", "tyre wear", "tire wear",
-        "deg rate", "stint pace", "race pace",
+        "corner heavy", "straight heavy", "race pace",
     )):
         scope = "corner_analysis"
+    if any(term in normalized for term in (
+        "degradation", "tyre wear", "tire wear", "deg rate", "stint pace",
+        "tyre deg", "tire deg", "tyre management", "tire management",
+        "tyre performance", "tire performance",
+    )):
+        scope = "degradation"
     if any(phrase in normalized for phrase in (
         "standings", "championship", "who leads", "points table",
         "leaderboard", "points leader", "championship leader",
@@ -336,6 +353,12 @@ def _suggest_tool(entity_type: str | None, scope: str | None, session_type: str 
         return "get_team_radio"
     if scope == "energy":
         return "analyze_energy_management"
+    if scope == "pit_strategy":
+        return "get_pit_stop_analysis"
+    if scope == "weather_pace":
+        return "analyze_weather_pace_correlation"
+    if scope == "degradation" and entity_type == "driver":
+        return "analyze_stint_degradation"
     # Note: scope == "standings" is handled inline in _base_context because
     # it needs the raw normalized message to distinguish driver vs constructor.
     if entity_type == "driver":
@@ -357,6 +380,17 @@ def _suggest_tool(entity_type: str | None, scope: str | None, session_type: str 
 def _detect_analysis_mode(normalized: str, matched_drivers: list[dict], session_type: str | None, matched_team: str | None = None) -> tuple[str | None, str | None]:
     # Team performance mode (single team, no two-driver comparison)
     if matched_team and len(matched_drivers) < 2:
+        team_fit_terms = any(phrase in normalized for phrase in (
+            "suited", "suit", "fits", "fit", "car fit", "team fit",
+            "car characteristic", "car characteristics", "strength", "weakness", "strengths", "weaknesses",
+            "what tracks", "what circuits", "kind of tracks", "kind of circuits",
+            "high speed", "low speed", "slow speed", "stop and go",
+            "late braking", "late braker", "u line", "v line",
+            "downforce", "power circuit", "street circuit",
+        ))
+        if team_fit_terms:
+            return "team_circuit_fit", None
+
         team_perf_terms = any(phrase in normalized for phrase in (
             "team performance", "as a team", "team analysis", "setup direction",
             "corner heavy", "straight heavy", "which teammate", "teammate comparison",
