@@ -904,18 +904,27 @@ def get_driver_strategy(round_number: int, session_type: str, driver_code: str |
     }
 
 
-def get_driver_weekend_overview(round_number: int, driver_name: str) -> dict:
+def get_driver_weekend_overview(round_number: int, driver_name: str, session_type: str = "R") -> dict:
     """
     High-level weekend overview for a driver: quali, finish, teammate, strategy,
     nearby rivals, and SC/VSC impact when available.
     """
+    session_type = session_type.upper().strip()
+    is_sprint = session_type == "S"
+    race_session = "S" if is_sprint else "R"
+    quali_session = "SQ" if is_sprint else "Q"
+
     matched = _resolve_driver(driver_name)
     if matched is None:
         raise ValueError(f"Driver not found: {driver_name!r}. Try surname or 3-letter code.")
 
     code = matched["code"] or matched["driver_id"].upper()
-    qualifying = get_qualifying_results(round_number)
-    race = get_race_results(round_number)
+    if is_sprint:
+        qualifying = get_sprint_qualifying_results(round_number)
+        race = get_sprint_results(round_number)
+    else:
+        qualifying = get_qualifying_results(round_number)
+        race = get_race_results(round_number)
 
     quali_results = qualifying.get("results", [])
     race_results = race.get("results", [])
@@ -939,17 +948,17 @@ def get_driver_weekend_overview(round_number: int, driver_name: str) -> dict:
 
     strategy_summary = None
     try:
-        strategy = get_driver_strategy(round_number, 'R', code)
+        strategy = get_driver_strategy(round_number, race_session, code)
         strategy_summary = strategy["drivers"][0] if strategy.get("drivers") else None
     except Exception:
         strategy_summary = None
 
     safety_car_summary = None
     try:
-        sc = get_safety_car_periods(round_number, 'R')
+        sc = get_safety_car_periods(round_number, race_session)
         driver_number = None
         try:
-            session_results = get_session_results(round_number, 'R')
+            session_results = get_session_results(round_number, race_session)
             driver_meta = next((r for r in session_results.get("results", []) if r.get("abbreviation", "").upper() == code.upper()), None)
             driver_number = driver_meta.get("driver_number") if driver_meta else None
         except Exception:
@@ -1006,14 +1015,14 @@ def get_driver_weekend_overview(round_number: int, driver_name: str) -> dict:
         grid_position = driver_quali["position"]
     elif driver_race and driver_race.get("position") is not None:
         try:
-            session_results = get_session_results(round_number, 'R')
+            session_results = get_session_results(round_number, race_session)
             meta = next((r for r in session_results.get("results", []) if r.get("abbreviation", "").upper() == code.upper()), None)
             grid_position = meta.get("grid_position") if meta else None
         except Exception:
             grid_position = None
 
     energy_management = None
-    preferred_session = 'Q' if driver_quali else 'R'
+    preferred_session = quali_session if driver_quali else race_session
     try:
         energy_management = analyze_energy_management(round_number, preferred_session, code)
     except Exception:
@@ -1023,7 +1032,7 @@ def get_driver_weekend_overview(round_number: int, driver_name: str) -> dict:
     if driver_quali:
         try:
             from openf1 import get_team_radio
-            openf1_qualifying_radio = get_team_radio(round_number, 'Q', code, limit=6)
+            openf1_qualifying_radio = get_team_radio(round_number, quali_session, code, limit=6)
         except Exception:
             openf1_qualifying_radio = None
 
@@ -1038,12 +1047,12 @@ def get_driver_weekend_overview(round_number: int, driver_name: str) -> dict:
             openf1_race_intervals = None
         try:
             from openf1 import get_live_position_timeline
-            openf1_race_positions = get_live_position_timeline(round_number, 'R', code, limit=30)
+            openf1_race_positions = get_live_position_timeline(round_number, race_session, code, limit=30)
         except Exception:
             openf1_race_positions = None
         try:
             from openf1 import get_team_radio
-            openf1_race_radio = get_team_radio(round_number, 'R', code, limit=8)
+            openf1_race_radio = get_team_radio(round_number, race_session, code, limit=8)
         except Exception:
             openf1_race_radio = None
 
@@ -1055,9 +1064,9 @@ def get_driver_weekend_overview(round_number: int, driver_name: str) -> dict:
         "round": round_number,
         "qualifying": {
             "position": driver_quali.get("position") if driver_quali else None,
-            "q1": driver_quali.get("q1") if driver_quali else None,
-            "q2": driver_quali.get("q2") if driver_quali else None,
-            "q3": driver_quali.get("q3") if driver_quali else None,
+            "q1": driver_quali.get("sq1" if is_sprint else "q1") if driver_quali else None,
+            "q2": driver_quali.get("sq2" if is_sprint else "q2") if driver_quali else None,
+            "q3": driver_quali.get("sq3" if is_sprint else "q3") if driver_quali else None,
         },
         "race": {
             "grid_position": grid_position,
@@ -1095,20 +1104,23 @@ def get_driver_weekend_overview(round_number: int, driver_name: str) -> dict:
     }
 
 
-def get_driver_race_story(round_number: int, driver_name: str) -> dict:
+def get_driver_race_story(round_number: int, driver_name: str, session_type: str = "R") -> dict:
     """
     Narrative-ready race overview for one driver with key race events and contextual comparisons.
     """
-    overview = get_driver_weekend_overview(round_number, driver_name)
+    session_type = session_type.upper().strip()
+    race_session = "S" if session_type == "S" else "R"
+
+    overview = get_driver_weekend_overview(round_number, driver_name, session_type=session_type)
     code = overview["code"]
 
     race_control = None
     try:
-        session_results = get_session_results(round_number, 'R')
+        session_results = get_session_results(round_number, race_session)
         driver_meta = next((r for r in session_results.get("results", []) if r.get("abbreviation", "").upper() == code.upper()), None)
         driver_number = driver_meta.get("driver_number") if driver_meta else None
         category = driver_number if driver_number else code.upper()
-        race_control = get_race_control_messages(round_number, 'R', category=category, limit=20)
+        race_control = get_race_control_messages(round_number, race_session, category=category, limit=20)
     except Exception:
         race_control = None
 
@@ -1118,10 +1130,11 @@ def get_driver_race_story(round_number: int, driver_name: str) -> dict:
 
     if quali.get("position") is not None and race.get("finish_position") is not None:
         delta = quali["position"] - race["finish_position"]
+        session_label = "sprint qualifying" if session_type == "S" else "qualifying"
         if delta > 0:
-            summary_points.append(f"Gained {delta} place(s) from qualifying to the finish.")
+            summary_points.append(f"Gained {delta} place(s) from {session_label} to the finish.")
         elif delta < 0:
-            summary_points.append(f"Lost {abs(delta)} place(s) from qualifying to the finish.")
+            summary_points.append(f"Lost {abs(delta)} place(s) from {session_label} to the finish.")
         else:
             summary_points.append("Finished where they broadly started.")
 
@@ -1232,7 +1245,7 @@ def get_driver_race_story(round_number: int, driver_name: str) -> dict:
     # Field-wide strategy grid for undercut/overcut reasoning
     field_strategy = []
     try:
-        all_strat = get_driver_strategy(round_number, 'R')
+        all_strat = get_driver_strategy(round_number, race_session)
         for drv in all_strat.get("drivers", []):
             field_strategy.append({
                 "driver": drv.get("abbreviation", "").upper(),
@@ -1257,7 +1270,7 @@ def get_driver_race_story(round_number: int, driver_name: str) -> dict:
     # Full SC/VSC periods including strategic_crossings for SC strategy reasoning
     safety_car_full = None
     try:
-        safety_car_full = get_safety_car_periods(round_number, 'R')
+        safety_car_full = get_safety_car_periods(round_number, race_session)
     except Exception:
         safety_car_full = None
 

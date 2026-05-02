@@ -2323,3 +2323,57 @@ def test_analyze_qualifying_battle_accepts_sq_session_type():
         result = f1_data.analyze_qualifying_battle(5, "NOR", "PIA", session_type="SQ")
 
     assert result["session"] == "SQ"
+
+
+def test_get_driver_weekend_overview_uses_sprint_data_when_session_type_s():
+    import f1_data
+    from unittest.mock import patch
+
+    sprint_results = {
+        "race_name": "Chinese Grand Prix",
+        "session": "S",
+        "results": [{"position": 3, "driver": "Lando Norris", "code": "NOR",
+                     "team": "McLaren", "points": 6.0, "status": "Finished", "fastest_lap": False}],
+    }
+    sq_results = {
+        "race_name": "Chinese Grand Prix",
+        "session": "SQ",
+        "results": [{"position": 2, "driver": "Lando Norris", "code": "NOR",
+                     "team": "McLaren", "sq1": "1:32.1", "sq2": "1:31.8", "sq3": "1:31.5"}],
+    }
+    mock_driver = {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"}
+
+    with patch("f1_data._resolve_driver", return_value=mock_driver), \
+         patch("f1_data.get_sprint_results", return_value=sprint_results), \
+         patch("f1_data.get_sprint_qualifying_results", return_value=sq_results), \
+         patch("f1_data.get_driver_strategy", side_effect=Exception("no data")), \
+         patch("f1_data.get_safety_car_periods", side_effect=Exception("no data")), \
+         patch("f1_data.get_session_results", side_effect=Exception("no data")), \
+         patch("f1_data.analyze_energy_management", side_effect=Exception("no data")), \
+         patch("f1_data.get_drivers", return_value=[mock_driver]):
+        result = f1_data.get_driver_weekend_overview(5, "norris", session_type="S")
+
+    assert result["race"]["finish_position"] == 3
+    assert result["qualifying"]["position"] == 2
+
+
+def test_get_driver_race_story_passes_session_type_to_overview():
+    import f1_data
+    from unittest.mock import patch, MagicMock
+
+    mock_overview = {
+        "driver": "Lando Norris", "code": "NOR", "team": "McLaren",
+        "event": "Chinese Grand Prix", "round": 5,
+        "qualifying": {"position": 2}, "race": {"finish_position": 3, "points": 6.0, "status": "Finished", "fastest_lap": False},
+        "pit_stops": [], "strategy": None, "safety_car_impact": None, "teammate": {},
+        "nearby_rivals": [], "openf1": {}, "energy_management": None,
+    }
+
+    with patch("f1_data.get_driver_weekend_overview", return_value=mock_overview) as mock_overview_fn, \
+         patch("f1_data.get_session_results", side_effect=Exception("no data")), \
+         patch("f1_data.get_race_control_messages", side_effect=Exception("no data")), \
+         patch("f1_data.get_driver_strategy", side_effect=Exception("no data")), \
+         patch("f1_data.get_safety_car_periods", side_effect=Exception("no data")):
+        f1_data.get_driver_race_story(5, "norris", session_type="S")
+
+    mock_overview_fn.assert_called_once_with(5, "norris", session_type="S")
