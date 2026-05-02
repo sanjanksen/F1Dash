@@ -776,6 +776,103 @@ def test_telemetry_battle_does_not_classify_full_throttle_delta_as_traction():
     assert any(cause["cause_type"] == "traction" and cause["distance_m"] == 900 for cause in result["top_causes"])
 
 
+def test_telemetry_location_context_places_traction_after_previous_corner():
+    corners = [
+        {"number": 1, "distance_m": 300},
+        {"number": 2, "distance_m": 650},
+    ]
+
+    with patch("f1_data.get_circuit_corners", return_value=corners):
+        result = f1_data._telemetry_location_context(1, 520, "traction")
+
+    assert result["label"] == "Exit of Turn 1"
+    assert result["plain"] == "on the run out of Turn 1"
+    assert result["phase"] == "corner_exit"
+    assert result["corner"] == "Turn 1"
+    assert result["next_corner"] == {"number": 2, "distance_m": 650}
+    assert result["distance_m"] == 520
+
+
+def test_telemetry_location_context_places_braking_before_next_corner():
+    corners = [
+        {"number": 10, "distance_m": 3000},
+        {"number": 11, "distance_m": 3280},
+    ]
+
+    with patch("f1_data.get_circuit_corners", return_value=corners):
+        result = f1_data._telemetry_location_context(1, 3200, "braking")
+
+    assert result["label"] == "Braking zone into Turn 11"
+    assert result["plain"] == "in the braking zone into Turn 11"
+    assert result["phase"] == "braking_zone"
+    assert result["corner"] == "Turn 11"
+
+
+def test_telemetry_location_context_places_minimum_speed_near_corner():
+    corners = [
+        {"number": 10, "distance_m": 3000},
+        {"number": 11, "distance_m": 3220},
+        {"number": 12, "distance_m": 3500},
+    ]
+
+    with patch("f1_data.get_circuit_corners", return_value=corners):
+        result = f1_data._telemetry_location_context(1, 3200, "minimum_speed")
+
+    assert result["label"] == "Mid-corner at Turn 11"
+    assert result["plain"] == "through Turn 11"
+    assert result["phase"] == "mid_corner"
+
+
+def test_telemetry_location_context_places_straight_between_corners():
+    corners = [
+        {"number": 13, "distance_m": 3600},
+        {"number": 14, "distance_m": 4100},
+    ]
+
+    with patch("f1_data.get_circuit_corners", return_value=corners):
+        result = f1_data._telemetry_location_context(1, 3800, "straight_line_speed")
+
+    assert result["label"] == "Straight between Turn 13 and Turn 14"
+    assert result["plain"] == "on the straight between Turn 13 and Turn 14"
+    assert result["phase"] == "straight"
+
+
+def test_telemetry_location_context_wraps_lap_between_final_and_first_corner():
+    corners = [
+        {"number": 1, "distance_m": 250},
+        {"number": 19, "distance_m": 5200},
+    ]
+
+    with patch("f1_data.get_circuit_corners", return_value=corners):
+        result = f1_data._telemetry_location_context(1, 5350, "straight_line_speed")
+
+    assert result["label"] == "Straight between Turn 19 and Turn 1"
+    assert result["plain"] == "on the straight between Turn 19 and Turn 1"
+    assert result["previous_corner"] == {"number": 19, "distance_m": 5200}
+    assert result["next_corner"] == {"number": 1, "distance_m": 250}
+
+
+def test_telemetry_location_context_falls_back_when_corner_data_missing():
+    with patch("f1_data.get_circuit_corners", side_effect=ValueError("no corners")):
+        result = f1_data._telemetry_location_context(1, 500, "traction")
+
+    assert result["label"] == "Early in the lap"
+    assert result["plain"] == "early in the lap"
+    assert result["phase"] == "lap_region"
+
+
+def test_telemetry_location_context_falls_back_for_non_finite_distance():
+    with patch("f1_data.get_circuit_corners") as mock_corners:
+        result = f1_data._telemetry_location_context(1, float("nan"), "traction")
+
+    assert result["phase"] == "lap_region"
+    assert result["label"] == "Key part of the lap"
+    assert result["plain"] == "in a key part of the lap"
+    assert result["previous_corner"] is None
+    assert result["next_corner"] is None
+    mock_corners.assert_not_called()
+
+
 def test_comparative_fade_requires_late_clip_window():
     samples = [
         {
@@ -857,6 +954,16 @@ def test_analyze_qualifying_battle_derives_causal_summary():
             }
         }
     }
+    location_context = {
+        "label": "Exit of Turn 1",
+        "plain": "on the run out of Turn 1",
+        "technical": "corner exit from Turn 1",
+        "phase": "corner_exit",
+        "distance_m": 1400,
+        "corner": "Turn 1",
+        "previous_corner": {"number": 1, "label": None, "distance_m": 300},
+        "next_corner": {"number": 2, "label": None, "distance_m": 650},
+    }
 
     lec_lap = _make_mock_fastest_lap("LEC", "Ferrari", lap_time_s=89.303, s1=31.778, s2=39.855, s3=17.670, speed_i1=284.0, speed_i2=326.0, speed_st=283.0)
     nor_lap = _make_mock_fastest_lap("NOR", lap_time_s=89.409, s1=32.049, s2=39.716, s3=17.644, speed_i1=272.0, speed_i2=320.0, speed_st=281.0)
@@ -878,6 +985,7 @@ def test_analyze_qualifying_battle_derives_causal_summary():
     with patch('f1_data._load_session', return_value=mock_session), \
          patch('f1_data.get_telemetry_comparison', return_value=telemetry), \
          patch('f1_data.analyze_energy_management', return_value=energy), \
+         patch('f1_data._telemetry_location_context', return_value=location_context), \
          patch('f1_data.get_circuit_corners', return_value=[{"number": 1, "label": None, "distance_m": 1500}]):
         result = f1_data.analyze_qualifying_battle(3, 'LEC', 'NOR')
 
@@ -889,7 +997,16 @@ def test_analyze_qualifying_battle_derives_causal_summary():
     assert result["energy_relevant"] is True
     assert "2026 rules" in result["energy_context_explanation"]
     assert result["telemetry_summary"]["top_causes"][0]["distance_m"] == 1400
+    assert result["cause_explanations"][0]["location_context"]["label"] == "Exit of Turn 1"
+    assert "1400m" not in result["cause_explanations"][0]["explanation"]
+    assert "on the run out of Turn 1" in result["cause_explanations"][0]["explanation"]
+    assert "1400m" not in result["cause_explanation"]
+    assert "on the run out of Turn 1" in result["cause_explanation"]
     assert "12.0 kph" in result["zone_summary"]
+    assert "1400m" not in result["zone_summary"]
+    assert "Exit of Turn 1" in result["zone_summary"]
+    assert "1400m" not in result["strongest_evidence"][2]
+    assert "on the run out of Turn 1" in result["strongest_evidence"][2]
     assert result["track_map"] == [
         {"distance_m": 300, "x": 0.0, "y": 0.0},
         {"distance_m": 1400, "x": 100.0, "y": 60.0},
@@ -2441,3 +2558,62 @@ def test_get_race_report_uses_sprint_data_when_session_type_s():
 
     assert result["session"] == "S"
     assert result["podium"][0]["driver"] == "Oscar Piastri"
+
+
+# ---------------------------------------------------------------------------
+# _compute_longitudinal_g tests
+# ---------------------------------------------------------------------------
+
+def _make_tel_df(speeds_kph, times_s=None):
+    """Helper: build a minimal telemetry DataFrame with Speed and Time."""
+    import pandas as pd
+    import numpy as np
+    n = len(speeds_kph)
+    if times_s is None:
+        times_s = np.arange(n, dtype=float) * 0.1  # 100ms intervals
+    return pd.DataFrame({
+        'Speed': speeds_kph,
+        'Time': pd.to_timedelta(times_s, unit='s'),
+        'X': np.zeros(n),
+        'Y': np.zeros(n),
+        'Distance': np.arange(n, dtype=float),
+    })
+
+
+def test_compute_longitudinal_g_output_shape():
+    import numpy as np
+    speeds = np.ones(100) * 200.0
+    tel = _make_tel_df(speeds)
+    result = f1_data._compute_longitudinal_g(tel)
+    assert result.shape == (100,)
+
+
+def test_compute_longitudinal_g_braking_is_negative():
+    import numpy as np
+    # Linearly decelerating from 200 to 100 kph over 1 second
+    speeds = np.linspace(200.0, 100.0, 50)
+    times_s = np.linspace(0.0, 1.0, 50)
+    tel = _make_tel_df(speeds, times_s)
+    result = f1_data._compute_longitudinal_g(tel)
+    # Most samples should be negative (braking)
+    assert np.mean(result) < -0.5
+
+
+def test_compute_longitudinal_g_acceleration_is_positive():
+    import numpy as np
+    # Linearly accelerating from 100 to 200 kph over 1 second
+    speeds = np.linspace(100.0, 200.0, 50)
+    times_s = np.linspace(0.0, 1.0, 50)
+    tel = _make_tel_df(speeds, times_s)
+    result = f1_data._compute_longitudinal_g(tel)
+    assert np.mean(result) > 0.5
+
+
+def test_compute_longitudinal_g_missing_time_returns_zeros():
+    import numpy as np
+    import pandas as pd
+    # DataFrame with no Time column
+    tel = pd.DataFrame({'Speed': np.ones(50) * 150.0})
+    result = f1_data._compute_longitudinal_g(tel)
+    assert np.all(result == 0.0)
+    assert result.shape == (50,)

@@ -3,6 +3,7 @@ import os
 import logging
 import threading
 import numbers
+import math
 import fastf1
 import requests
 import pandas as pd
@@ -1042,7 +1043,7 @@ def get_driver_weekend_overview(round_number: int, driver_name: str, session_typ
     if driver_race:
         try:
             from openf1 import get_intervals
-            openf1_race_intervals = get_intervals(round_number, code, limit=20)
+            openf1_race_intervals = get_intervals(round_number, code, limit=20, session_type=race_session)
         except Exception:
             openf1_race_intervals = None
         try:
@@ -1424,7 +1425,7 @@ def get_race_report(round_number: int, session_type: str = "R") -> dict:
             code = row.get("code")
             if not code:
                 continue
-            interval_payload = get_intervals(round_number, code, limit=20)
+            interval_payload = get_intervals(round_number, code, limit=20, session_type=race_session)
             summary = _summarize_openf1_intervals(interval_payload.get("intervals") or [])
             if summary:
                 openf1_intervals[code.upper()] = summary
@@ -2331,6 +2332,127 @@ def _nearest_corner_label(round_number: int, distance_m: int | None) -> str | No
     return label
 
 
+def _corner_label(corner: dict | None) -> str | None:
+    if not corner:
+        return None
+    label = f"Turn {corner['number']}"
+    if corner.get("label"):
+        label += corner["label"]
+    return label
+
+
+def _is_finite_distance(distance_m: int | float | None) -> bool:
+    try:
+        return distance_m is not None and math.isfinite(distance_m)
+    except TypeError:
+        return False
+
+
+def _lap_region(distance_m: int | float | None) -> tuple[str, str]:
+    if not _is_finite_distance(distance_m):
+        return "Key part of the lap", "in a key part of the lap"
+    if distance_m is None or distance_m < 1000:
+        return "Early in the lap", "early in the lap"
+    if distance_m < 3500:
+        return "Middle of the lap", "in the middle of the lap"
+    return "Late in the lap", "late in the lap"
+
+
+def _base_location_context(distance_m: int | float | None) -> dict:
+    label, plain = _lap_region(distance_m)
+    return {
+        "label": label,
+        "plain": plain,
+        "technical": plain,
+        "phase": "lap_region",
+        "distance_m": distance_m,
+        "corner": None,
+        "previous_corner": None,
+        "next_corner": None,
+    }
+
+
+def _telemetry_location_context(round_number: int, distance_m: int | float | None, cause_type: str | None) -> dict:
+    base = _base_location_context(distance_m)
+    if not _is_finite_distance(distance_m):
+        return base
+
+    try:
+        corners = get_circuit_corners(round_number)
+    except Exception:
+        return base
+
+    valid_corners = sorted(
+        [corner for corner in corners if corner.get("distance_m") is not None],
+        key=lambda corner: corner["distance_m"],
+    )
+    if not valid_corners:
+        return base
+
+    previous_corner = None
+    next_corner = None
+    for corner in valid_corners:
+        if corner["distance_m"] <= distance_m:
+            previous_corner = corner
+        if next_corner is None and corner["distance_m"] >= distance_m:
+            next_corner = corner
+    if previous_corner is None:
+        previous_corner = valid_corners[-1]
+    if next_corner is None:
+        next_corner = valid_corners[0]
+
+    nearest_corner = min(valid_corners, key=lambda corner: abs(corner["distance_m"] - distance_m))
+    previous_label = _corner_label(previous_corner)
+    next_label = _corner_label(next_corner)
+    nearest_label = _corner_label(nearest_corner)
+    cause = cause_type or ""
+
+    context = {
+        **base,
+        "previous_corner": previous_corner,
+        "next_corner": next_corner,
+    }
+
+    if cause == "braking":
+        plain = f"in the braking zone into {next_label}"
+        context.update({
+            "label": f"Braking zone into {next_label}",
+            "plain": plain,
+            "technical": plain,
+            "phase": "braking_zone",
+            "corner": next_label,
+        })
+    elif cause == "minimum_speed":
+        plain = f"through {nearest_label}"
+        context.update({
+            "label": f"Mid-corner at {nearest_label}",
+            "plain": plain,
+            "technical": plain,
+            "phase": "mid_corner",
+            "corner": nearest_label,
+        })
+    elif cause == "traction":
+        plain = f"on the run out of {previous_label}"
+        context.update({
+            "label": f"Exit of {previous_label}",
+            "plain": plain,
+            "technical": plain,
+            "phase": "corner_exit",
+            "corner": previous_label,
+        })
+    elif cause in ("straight_line_speed", "straight_line_speed_energy_limited"):
+        plain = f"on the straight between {previous_label} and {next_label}"
+        context.update({
+            "label": f"Straight between {previous_label} and {next_label}",
+            "plain": plain,
+            "technical": plain,
+            "phase": "straight",
+            "corner": None,
+        })
+
+    return context
+
+
 def _get_comparable_qualifying_laps(round_number: int, driver_codes: list[str], session_type: str = "Q"):
     session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=True)
     try:
@@ -2714,8 +2836,22 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
     # driving style and setup divergence actually show up.
     earlier_braker = driver_b_code if faster_driver == driver_a_code else driver_a_code
 
-    def _cause_explanation(ct: str, dist: int | None) -> str:
-        loc = f" around {dist}m" if dist is not None else ""
+    def _specific_location_plain(location_context: dict | None) -> str | None:
+        if not location_context or location_context.get("phase") == "lap_region":
+            return None
+        return location_context.get("plain")
+
+    def _specific_location_label(location_context: dict | None) -> str | None:
+        if not location_context or location_context.get("phase") == "lap_region":
+            return None
+        return location_context.get("label")
+
+    def _location_phrase(dist: int | None, location_context: dict | None = None) -> str:
+        readable_location = _specific_location_plain(location_context)
+        return f" {readable_location}" if readable_location else (f" around {dist}m" if dist is not None else "")
+
+    def _cause_explanation(ct: str, dist: int | None, location_context: dict | None = None) -> str:
+        loc = _location_phrase(dist, location_context)
         if ct == "straight_line_speed":
             if is_teammate_comparison:
                 return (
@@ -2809,11 +2945,25 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
     primary_cause = top_causes[0] if top_causes else None
     decisive_distance = primary_cause["distance_m"] if primary_cause else None
     cause_type = primary_cause["cause_type"] if primary_cause else "mixed"
-    cause_explanation = _cause_explanation(cause_type, primary_cause["distance_m"] if primary_cause else None)
+    primary_location_context = (
+        _telemetry_location_context(round_number, primary_cause["distance_m"], primary_cause["cause_type"])
+        if primary_cause else None
+    )
+    cause_explanation = _cause_explanation(
+        cause_type,
+        primary_cause["distance_m"] if primary_cause else None,
+        primary_location_context,
+    )
 
     # Build multi-cause explanation list (up to 3 mechanisms with their telemetry evidence)
-    cause_explanations = [
-        {
+    cause_explanations = []
+    for i, tc in enumerate(top_causes):
+        location_context = (
+            primary_location_context
+            if i == 0 and primary_location_context is not None
+            else _telemetry_location_context(round_number, tc["distance_m"], tc["cause_type"])
+        )
+        cause_explanations.append({
             "cause_type": tc["cause_type"],
             "rank": i + 1,
             "distance_m": tc["distance_m"],
@@ -2821,10 +2971,9 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
             "gear_a": tc.get("gear_a"),
             "gear_b": tc.get("gear_b"),
             "sector": _sector_for_distance(tc["distance_m"]),
-            "explanation": _cause_explanation(tc["cause_type"], tc["distance_m"]),
-        }
-        for i, tc in enumerate(top_causes)
-    ]
+            "location_context": location_context,
+            "explanation": _cause_explanation(tc["cause_type"], tc["distance_m"], location_context),
+        })
 
     decisive_corner = _nearest_corner_label(round_number, decisive_distance)
 
@@ -2837,7 +2986,8 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
         prefix = "Primary" if i == 0 else ("Secondary" if i == 1 else "Tertiary")
         strongest_evidence.append(
             f"{prefix} mechanism — {tc['cause_type']}: "
-            f"{abs(tc['delta_speed_kph']):.1f} kph speed separation around {tc['distance_m']}m."
+            f"{abs(tc['delta_speed_kph']):.1f} kph speed separation"
+            f"{_location_phrase(tc.get('distance_m'), cause_explanations[i]['location_context'] if i < len(cause_explanations) else None)}."
         )
     if energy_reason:
         strongest_evidence.append(energy_reason)
@@ -2852,14 +3002,23 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
             location_bits.append(primary_sector.replace("sector", "Sector "))
         elif decisive_sector:
             location_bits.append(decisive_sector)
-        if decisive_corner:
+        primary_location_label = _specific_location_label(primary_location_context)
+        primary_location_plain = _specific_location_plain(primary_location_context)
+        if primary_location_label:
+            location_bits.append(primary_location_label)
+        elif decisive_corner:
             location_bits.append(f"near {decisive_corner}")
         elif decisive_distance is not None:
             location_bits.append(f"around {decisive_distance}m")
+        advantage_location = (
+            f" {primary_location_plain}"
+            if primary_location_plain
+            else (f" at roughly {primary_cause['distance_m']}m" if primary_cause.get("distance_m") is not None else "")
+        )
         zone_summary = (
             f"{' '.join(location_bits) if location_bits else 'Key zone'}: "
             f"{faster_driver} has a {abs(primary_cause['delta_speed_kph']):.1f} kph speed advantage "
-            f"at roughly {primary_cause['distance_m']}m."
+            f"{advantage_location}."
         )
         strongest_evidence.append(zone_summary)
 
@@ -4899,6 +5058,37 @@ def _compute_lateral_g(tel: pd.DataFrame) -> np.ndarray:
         lat_g = lat_g_raw
 
     return np.clip(lat_g, 0.0, 6.0)
+
+
+def _compute_longitudinal_g(tel: pd.DataFrame) -> np.ndarray:
+    """
+    Derive longitudinal G from Speed channel: long_G = (dv/dt) / 9.81.
+    Positive = accelerating, negative = braking.
+    Falls back to zeros if Time column is missing.
+    """
+    n = len(tel)
+    if 'Time' not in tel.columns or 'Speed' not in tel.columns or n < 3:
+        return np.zeros(n)
+
+    v_mps = tel['Speed'].to_numpy(dtype=float) / 3.6
+    t_s = tel['Time'].dt.total_seconds().to_numpy(dtype=float)
+
+    if not np.all(np.diff(t_s) >= 0):
+        t_s = np.sort(t_s)
+
+    long_g_raw = np.gradient(v_mps, t_s) / 9.81
+    long_g_raw = np.clip(long_g_raw, -6.0, 4.0)
+
+    wl = min(15, n if n % 2 == 1 else n - 1)
+    wl = max(wl, 5)
+    if wl % 2 == 0:
+        wl -= 1
+    if n >= wl:
+        long_g = savgol_filter(long_g_raw, window_length=wl, polyorder=2)
+    else:
+        long_g = long_g_raw
+
+    return np.clip(long_g, -6.0, 4.0)
 
 
 def _theoretical_max_g(speed_kph: np.ndarray) -> np.ndarray:
