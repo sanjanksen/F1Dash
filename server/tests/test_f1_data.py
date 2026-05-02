@@ -2277,3 +2277,49 @@ def test_get_sprint_qualifying_results_returns_expected_shape():
     assert result["results"][0]["code"] == "PIA"
     assert result["results"][0]["position"] == 1
     assert result["results"][0]["sq1"] is not None
+
+
+def test_analyze_qualifying_battle_accepts_sq_session_type():
+    import f1_data
+    from unittest.mock import patch, MagicMock
+    import pandas as pd
+
+    mock_session = MagicMock()
+    mock_session.event = {"EventName": "Chinese Grand Prix"}
+
+    def make_lap(time_s, s1, s2, s3):
+        lap = MagicMock()
+        lap.__getitem__ = lambda self, key: {
+            "LapTime": pd.Timedelta(seconds=time_s),
+            "Sector1Time": pd.Timedelta(seconds=s1),
+            "Sector2Time": pd.Timedelta(seconds=s2),
+            "Sector3Time": pd.Timedelta(seconds=s3),
+            "LapNumber": 3,
+            "SpeedI1": 240.0,
+            "SpeedI2": 230.0,
+            "SpeedFL": 220.0,
+            "SpeedST": 310.0,
+        }.get(key, MagicMock())
+        lap.get = lambda key, default=None: {
+            "LapTime": pd.Timedelta(seconds=time_s),
+            "Sector1Time": pd.Timedelta(seconds=s1),
+            "Sector2Time": pd.Timedelta(seconds=s2),
+            "Sector3Time": pd.Timedelta(seconds=s3),
+            "LapNumber": 3,
+            "SpeedI1": 240.0,
+            "SpeedI2": 230.0,
+            "SpeedFL": 220.0,
+            "SpeedST": 310.0,
+        }.get(key, default)
+        return lap
+
+    chosen_laps = {"NOR": make_lap(90.0, 29.0, 31.0, 30.0), "PIA": make_lap(90.3, 29.2, 31.1, 30.0)}
+
+    with patch("f1_data._get_comparable_qualifying_laps", return_value=(mock_session, "SQ2", chosen_laps)), \
+         patch("f1_data.get_telemetry_comparison", side_effect=Exception("no telemetry")), \
+         patch("f1_data.analyze_energy_management", side_effect=Exception("no energy")), \
+         patch("f1_data._resolve_driver", return_value={"team": "McLaren"}), \
+         patch("f1_data.get_circuit_corners", side_effect=Exception("no corners")):
+        result = f1_data.analyze_qualifying_battle(5, "NOR", "PIA", session_type="SQ")
+
+    assert result["session"] == "SQ"

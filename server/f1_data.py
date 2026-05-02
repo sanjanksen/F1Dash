@@ -2300,10 +2300,24 @@ def _nearest_corner_label(round_number: int, distance_m: int | None) -> str | No
     return label
 
 
-def _get_comparable_qualifying_laps(round_number: int, driver_codes: list[str]):
-    session = _load_session(round_number, 'Q', laps=True, telemetry=False, weather=False, messages=True)
-    split = session.laps.split_qualifying_sessions()
-    segments = [("Q3", split[2]), ("Q2", split[1]), ("Q1", split[0])]
+def _get_comparable_qualifying_laps(round_number: int, driver_codes: list[str], session_type: str = "Q"):
+    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=True)
+    try:
+        split = session.laps.split_qualifying_sessions()
+        segments = [("Q3", split[2]), ("Q2", split[1]), ("Q1", split[0])]
+    except Exception:
+        # SQ/SS sessions may not support split_qualifying_sessions; use all laps
+        all_laps = session.laps
+        chosen = {}
+        for code in driver_codes:
+            laps = _pick_driver(all_laps, code.upper())
+            if laps.empty:
+                raise ValueError(f"No laps for {code} in {session_type} session.")
+            fastest = _pick_fastest_lap(laps)
+            if pd.isna(fastest.get("LapTime")):
+                raise ValueError(f"No valid timed lap for {code} in {session_type} session.")
+            chosen[code.upper()] = fastest
+        return session, session_type, chosen
 
     def _fastest_valid_lap(segment_laps, code: str):
         driver_laps = _pick_driver(segment_laps, code.upper())
@@ -2535,12 +2549,12 @@ def _summarize_openf1_intervals(intervals: list[dict]) -> dict | None:
     }
 
 
-def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -> dict:
+def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, session_type: str = "Q") -> dict:
     """
     Backend-derived causal summary for a qualifying battle.
     Explains where the time was gained and the most likely mechanism.
     """
-    session, compared_segment, chosen_laps = _get_comparable_qualifying_laps(round_number, [driver_a, driver_b])
+    session, compared_segment, chosen_laps = _get_comparable_qualifying_laps(round_number, [driver_a, driver_b], session_type)
     lap_a = chosen_laps[driver_a.upper()]
     lap_b = chosen_laps[driver_b.upper()]
 
@@ -2556,7 +2570,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
 
     sector = {
         "event": session.event['EventName'],
-        "session": "Q",
+        "session": session_type.upper(),
         "compared_segment": compared_segment,
         "driver_a": driver_a.upper(),
         "driver_b": driver_b.upper(),
@@ -2599,7 +2613,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
     try:
         telemetry = get_telemetry_comparison(
             round_number,
-            'Q',
+            session_type,
             driver_a,
             driver_b,
             lap_number_a=sector["lap_number_a"],
@@ -2610,7 +2624,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
     try:
         energy = analyze_energy_management(
             round_number,
-            'Q',
+            session_type,
             driver_a,
             driver_b,
             lap_number_a=sector["lap_number_a"],
@@ -2840,7 +2854,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str) -
 
     return {
         "event": sector.get("event"),
-        "session": "Q",
+        "session": session_type.upper(),
         "driver_a": driver_a_code,
         "driver_b": driver_b_code,
         "faster_driver": faster_driver,
