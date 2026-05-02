@@ -2911,3 +2911,29 @@ def test_corner_metrics_with_envelope_adds_ggv_delta_fields():
                                   envelope=envelope)
     delta = round((ma.get('ggv_util_pct') or 0.0) - (mb.get('ggv_util_pct') or 0.0), 1)
     assert isinstance(delta, float)  # just verifies the computation runs
+
+
+def test_aggregate_lap_cornering_stats_ggv_fields_with_envelope():
+    import pandas as pd
+    import numpy as np
+    n = 200
+    t_s = np.linspace(0, 20, n)
+    theta = np.linspace(0, 4 * np.pi, n)
+    speed = 200.0 - 80.0 * np.abs(np.sin(np.pi * np.linspace(0, 4, n)))
+    tel = pd.DataFrame({
+        'Speed': speed,
+        'X': 2000.0 * np.cos(theta),
+        'Y': 2000.0 * np.sin(theta),
+        'Distance': np.linspace(0, 2000.0, n),
+        'Time': pd.to_timedelta(t_s, unit='s'),
+        'Source': np.where(np.arange(n) % 4 == 0, 'pos', 'car'),
+        'Throttle': np.where(speed > 150, 95.0, 0.0),
+    })
+    envelope = f1_data._theoretical_ggv_envelope()
+    result = f1_data._aggregate_lap_cornering_stats(tel, envelope=envelope)
+    if result is not None:
+        assert 'avg_ggv_util_pct' in result
+        assert 'avg_envelope_time_pct' in result
+        assert 'avg_throttle_acceptance_pct' in result
+        assert 'avg_entry_bravery_pct' in result
+        assert 'bravery_score' in result

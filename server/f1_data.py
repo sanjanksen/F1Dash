@@ -5677,7 +5677,7 @@ def analyze_cornering_loads(round_number: int, session_type: str,
     }
 
 
-def _aggregate_lap_cornering_stats(tel: pd.DataFrame) -> dict | None:
+def _aggregate_lap_cornering_stats(tel: pd.DataFrame, envelope: dict | None = None) -> dict | None:
     """
     Compute aggregate cornering stats for a single lap's telemetry.
     All metrics are computed only within detected cornering segments (lat_G > 0.8G).
@@ -5692,6 +5692,7 @@ def _aggregate_lap_cornering_stats(tel: pd.DataFrame) -> dict | None:
         spd = tel['Speed'].to_numpy(dtype=float)
         lat_g = _compute_lateral_g(tel)
         long_g = _compute_longitudinal_g(tel)
+        throttle = tel['Throttle'].to_numpy(dtype=float) if 'Throttle' in tel.columns else None
         corners = _detect_corners(lat_g, dist)
         if not corners:
             return None
@@ -5702,9 +5703,14 @@ def _aggregate_lap_cornering_stats(tel: pd.DataFrame) -> dict | None:
         corner_fullness_samples = []
         corner_corrections = []
         corner_variances = []
+        corner_ggv_util = []
+        corner_env_time = []
+        corner_throttle_acc = []
+        corner_entry_bravery = []
 
         for c_start, c_end in corners:
-            metrics = _corner_metrics(lat_g, long_g, spd, dist, c_start, c_end)
+            metrics = _corner_metrics(lat_g, long_g, spd, dist, c_start, c_end,
+                                      envelope=envelope, throttle=throttle)
             seg_g = lat_g[c_start:c_end + 1]
             seg_v = spd[c_start:c_end + 1]
             seg_gmax = _theoretical_max_g(seg_v)
@@ -5715,6 +5721,10 @@ def _aggregate_lap_cornering_stats(tel: pd.DataFrame) -> dict | None:
             corner_fullness_samples.append(metrics['circle_fullness_pct'])
             corner_corrections.append(metrics['correction_count'])
             corner_variances.append(float(np.std(seg_g)))
+            corner_ggv_util.append(metrics.get('ggv_util_pct') or 0.0)
+            corner_env_time.append(metrics.get('envelope_time_pct') or 0.0)
+            corner_throttle_acc.append(metrics.get('throttle_acceptance_pct') or 0.0)
+            corner_entry_bravery.append(metrics.get('entry_bravery_pct') or 0.0)
 
         if not corner_util_samples:
             return None
@@ -5729,6 +5739,15 @@ def _aggregate_lap_cornering_stats(tel: pd.DataFrame) -> dict | None:
             "avg_combined_util_pct": round(float(np.mean(corner_combined_util_samples)), 1),
             "avg_trail_brake_pct": round(float(np.mean(corner_trail_brake_samples)), 1),
             "avg_circle_fullness_pct": round(float(np.mean(corner_fullness_samples)), 1),
+            "avg_ggv_util_pct": round(float(np.mean(corner_ggv_util)), 1) if corner_ggv_util else None,
+            "avg_envelope_time_pct": round(float(np.mean(corner_env_time)), 1) if corner_env_time else None,
+            "avg_throttle_acceptance_pct": round(float(np.mean(corner_throttle_acc)), 1) if corner_throttle_acc else None,
+            "avg_entry_bravery_pct": round(float(np.mean(corner_entry_bravery)), 1) if corner_entry_bravery else None,
+            "bravery_score": _bravery_score(
+                float(np.mean(corner_env_time)) if corner_env_time else None,
+                float(np.mean(corner_throttle_acc)) if corner_throttle_acc else None,
+                float(np.mean(corner_entry_bravery)) if corner_entry_bravery else None,
+            ),
         }
     except Exception:
         return None
@@ -5783,12 +5802,28 @@ def analyze_race_cornering_profile(
     clean_a = _get_clean_laps(code_a)
     clean_b = _get_clean_laps(code_b)
 
-    def _process_driver(clean_laps) -> list[dict]:
-        results = []
+    # Pass 1: collect telemetry frames for both drivers to build the shared GGV envelope.
+    def _collect_lap_tels(clean_laps):
+        result = []
         for _, lap in clean_laps.iterrows():
             try:
                 tel = lap.get_telemetry().add_distance()
-                stats = _aggregate_lap_cornering_stats(tel)
+                if len(tel) >= 50:
+                    result.append((lap, tel))
+            except Exception:
+                continue
+        return result
+
+    lap_tels_a = _collect_lap_tels(clean_a)
+    lap_tels_b = _collect_lap_tels(clean_b)
+    envelope = _build_ggv_envelope([t for _, t in lap_tels_a + lap_tels_b])
+
+    # Pass 2: compute per-lap stats with the shared envelope.
+    def _process_lap_tels(lap_tels) -> list[dict]:
+        results = []
+        for lap, tel in lap_tels:
+            try:
+                stats = _aggregate_lap_cornering_stats(tel, envelope=envelope)
                 if stats is None:
                     continue
                 stats['lap_number'] = int(lap['LapNumber'])
@@ -5799,8 +5834,8 @@ def analyze_race_cornering_profile(
                 continue
         return results
 
-    laps_a = _process_driver(clean_a)
-    laps_b = _process_driver(clean_b)
+    laps_a = _process_lap_tels(lap_tels_a)
+    laps_b = _process_lap_tels(lap_tels_b)
 
     def _aggregate(laps_data: list[dict]) -> dict:
         if not laps_data:
@@ -5814,6 +5849,11 @@ def analyze_race_cornering_profile(
             "avg_combined_util_pct": round(float(np.mean([l.get("avg_combined_util_pct", 0.0) for l in laps_data])), 1),
             "avg_trail_brake_pct": round(float(np.mean([l.get("avg_trail_brake_pct", 0.0) for l in laps_data])), 1),
             "avg_circle_fullness_pct": round(float(np.mean([l.get("avg_circle_fullness_pct", 0.0) for l in laps_data])), 1),
+            "avg_ggv_util_pct": round(float(np.mean([l.get("avg_ggv_util_pct") or 0.0 for l in laps_data])), 1),
+            "avg_envelope_time_pct": round(float(np.mean([l.get("avg_envelope_time_pct") or 0.0 for l in laps_data])), 1),
+            "avg_throttle_acceptance_pct": round(float(np.mean([l.get("avg_throttle_acceptance_pct") or 0.0 for l in laps_data])), 1),
+            "avg_entry_bravery_pct": round(float(np.mean([l.get("avg_entry_bravery_pct") or 0.0 for l in laps_data])), 1),
+            "bravery_score": round(float(np.mean([l.get("bravery_score") or 0.0 for l in laps_data])), 1),
         }
 
     def _aggregate_by_stint(laps_data: list[dict]) -> list[dict]:
@@ -5949,6 +5989,30 @@ def analyze_race_cornering_profile(
             f"{higher_tb} was the trail braker of the two — still on the brakes at turn-in "
             f"for {max(tb_a, tb_b):.1f}% of corner entry across the race vs {min(tb_a, tb_b):.1f}% for {lower_tb}. "
             f"Over a full race distance that front-tyre load difference adds up."
+        )
+
+    # --- GGV utilisation race-long ---
+    ggv_race_a = overall_a.get("avg_ggv_util_pct", 0.0)
+    ggv_race_b = overall_b.get("avg_ggv_util_pct", 0.0)
+    if ggv_race_a and ggv_race_b and abs(ggv_race_a - ggv_race_b) >= 2.0:
+        higher_ggv_r = code_a if ggv_race_a >= ggv_race_b else code_b
+        lower_ggv_r = code_b if higher_ggv_r == code_a else code_a
+        narrative_parts.append(
+            f"Against the empirical grip ceiling, {higher_ggv_r} used {max(ggv_race_a, ggv_race_b):.1f}% "
+            f"of the envelope vs {lower_ggv_r}'s {min(ggv_race_a, ggv_race_b):.1f}% over the race. "
+            f"That's the fraction of the car's demonstrated combined capability being asked of the tyres, lap after lap."
+        )
+
+    # --- Throttle acceptance race-long ---
+    ta_race_a = overall_a.get("avg_throttle_acceptance_pct", 0.0)
+    ta_race_b = overall_b.get("avg_throttle_acceptance_pct", 0.0)
+    if abs(ta_race_a - ta_race_b) >= 5.0:
+        braver_exit_r = code_a if ta_race_a >= ta_race_b else code_b
+        cautious_exit_r = code_b if braver_exit_r == code_a else code_a
+        narrative_parts.append(
+            f"{braver_exit_r} was getting on the power earlier at every exit — still loaded laterally in "
+            f"{max(ta_race_a, ta_race_b):.1f}% of exits vs {min(ta_race_a, ta_race_b):.1f}% for {cautious_exit_r}. "
+            f"Over a race distance, that exit aggression compounds — more drive out of every corner, every lap."
         )
 
     return {
