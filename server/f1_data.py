@@ -1298,10 +1298,14 @@ def get_driver_race_story(round_number: int, driver_name: str, session_type: str
     }
 
 
-def get_team_weekend_overview(round_number: int, team_name: str) -> dict:
+def get_team_weekend_overview(round_number: int, team_name: str, session_type: str = "R") -> dict:
     """
     High-level weekend overview for a team across both drivers.
     """
+    session_type = session_type.upper().strip()
+    is_sprint = session_type == "S"
+    race_session = "S" if is_sprint else "R"
+
     resolved_team = _resolve_team(team_name)
     if resolved_team is None:
         raise ValueError(f"Team not found: {team_name!r}. Try the current constructor name.")
@@ -1310,8 +1314,12 @@ def get_team_weekend_overview(round_number: int, team_name: str) -> dict:
     if not team_drivers:
         raise ValueError(f"No current-season drivers found for team {resolved_team!r}.")
 
-    qualifying = get_qualifying_results(round_number)
-    race = get_race_results(round_number)
+    if is_sprint:
+        qualifying = get_sprint_qualifying_results(round_number)
+        race = get_sprint_results(round_number)
+    else:
+        qualifying = get_qualifying_results(round_number)
+        race = get_race_results(round_number)
     quali_results = qualifying.get("results", [])
     race_results = race.get("results", [])
 
@@ -1323,7 +1331,7 @@ def get_team_weekend_overview(round_number: int, team_name: str) -> dict:
 
         strategy = None
         try:
-            strat = get_driver_strategy(round_number, 'R', code)
+            strat = get_driver_strategy(round_number, race_session, code)
             strategy = strat["drivers"][0] if strat.get("drivers") else None
         except Exception:
             strategy = None
@@ -1388,18 +1396,26 @@ def get_team_weekend_overview(round_number: int, team_name: str) -> dict:
     }
 
 
-def get_race_report(round_number: int) -> dict:
+def get_race_report(round_number: int, session_type: str = "R") -> dict:
     """
     Whole-race recap independent of driver/team.
     """
-    qualifying = get_qualifying_results(round_number)
-    race = get_race_results(round_number)
+    session_type = session_type.upper().strip()
+    is_sprint = session_type == "S"
+    race_session = session_type
+
+    if is_sprint:
+        qualifying = get_sprint_qualifying_results(round_number)
+        race = get_sprint_results(round_number)
+    else:
+        qualifying = get_qualifying_results(round_number)
+        race = get_race_results(round_number)
     results = race.get("results", [])
     quali_results = qualifying.get("results", [])
     openf1_intervals = {}
     safety_car = None
     try:
-        safety_car = get_safety_car_periods(round_number, 'R')
+        safety_car = get_safety_car_periods(round_number, race_session)
     except Exception:
         safety_car = None
     try:
@@ -1480,32 +1496,34 @@ def get_race_report(round_number: int) -> dict:
                 f"Neutralisations: {safety_car.get('sc_count', 0)} SC and {safety_car.get('vsc_count', 0)} VSC period(s)."
             )
 
-    # Field-wide strategy grid for undercut/overcut/SC reasoning
+    # Field-wide strategy grid for undercut/overcut/SC reasoning (not applicable for sprints)
     field_strategy = []
-    try:
-        all_strat = get_driver_strategy(round_number, 'R')
-        for drv in all_strat.get("drivers", []):
-            field_strategy.append({
-                "driver": drv.get("abbreviation", "").upper(),
-                "finish_position": drv.get("finish_position"),
-                "grid_position": drv.get("grid_position"),
-                "pit_stop_count": drv.get("pit_stop_count"),
-                "stints": [
-                    {
-                        "compound": s.get("compound"),
-                        "start_lap": s.get("start_lap"),
-                        "end_lap": s.get("end_lap"),
-                        "laps": s.get("laps"),
-                        "tyre_life_start": s.get("tyre_life_start"),
-                    }
-                    for s in drv.get("stints", [])
-                ],
-            })
-        field_strategy.sort(key=lambda d: d.get("finish_position") or 999)
-    except Exception:
-        field_strategy = []
+    if not is_sprint:
+        try:
+            all_strat = get_driver_strategy(round_number, race_session)
+            for drv in all_strat.get("drivers", []):
+                field_strategy.append({
+                    "driver": drv.get("abbreviation", "").upper(),
+                    "finish_position": drv.get("finish_position"),
+                    "grid_position": drv.get("grid_position"),
+                    "pit_stop_count": drv.get("pit_stop_count"),
+                    "stints": [
+                        {
+                            "compound": s.get("compound"),
+                            "start_lap": s.get("start_lap"),
+                            "end_lap": s.get("end_lap"),
+                            "laps": s.get("laps"),
+                            "tyre_life_start": s.get("tyre_life_start"),
+                        }
+                        for s in drv.get("stints", [])
+                    ],
+                })
+            field_strategy.sort(key=lambda d: d.get("finish_position") or 999)
+        except Exception:
+            field_strategy = []
 
     return {
+        "session": session_type,
         "event": race.get("race_name") or qualifying.get("race_name"),
         "round": round_number,
         "circuit": race.get("circuit"),

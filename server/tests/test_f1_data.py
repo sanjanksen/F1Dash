@@ -2378,3 +2378,66 @@ def test_get_driver_race_story_passes_session_type_to_overview():
         f1_data.get_driver_race_story(5, "norris", session_type="S")
 
     mock_overview_fn.assert_called_once_with(5, "norris", session_type="S")
+
+
+def test_get_team_weekend_overview_uses_sprint_data_when_session_type_s():
+    import f1_data
+    from unittest.mock import patch
+
+    sprint_results = {
+        "race_name": "Chinese Grand Prix",
+        "session": "S",
+        "results": [
+            {"position": 1, "driver": "Lando Norris", "code": "NOR", "team": "McLaren", "points": 8.0, "status": "Finished", "fastest_lap": False},
+            {"position": 3, "driver": "Oscar Piastri", "code": "PIA", "team": "McLaren", "points": 6.0, "status": "Finished", "fastest_lap": False},
+        ],
+    }
+    sq_results = {
+        "race_name": "Chinese Grand Prix",
+        "session": "SQ",
+        "results": [
+            {"position": 1, "driver": "Lando Norris", "code": "NOR", "team": "McLaren"},
+            {"position": 2, "driver": "Oscar Piastri", "code": "PIA", "team": "McLaren"},
+        ],
+    }
+    drivers = [
+        {"full_name": "Lando Norris", "code": "NOR", "team": "McLaren", "driver_id": "norris"},
+        {"full_name": "Oscar Piastri", "code": "PIA", "team": "McLaren", "driver_id": "piastri"},
+    ]
+
+    with patch("f1_data._resolve_team", return_value="McLaren"), \
+         patch("f1_data.get_drivers", return_value=drivers), \
+         patch("f1_data.get_sprint_results", return_value=sprint_results), \
+         patch("f1_data.get_sprint_qualifying_results", return_value=sq_results), \
+         patch("f1_data.get_driver_strategy", side_effect=Exception("no data")):
+        result = f1_data.get_team_weekend_overview(5, "McLaren", session_type="S")
+
+    assert result["team"] == "McLaren"
+    assert any(d["code"] == "NOR" and d["finish_position"] == 1 for d in result["drivers"])
+
+
+def test_get_race_report_uses_sprint_data_when_session_type_s():
+    import f1_data
+    from unittest.mock import patch
+
+    sprint_results = {
+        "race_name": "Chinese Grand Prix",
+        "session": "S",
+        "results": [
+            {"position": 1, "driver": "Oscar Piastri", "code": "PIA", "team": "McLaren", "points": 8.0, "status": "Finished", "fastest_lap": True},
+            {"position": 2, "driver": "Lando Norris", "code": "NOR", "team": "McLaren", "points": 7.0, "status": "Finished", "fastest_lap": False},
+        ],
+    }
+    sq_results = {"race_name": "Chinese Grand Prix", "session": "SQ", "results": [
+        {"position": 1, "driver": "Oscar Piastri", "code": "PIA", "team": "McLaren"},
+        {"position": 2, "driver": "Lando Norris", "code": "NOR", "team": "McLaren"},
+    ]}
+
+    with patch("f1_data.get_sprint_results", return_value=sprint_results), \
+         patch("f1_data.get_sprint_qualifying_results", return_value=sq_results), \
+         patch("f1_data.get_safety_car_periods", side_effect=Exception("no data")), \
+         patch("f1_data.get_driver_strategy", side_effect=Exception("no data")):
+        result = f1_data.get_race_report(5, session_type="S")
+
+    assert result["session"] == "S"
+    assert result["podium"][0]["driver"] == "Oscar Piastri"
