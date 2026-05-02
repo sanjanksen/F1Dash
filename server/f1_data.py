@@ -5414,7 +5414,7 @@ def analyze_cornering_loads(round_number: int, session_type: str,
     # --- Combined grip commitment (lat + long vector) ---
     comb_a = sum_a.get("avg_combined_util_pct") or 0.0
     comb_b = sum_b.get("avg_combined_util_pct") or 0.0
-    if comb_a and comb_b and abs(comb_a - comb_b) >= 1.0:
+    if abs(comb_a - comb_b) >= 1.0:
         higher_comb = code_a if comb_a >= comb_b else code_b
         lower_comb = code_b if higher_comb == code_a else code_a
         narrative_parts.append(
