@@ -16,6 +16,7 @@ client/dist/
 # IDE
 .vscode/
 .idea/
+.worktrees/
 
 # Root-level stale Vite scaffold (superseded by client/)
 /index.html
