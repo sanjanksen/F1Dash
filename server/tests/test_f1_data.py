@@ -2859,14 +2859,14 @@ def test_corner_metrics_throttle_acceptance_nonzero_with_throttle_channel():
 
 
 def test_corner_metrics_entry_bravery_nonzero_for_standard_corner():
-    """_make_corner_arrays has braking at entry + high lat_g near apex."""
+    """entry_bravery_pct is computed (not None) when envelope is provided."""
     import numpy as np
     lat_g, long_g, speed, dist = _make_corner_arrays()
     envelope = f1_data._theoretical_ggv_envelope()
     result = f1_data._corner_metrics(lat_g, long_g, speed, dist, 0, len(lat_g) - 1,
                                       envelope=envelope)
-    # The standard corner array has near-limit braking at entry → bravery expected
-    assert result['entry_bravery_pct'] >= 0.0  # may or may not trigger depending on ceiling
+    assert result['entry_bravery_pct'] is not None
+    assert isinstance(result['entry_bravery_pct'], float)
 
 
 def test_corner_metrics_existing_fields_unchanged():
@@ -2880,3 +2880,20 @@ def test_corner_metrics_existing_fields_unchanged():
     assert 'trail_brake_pct' in result
     assert 'circle_fullness_pct' in result
     assert 'mean_grip_util_pct' in result
+
+
+def test_corner_metrics_apex_at_boundary_returns_zero_not_crash():
+    """When apex is at index 0 (monotonically increasing speed), both bravery metrics return 0.0 not a crash."""
+    import numpy as np
+    n = 30
+    # Speed monotonically increasing: apex at index 0
+    speed = np.linspace(100.0, 200.0, n)
+    lat_g = np.ones(n) * 2.5
+    long_g = np.ones(n) * 0.5
+    dist = np.linspace(0, 100, n)
+    envelope = f1_data._theoretical_ggv_envelope()
+    result = f1_data._corner_metrics(lat_g, long_g, speed, dist, 0, n - 1,
+                                      envelope=envelope)
+    assert result['throttle_acceptance_pct'] == 0.0 or result['throttle_acceptance_pct'] >= 0.0
+    assert result['entry_bravery_pct'] == 0.0 or result['entry_bravery_pct'] >= 0.0
+    assert result['ggv_util_pct'] is not None

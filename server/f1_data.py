@@ -5260,7 +5260,7 @@ def _corner_metrics(lat_g: np.ndarray, long_g: np.ndarray, speed_kph: np.ndarray
         envelope_time_pct = round(float(np.mean(ggv_util >= 0.85) * 100), 1)
 
         # Throttle acceptance: exit phase (apex→end), full throttle + lateral load > 60% ceiling
-        exit_s = max(apex_idx_local, 0)
+        exit_s = max(apex_idx_local, 1)  # at least 1 so entry always has ≥1 sample
         exit_lat = seg_g[exit_s:]
         exit_lat_ceil = safe_lat[exit_s:]
         lat_loaded = (exit_lat / exit_lat_ceil) > 0.60
@@ -5270,14 +5270,14 @@ def _corner_metrics(lat_g: np.ndarray, long_g: np.ndarray, speed_kph: np.ndarray
         else:
             full_throttle = seg_lg[exit_s:] > 0.3  # proxy: net positive acceleration
         ta_mask = full_throttle & lat_loaded
-        throttle_acceptance_pct = round(float(np.mean(ta_mask) * 100), 1) if len(ta_mask) > 0 else 0.0
+        throttle_acceptance_pct = round(float(np.mean(ta_mask) * 100), 1) if len(ta_mask) >= 2 else 0.0
 
         # Entry bravery: entry phase (start→apex), ggv_util >= 0.80 AND still braking
-        entry_end_idx = max(apex_idx_local, 1)
+        entry_end_idx = min(max(apex_idx_local, 1), len(seg_g) - 1)
         entry_ggv = ggv_util[:entry_end_idx]
         entry_long = seg_lg[:entry_end_idx]
         brave_mask = (entry_ggv >= 0.80) & (entry_long < -0.3)
-        entry_bravery_pct = round(float(np.mean(brave_mask) * 100), 1) if len(brave_mask) > 0 else 0.0
+        entry_bravery_pct = round(float(np.mean(brave_mask) * 100), 1) if len(brave_mask) >= 2 else 0.0
     else:
         ggv_util_pct = None
         envelope_time_pct = None
