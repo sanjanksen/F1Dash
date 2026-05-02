@@ -2200,3 +2200,80 @@ def test_speed_trap_leaderboard_peak_per_trap_independent():
     fl = result['speed_fl']
     assert fl[0]['driver'] == 'AAA'
     assert fl[0]['speed_kph'] == pytest.approx(295.0)
+
+
+# ─── Sprint results tests ────────────────────────────────────
+
+def test_get_sprint_results_returns_expected_shape():
+    import f1_data
+    from unittest.mock import patch, MagicMock
+    payload = {
+        "MRData": {
+            "RaceTable": {
+                "Races": [{
+                    "raceName": "Chinese Grand Prix",
+                    "Circuit": {"circuitName": "Shanghai International Circuit"},
+                    "date": "2025-03-22",
+                    "SprintResults": [{
+                        "position": "1",
+                        "Driver": {"givenName": "Oscar", "familyName": "Piastri", "code": "PIA"},
+                        "Constructor": {"name": "McLaren"},
+                        "points": "8",
+                        "status": "Finished",
+                    }],
+                }]
+            }
+        }
+    }
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = payload
+    mock_resp.raise_for_status.return_value = None
+    with patch('f1_data.requests.get', return_value=mock_resp):
+        result = f1_data.get_sprint_results(5)
+    assert result["session"] == "S"
+    assert result["results"][0]["code"] == "PIA"
+    assert result["results"][0]["position"] == 1
+    assert result["results"][0]["points"] == 8.0
+
+
+def test_get_sprint_results_empty_when_no_races():
+    import f1_data
+    from unittest.mock import patch, MagicMock
+    payload = {"MRData": {"RaceTable": {"Races": []}}}
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = payload
+    mock_resp.raise_for_status.return_value = None
+    with patch('f1_data.requests.get', return_value=mock_resp):
+        result = f1_data.get_sprint_results(5)
+    assert result == {}
+
+
+def test_get_sprint_qualifying_results_returns_expected_shape():
+    import f1_data
+    from unittest.mock import patch, MagicMock
+    import pandas as pd
+
+    mock_session = MagicMock()
+    mock_session.event = {"EventName": "Chinese Grand Prix"}
+    mock_session.date = pd.Timestamp("2025-03-22")
+
+    mock_row = {
+        "Position": 1,
+        "FullName": "Oscar Piastri",
+        "FirstName": "Oscar",
+        "LastName": "Piastri",
+        "Abbreviation": "PIA",
+        "TeamName": "McLaren",
+        "Q1": pd.Timedelta(seconds=93.5),
+        "Q2": pd.Timedelta(seconds=92.8),
+        "Q3": pd.Timedelta(seconds=92.1),
+    }
+
+    with patch("f1_data._load_session", return_value=mock_session), \
+         patch("f1_data._session_results_rows", return_value=[mock_row]):
+        result = f1_data.get_sprint_qualifying_results(5)
+
+    assert result["session"] == "SQ"
+    assert result["results"][0]["code"] == "PIA"
+    assert result["results"][0]["position"] == 1
+    assert result["results"][0]["sq1"] is not None

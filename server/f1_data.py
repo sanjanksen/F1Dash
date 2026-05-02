@@ -595,6 +595,65 @@ def get_qualifying_results(round_number: int) -> dict:
     }
 
 
+def get_sprint_results(round_number: int) -> dict:
+    """Return the full finishing order for a sprint race."""
+    resp = requests.get(
+        f"{JOLPICA_BASE}/{CURRENT_YEAR}/{round_number}/sprint.json?limit=30",
+        timeout=15,
+    )
+    resp.raise_for_status()
+    races = resp.json()["MRData"]["RaceTable"]["Races"]
+    if not races:
+        return {}
+    race = races[0]
+    return {
+        "race_name": race["raceName"],
+        "circuit": race["Circuit"]["circuitName"],
+        "date": race.get("date", ""),
+        "session": "S",
+        "results": [
+            {
+                "position": int(r["position"]) if r["position"].isdigit() else None,
+                "driver": f"{r['Driver']['givenName']} {r['Driver']['familyName']}",
+                "code": r["Driver"].get("code", ""),
+                "team": r["Constructor"]["name"],
+                "points": float(r.get("points", 0)),
+                "fastest_lap": r.get("FastestLap", {}).get("rank") == "1",
+                "status": r.get("status", ""),
+            }
+            for r in race.get("SprintResults", [])
+        ],
+    }
+
+
+def get_sprint_qualifying_results(round_number: int) -> dict:
+    """Return sprint qualifying/shootout classification via FastF1."""
+    try:
+        session = _load_session(round_number, "SQ", laps=True, telemetry=False, weather=False, messages=False)
+    except Exception as exc:
+        raise ValueError(f"Sprint qualifying data unavailable for round {round_number}: {exc}") from exc
+    rows = _session_results_rows(session)
+    return {
+        "race_name": session.event.get("EventName", f"Round {round_number}"),
+        "date": str(session.date.date()) if session.date is not None else "",
+        "session": "SQ",
+        "results": [
+            {
+                "position": _normalize_position(row.get("Position")),
+                "driver": row.get("FullName") or " ".join(
+                    part for part in [row.get("FirstName"), row.get("LastName")] if part
+                ).strip(),
+                "code": row.get("Abbreviation", ""),
+                "team": row.get("TeamName", ""),
+                "sq1": _fmt_td(row.get("Q1")) if row.get("Q1") is not None else None,
+                "sq2": _fmt_td(row.get("Q2")) if row.get("Q2") is not None else None,
+                "sq3": _fmt_td(row.get("Q3")) if row.get("Q3") is not None else None,
+            }
+            for row in rows
+        ],
+    }
+
+
 def get_session_results(round_number: int, session_type: str) -> dict:
     """
     Rich session classification from FastF1 results metadata.
