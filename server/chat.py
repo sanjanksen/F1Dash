@@ -800,6 +800,32 @@ When evidence contains results from `analyze_cornering_loads` or `analyze_race_c
   Low (<30%): *has a comfort margin mid-corner*, *eases off at the apex*, *keeps something in reserve*, *the middle of the corner is where the time gets left*
   Never say "circle fullness" in your answer.
 
+- **avg_ggv_util_pct** → How much of the car's ACTUAL demonstrated grip envelope the driver used — normalised against what this car on these tyres produced in this session, not a formula. Directional (braking limit ≠ lateral limit ≠ throttle limit — a proper friction ellipse).
+  High (>85%): *asking everything of the car*, *at the absolute edge of what the hardware can produce*, *using the car's full capability*, *no headroom left*
+  Medium (65–85%): *strong commitment, the car is working hard*, *well into the performance window*
+  Low (<60%): *keeping something in reserve*, *the envelope isn't fully used*
+  Never say "GGV utilisation" or "ggv_util_pct" in the answer. Say: "he was asking [X]% of what the car has shown it can produce."
+
+- **avg_envelope_time_pct** → % of cornering time within 15% of the car's empirical combined limit. Higher = the driver sustains near-limit operation throughout the corner, not just peaking at the apex.
+  High (>55%): *living at the limit from entry to exit*, *barely eases off*, *the tyre is working hard through every phase*, *no coasting*
+  Low (<30%): *has a comfort margin through the middle*, *eases off at the apex*, *the limit is touched briefly but not held*
+  Never say "envelope time" in the answer.
+
+- **avg_throttle_acceptance_pct / throttle_acceptance_pct** → The bravery metric. % of corner exits where the driver commits to full power WHILE the car still has significant lateral load. Asks the rear tyre to generate drive force and cornering force simultaneously.
+  High (>40%): *brave on the exit*, *power down early while the car's still loaded*, *committing to the throttle before the car is straight*, *trusting the rear to hook up under load*, *the exit is where he's brave*
+  Low (<15%): *waits for the car to settle*, *conservative on exit*, *throttle only once fully straight*, *leaving exit speed on the table*
+  Never say "throttle acceptance" in the answer. Say: "he was on the power before the car was straight" or "committing to the throttle while the rear was still working".
+
+- **avg_entry_bravery_pct / entry_bravery_pct** → % of corner entries where the driver is simultaneously near the combined grip limit AND still on the brakes — braking deep while already deeply loaded laterally.
+  High (>35%): *brave on the entry too*, *braking deep into a loaded corner*, *trail-braking at the limit*, *the brake pedal is a rotation tool at the very edge of grip*
+  Low (<10%): *entry is the conservative part of their lap*, *braking finished before the load builds*
+  Never say "entry bravery" in the answer.
+
+- **bravery_score** → Composite 0–100. Weights: throttle acceptance 40%, envelope time 35%, entry bravery 25%. A driver who is brave at exit, consistent at the limit throughout, and deep on the brakes at entry scores high.
+  High (>60): *the braver driver on this lap*, *committed in every phase*, *no safety margins*
+  Low (<30): *the more measured driver*, *keeps something in reserve across the board*
+  Never say "bravery score" in the answer. Describe what it means in terms of the specific phases where the driver is or isn't brave.
+
 **Inferences you can draw from combined signals:**
 - High util + low variance = *confident, committed, clean* — extracting maximum lap time, tyre being loaded efficiently
 - High util + high variance = *committed but fighting it* — fast single lap but burning the tyre, the rear or front is edgy
@@ -811,6 +837,10 @@ When evidence contains results from `analyze_cornering_loads` or `analyze_race_c
 - High combined_util + low trail_brake = *apex commitment* — finishes braking before turn-in but carries huge mid-corner speed. The load is clean but the tyre is working hard through the middle.
 - Low combined_util + high trail_brake = *defensive rotation* — using trail brake to rotate without fully committing combined load. Protective entry style.
 - High circle_fullness + low load_variance = *smooth limit driver* — operating near the total grip ceiling throughout the corner without fighting it. The ideal.
+- High throttle_acceptance + low trail_brake = *exit specialist* — brave when getting on the power, but doesn't use the brake to rotate. The exit is the aggressive phase.
+- High trail_brake + high entry_bravery = *entry specialist* — braving the corner on the way in, loading entry with the brake at the limit. The entry is the weapon.
+- High ggv_util + high bravery_score = *complete driver* — using the car's capability in every phase. The hardest style on hardware but the fastest single-lap approach.
+- High envelope_time + low load_variance = *smooth limit driver* — sustaining near-limit operation throughout without fighting it. The ideal race style.
 
 **Core vocabulary list to use naturally:**
 oversteer, understeer, snap oversteer, trailing the rear, the rear's loose, the front's not biting, pushing wide, washes wide, fighting the car, chasing the rear, chasing the balance, committed, on the limit, no margin, natural rotation, rotating the car, one clean arc, smooth progressive arc, the car does what he asks, leaning on the front, trusting the rubber, tyre confidence, living on the edge, pointed car, planted rear, front-end bite, carrying it in, pointy setup, the car's a handful, the rear gets snappy
@@ -820,7 +850,7 @@ oversteer, understeer, snap oversteer, trailing the rear, the rear's loose, the 
 - Use oversteer/understeer naturally — these are the words F1 fans understand.
 - Qualifying: more commitment + cleaner inputs = more single-lap time. Race: high commitment + high variance = *the confidence level drops as the stint ages — the tyre can't keep holding that level of demand*.
 - Never say "lateral load variance" or "grip utilisation percentage" in the answer. Use the vocabulary above instead.
-- Never say "combined grip utilisation", "combined util", "trail brake percentage", "avg_trail_brake_pct", "circle fullness", or "avg_circle_fullness_pct" in the answer. Translate every metric to the character vocabulary above.
+- Never say "combined grip utilisation", "combined util", "trail brake percentage", "avg_trail_brake_pct", "circle fullness", "avg_circle_fullness_pct", "GGV utilisation", "ggv_util_pct", "envelope time", "avg_envelope_time_pct", "throttle acceptance", "avg_throttle_acceptance_pct", "entry bravery", "avg_entry_bravery_pct", or "bravery score" in the answer. Translate every metric to the character vocabulary above.
 
 ## Race Strategy Reasoning
 
