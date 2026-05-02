@@ -544,3 +544,27 @@ def test_suggest_tool_sprint_race_no_entity():
     from resolver import _suggest_tool
     result = _suggest_tool(None, "race_report", "S")
     assert result == "get_race_report"
+
+
+def test_detect_session_scope_sprint_qualifying_gives_sq():
+    from resolver import _detect_session_scope
+    session_type, scope = _detect_session_scope("sprint qualifying at miami")
+    assert session_type == "SQ", f"expected SQ, got {session_type}"
+
+
+def test_detect_session_scope_sprint_shootout_gives_sq():
+    from resolver import _detect_session_scope
+    session_type, _ = _detect_session_scope("recap the sprint shootout")
+    assert session_type == "SQ"
+
+
+def test_detect_session_scope_plain_qualifying_still_gives_q():
+    from resolver import _detect_session_scope
+    session_type, scope = _detect_session_scope("how did norris do in qualifying")
+    assert session_type == "Q"
+
+
+def test_detect_session_scope_sprint_race_gives_s():
+    from resolver import _detect_session_scope
+    session_type, _ = _detect_session_scope("how did piastri do in the sprint")
+    assert session_type == "S"

@@ -147,6 +147,8 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
     fp_number = _detect_fp_number(normalized)
     if fp_number is not None:
         session_type = f"FP{fp_number}"
+    elif "sprint qualifying" in normalized or "sprint shootout" in normalized:
+        session_type = "SQ"
     elif (
         "qualifying" in normalized
         or re.search(r"\bq\d\b", normalized)
@@ -155,8 +157,6 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
         or "pole run" in normalized
     ):
         session_type = "Q"
-    elif "sprint qualifying" in normalized or "sprint shootout" in normalized:
-        session_type = "SQ"
     elif re.search(r"\bsprint\b", normalized):
         session_type = "S"
     elif "race" in normalized or "grand prix" in normalized:
