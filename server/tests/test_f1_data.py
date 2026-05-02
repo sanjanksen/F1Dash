@@ -2931,9 +2931,9 @@ def test_aggregate_lap_cornering_stats_ggv_fields_with_envelope():
     })
     envelope = f1_data._theoretical_ggv_envelope()
     result = f1_data._aggregate_lap_cornering_stats(tel, envelope=envelope)
-    if result is not None:
-        assert 'avg_ggv_util_pct' in result
-        assert 'avg_envelope_time_pct' in result
-        assert 'avg_throttle_acceptance_pct' in result
-        assert 'avg_entry_bravery_pct' in result
-        assert 'bravery_score' in result
+    assert result is not None, "Expected corners to be detected in synthetic data"
+    assert 'avg_ggv_util_pct' in result
+    assert 'avg_envelope_time_pct' in result
+    assert 'avg_throttle_acceptance_pct' in result
+    assert 'avg_entry_bravery_pct' in result
+    assert 'bravery_score' in result

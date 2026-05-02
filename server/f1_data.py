@@ -5994,7 +5994,7 @@ def analyze_race_cornering_profile(
     # --- GGV utilisation race-long ---
     ggv_race_a = overall_a.get("avg_ggv_util_pct", 0.0)
     ggv_race_b = overall_b.get("avg_ggv_util_pct", 0.0)
-    if ggv_race_a and ggv_race_b and abs(ggv_race_a - ggv_race_b) >= 2.0:
+    if overall_a.get("laps_analyzed", 0) > 0 and overall_b.get("laps_analyzed", 0) > 0 and abs(ggv_race_a - ggv_race_b) >= 2.0:
         higher_ggv_r = code_a if ggv_race_a >= ggv_race_b else code_b
         lower_ggv_r = code_b if higher_ggv_r == code_a else code_a
         narrative_parts.append(
@@ -6036,8 +6036,6 @@ def analyze_race_cornering_profile(
             "Absolute values carry ±5-10% uncertainty; comparative rankings are reliable."
         ),
     }
-
-    return result
 
 
 def _openf1_pit_fetch(round_number: int) -> dict:
