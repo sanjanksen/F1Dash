@@ -501,10 +501,13 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
         "DEEP ANALYSIS PRIMITIVE. Compute lateral G and grip utilisation for two drivers across all corners of their fastest laps, "
         "using curvature derived from X/Y position telemetry. Returns per-corner stats (peak G, apex G, load variance, "
         "steering correction count, % time above 90% theoretical grip) plus an overall summary and a human-readable narrative. "
-        "Also returns: combined grip utilisation % (lat+long vector vs theoretical max), "
-        "trail brake % at corner entry (% of entry where braking and cornering overlap), "
-        "circle fullness % (% of cornering time near the combined grip ceiling). "
-        "Use this for qualifying / single-lap grip style comparisons.",
+        "Also returns GGV-based metrics derived from the session's empirical grip envelope (not a theoretical formula): "
+        "ggv_util_pct (% of the car's demonstrated grip ellipse used, combining lat + long), "
+        "envelope_time_pct (% of cornering time within 15% of the empirical limit), "
+        "throttle_acceptance_pct (% of corner exits where full throttle is applied while still laterally loaded — the bravery metric), "
+        "entry_bravery_pct (% of entries near the combined limit while still braking), "
+        "bravery_score (composite 0–100). "
+        "Use this for qualifying / single-lap grip style and bravery comparisons.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
             "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
@@ -521,7 +524,10 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
         "Processes every clean race lap (pit laps excluded) and returns overall summary stats plus a per-stint breakdown. "
         "Use this when asked about race-long grip usage, tyre stress, or who pushes harder through corners over a full race distance. "
         "Returns: avg corner grip utilisation %, % cornering time above 90% grip, corrections per corner, load variance per stint, "
-        "combined grip utilisation % (lat+long vector), trail brake % at corner entry, circle fullness % per stint and overall.",
+        "combined grip utilisation % (lat+long vector), trail brake % at corner entry, "
+        "GGV-based metrics: ggv_util_pct (empirical envelope utilisation), envelope_time_pct, "
+        "throttle_acceptance_pct (exit bravery — full power under lateral load), "
+        "entry_bravery_pct, bravery_score (0–100 composite) per stint and overall.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
             "driver_a": {"type": "string", "description": "First driver's 3-letter code."},
