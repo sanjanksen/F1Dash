@@ -2306,6 +2306,8 @@ def _get_comparable_qualifying_laps(round_number: int, driver_codes: list[str], 
         split = session.laps.split_qualifying_sessions()
         segments = [("Q3", split[2]), ("Q2", split[1]), ("Q1", split[0])]
     except Exception:
+        if session_type.upper() == "Q":
+            raise  # real data error for regular qualifying
         # SQ/SS sessions may not support split_qualifying_sessions; use all laps
         all_laps = session.laps
         chosen = {}
