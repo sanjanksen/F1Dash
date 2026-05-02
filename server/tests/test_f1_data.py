@@ -2619,6 +2619,46 @@ def test_compute_longitudinal_g_missing_time_returns_zeros():
     assert result.shape == (50,)
 
 
+def test_compute_lateral_g_unit_conversion():
+    """Verify lat_G is in the physically realistic range — not 10x too low due to GPS unit mismatch."""
+    import numpy as np
+    import pandas as pd
+
+    # Circular arc: R=100m, v=150kph → expected lat_G = v²/(R*g) = (41.67)²/(100*9.81) ≈ 1.77G
+    R_m = 100.0
+    v_kph = 150.0
+    v_mps = v_kph / 3.6
+    expected_lat_g = v_mps**2 / (R_m * 9.81)  # ≈ 1.77G
+
+    n = 80
+    theta = np.linspace(0, np.pi / 2, n)  # quarter circle
+    arc_len_m = R_m * theta  # arc length in meters
+
+    # FastF1 GPS units are decimeters (0.1m), so coordinates are 10x meters
+    x_dm = R_m * 10 * np.cos(theta)   # decimeters
+    y_dm = R_m * 10 * np.sin(theta)   # decimeters
+
+    tel = pd.DataFrame({
+        'X': x_dm,
+        'Y': y_dm,
+        'Distance': arc_len_m,
+        'Speed': np.full(n, v_kph),
+        'Source': np.full(n, 'pos'),
+    })
+
+    result = f1_data._compute_lateral_g(tel)
+
+    # Allow ±60% tolerance (SG smoothing and edge effects at low sample count)
+    mid = slice(10, n - 10)
+    assert result[mid].max() > expected_lat_g * 0.4, (
+        f"lat_G too low: max={result[mid].max():.2f}G, expected≈{expected_lat_g:.2f}G"
+    )
+    # Should not be 10x the expected value (which would indicate inverse bug)
+    assert result[mid].max() < expected_lat_g * 10, (
+        f"lat_G suspiciously high: max={result[mid].max():.2f}G"
+    )
+
+
 def _make_corner_arrays(n=60):
     """
     Synthetic corner: speed dips from 200→100→200 kph (apex at midpoint),

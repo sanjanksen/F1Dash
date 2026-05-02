@@ -4999,24 +4999,27 @@ def _compute_lateral_g(tel: pd.DataFrame) -> np.ndarray:
     Derive lateral G from X/Y position: κ = |x'y'' - y'x''| / (x'²+y'²)^1.5 parameterised by distance.
     lat_G = v² * κ / 9.81.
 
-    FastF1 interpolates GPS position (2-4 Hz) linearly to car-data rate (~240 Hz).
-    Second derivatives of linear interpolation are zero, producing near-zero curvature.
-    Fix: extract only the samples where the GPS position actually moved, compute curvature
-    there at native resolution, then interpolate back to the full telemetry distance array.
+    FastF1 X/Y coordinates are in units of 0.1m (decimeters). They must be converted to
+    meters before computing curvature (otherwise κ is 10x too small and lat_G 10x too low).
+    FastF1 linearly interpolates GPS (≈4 Hz) to the merged telemetry rate. Use Source=='pos'
+    to select only actual GPS samples; the pos_step filter passes interpolated rows too.
     """
     s_full = tel['Distance'].to_numpy(dtype=float)
     x_full = tel['X'].to_numpy(dtype=float)
     y_full = tel['Y'].to_numpy(dtype=float)
     v_full = tel['Speed'].to_numpy(dtype=float)
 
-    # Identify samples where the GPS actually reported a new position.
-    pos_step = np.sqrt(np.diff(x_full, prepend=x_full[0])**2 + np.diff(y_full, prepend=y_full[0])**2)
-    gps_idx = np.where(pos_step > 0.3)[0]
+    # Select only real GPS samples (Source == 'pos'); fall back to all samples if missing.
+    if 'Source' in tel.columns:
+        gps_idx = np.where(tel['Source'].to_numpy() == 'pos')[0]
+    else:
+        gps_idx = np.arange(len(x_full))
     if len(gps_idx) < 20:
-        gps_idx = np.arange(len(x_full))  # fallback: use all samples
+        gps_idx = np.arange(len(x_full))
 
-    x_u = x_full[gps_idx]
-    y_u = y_full[gps_idx]
+    # Convert coordinates from decimeters (FastF1 GPS units) to meters.
+    x_u = x_full[gps_idx] * 0.1
+    y_u = y_full[gps_idx] * 0.1
     s_u = s_full[gps_idx]
 
     # Smooth the sparse position data
