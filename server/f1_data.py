@@ -5123,9 +5123,10 @@ def _detect_corners(lat_g: np.ndarray, dist: np.ndarray,
     return corners
 
 
-def _corner_metrics(lat_g: np.ndarray, speed_kph: np.ndarray,
+def _corner_metrics(lat_g: np.ndarray, long_g: np.ndarray, speed_kph: np.ndarray,
                     dist: np.ndarray, start: int, end: int) -> dict:
     seg_g = lat_g[start:end + 1]
+    seg_lg = long_g[start:end + 1]
     seg_v = speed_kph[start:end + 1]
     seg_dist = dist[start:end + 1]
 
@@ -5133,7 +5134,24 @@ def _corner_metrics(lat_g: np.ndarray, speed_kph: np.ndarray,
     peak_idx_local = int(np.argmax(seg_g))
 
     g_max = _theoretical_max_g(seg_v)
-    util = np.clip(seg_g / np.where(g_max < 0.1, 0.1, g_max), 0.0, 1.0)
+    safe_gmax = np.where(g_max < 0.1, 0.1, g_max)
+
+    # Lateral-only utilisation (kept for backward compat)
+    util = np.clip(seg_g / safe_gmax, 0.0, 1.0)
+
+    # Combined (vector) utilisation
+    combined_g = np.sqrt(seg_g ** 2 + seg_lg ** 2)
+    combined_util = np.clip(combined_g / safe_gmax, 0.0, 1.5)
+
+    # Trail brake: % of entry phase (start→apex) where lat>0.4G AND long<-0.3G simultaneously
+    entry_end = max(apex_idx_local, 1)
+    entry_lat = seg_g[:entry_end]
+    entry_long = seg_lg[:entry_end]
+    trail_mask = (entry_lat > 0.4) & (entry_long < -0.3)
+    trail_brake_pct = round(float(np.mean(trail_mask) * 100), 1) if len(trail_mask) > 0 else 0.0
+
+    # Circle fullness: % of ALL corner samples where combined_util > 0.75
+    circle_fullness_pct = round(float(np.mean(combined_util > 0.75) * 100), 1)
 
     # count sign changes in d(lat_g) as a proxy for steering corrections
     dlg = np.gradient(seg_g)
@@ -5149,6 +5167,9 @@ def _corner_metrics(lat_g: np.ndarray, speed_kph: np.ndarray,
         "correction_count": sign_changes,
         "mean_grip_util_pct": round(float(np.mean(util) * 100), 1),
         "pct_time_above_90pct_grip": round(float(np.mean(util >= 0.9) * 100), 1),
+        "combined_util_pct": round(float(np.mean(combined_util) * 100), 1),
+        "trail_brake_pct": trail_brake_pct,
+        "circle_fullness_pct": circle_fullness_pct,
         "entry_dist_m": round(float(seg_dist[0]), 0),
         "exit_dist_m": round(float(seg_dist[-1]), 0),
     }

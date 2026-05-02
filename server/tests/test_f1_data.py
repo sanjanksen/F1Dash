@@ -2617,3 +2617,60 @@ def test_compute_longitudinal_g_missing_time_returns_zeros():
     result = f1_data._compute_longitudinal_g(tel)
     assert np.all(result == 0.0)
     assert result.shape == (50,)
+
+
+def _make_corner_arrays(n=60):
+    """
+    Synthetic corner: speed dips from 200→100→200 kph (apex at midpoint),
+    lat_g peaks at apex, long_g goes negative then positive (brake-then-throttle).
+    """
+    import numpy as np
+    t = np.linspace(0, 1, n)
+    speed = 200.0 - 100.0 * np.sin(np.pi * t)          # 200→100→200
+    lat_g = 3.5 * np.sin(np.pi * t)                      # 0→3.5→0
+    long_g = np.where(t < 0.5, -2.0 * (0.5 - t) * 4, 2.0 * (t - 0.5) * 4)  # braking then accel
+    long_g = np.clip(long_g, -4.0, 4.0)
+    dist = np.linspace(0, 150, n)
+    return lat_g, long_g, speed, dist
+
+
+def test_corner_metrics_new_fields_present():
+    import numpy as np
+    lat_g, long_g, speed, dist = _make_corner_arrays()
+    result = f1_data._corner_metrics(lat_g, long_g, speed, dist, 0, len(lat_g) - 1)
+    assert 'combined_util_pct' in result
+    assert 'trail_brake_pct' in result
+    assert 'circle_fullness_pct' in result
+
+
+def test_corner_metrics_combined_util_gte_lateral():
+    import numpy as np
+    lat_g, long_g, speed, dist = _make_corner_arrays()
+    result = f1_data._corner_metrics(lat_g, long_g, speed, dist, 0, len(lat_g) - 1)
+    # Combined (lat+long vector) should be >= lateral-only util
+    assert result['combined_util_pct'] >= result['mean_grip_util_pct'] - 0.1
+
+
+def test_corner_metrics_trail_brake_zero_when_no_braking():
+    import numpy as np
+    n = 60
+    lat_g = np.ones(n) * 2.0
+    long_g = np.zeros(n)          # no braking whatsoever
+    speed = np.ones(n) * 150.0
+    dist = np.linspace(0, 150, n)
+    result = f1_data._corner_metrics(lat_g, long_g, speed, dist, 0, n - 1)
+    assert result['trail_brake_pct'] == 0.0
+
+
+def test_corner_metrics_trail_brake_nonzero_when_braking_at_entry():
+    import numpy as np
+    n = 60
+    apex = n // 2
+    lat_g = np.ones(n) * 2.0
+    # Braking hard in the entry phase only (before apex)
+    long_g = np.where(np.arange(n) < apex, -2.0, 0.5)
+    speed = np.linspace(200, 100, n // 2).tolist() + np.linspace(100, 200, n - n // 2).tolist()
+    speed = np.array(speed)
+    dist = np.linspace(0, 150, n)
+    result = f1_data._corner_metrics(lat_g, long_g, speed, dist, 0, n - 1)
+    assert result['trail_brake_pct'] > 50.0
