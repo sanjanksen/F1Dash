@@ -2355,6 +2355,7 @@ def test_get_driver_weekend_overview_uses_sprint_data_when_session_type_s():
 
     assert result["race"]["finish_position"] == 3
     assert result["qualifying"]["position"] == 2
+    assert result["qualifying"]["q1"] == "1:32.1"
 
 
 def test_get_driver_race_story_passes_session_type_to_overview():
