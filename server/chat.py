@@ -673,6 +673,12 @@ Guidelines:
 - When doing a race recap (get_driver_race_story, get_race_report), the result already includes field_strategy (all drivers' stints) and safety_car_full (SC periods with strategic_crossings). Use these to proactively surface undercut/overcut narrative and SC strategy impact even if the user didn't specifically ask about strategy — it is part of the race story
 - For ANY free practice question (who was fastest, what programmes did drivers run, what was the race pace, FP1/FP2/FP3 recap): use get_fp_summary with fp_number=1/2/3. The result classifies every stint as long_run/quali_sim/short_run/installation. Long runs (8+ laps) approximate race pace; quali_sim (1-2 fresh soft laps) approximate single-lap pace. Always embed the fuel-load caveat: FP lap times cannot be directly compared to race or qualifying times.
 - For top speed, speed trap, straight-line speed, or drag questions (any session): use get_speed_trap_leaderboard. It returns four ranked lists (speed_st, speed_fl, speed_i1, speed_i2) scanning ALL laps to find each driver's peak at each trap independently. A driver's peak ST speed may be on a different lap than their peak FL speed.
+- For sprint race questions ('how did X do in the sprint?', 'recap the sprint race'): use get_driver_race_story or get_race_report with session_type='S'. Do NOT call these with the default session_type for sprint questions.
+- For sprint qualifying/shootout questions ('who was fastest in sprint qualifying?', 'sprint shootout recap'): use get_sprint_qualifying_results for raw classification. For causal 'why was X faster than Y in sprint qualifying?' questions, use analyze_qualifying_battle with session_type='SQ'.
+- For a driver's sprint weekend story: use get_driver_race_story with session_type='S'
+- For a team's sprint result: use get_team_weekend_overview with session_type='S'
+- Sprint weekends contain: FP1 (practice), Sprint Qualifying/Shootout (SQ), Sprint Race (S), Qualifying (Q), Race (R). Sprint and sprint qualifying are separate sessions from the main qualifying and race.
+- Sprint races are ~17-24 laps with no mandatory pit stops. Tyre degradation and strategy reasoning is less relevant for sprint; focus on pace, position battles, and safety car impact.
 - For deleted laps, race control decisions, incidents, or steward-style explanations: use get_race_control_messages
 - For weather conditions, rain timing, temperature impact on tyres/pace: use get_session_weather
 - FastF1 does not provide direct ERS state of charge, harvest maps, or deployment maps. For energy questions, clearly distinguish measured telemetry from inference.
@@ -1012,14 +1018,28 @@ def _suggested_tool_args(resolved: dict) -> dict | None:
     if tool in ("get_driver_race_story", "get_driver_weekend_overview"):
         if not resolved.get("entity_name"):
             return None
-        return {"round_number": round_number, "driver_name": resolved["entity_name"]}
+        return {
+            "round_number": round_number,
+            "driver_name": resolved["entity_name"],
+            "session_type": resolved.get("session_type") or "R",
+        }
 
     if tool == "get_team_weekend_overview":
         if not resolved.get("entity_name"):
             return None
-        return {"round_number": round_number, "team_name": resolved["entity_name"]}
+        return {
+            "round_number": round_number,
+            "team_name": resolved["entity_name"],
+            "session_type": resolved.get("session_type") or "R",
+        }
 
     if tool == "get_race_report":
+        return {
+            "round_number": round_number,
+            "session_type": resolved.get("session_type") or "R",
+        }
+
+    if tool == "get_sprint_qualifying_results":
         return {"round_number": round_number}
 
     if tool == "get_safety_car_periods":
@@ -1212,8 +1232,9 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
     if round_number is None or len(codes) < 2 or len(names) < 2:
         return None
 
-    focus = resolved.get("analysis_focus") or ("qualifying" if resolved.get("session_type") == "Q" else "race")
-    session_type = "Q" if focus == "qualifying" else (resolved.get("session_type") or "R")
+    focus = resolved.get("analysis_focus") or ("qualifying" if resolved.get("session_type") in ("Q", "SQ") else "race")
+    quali_session = resolved.get("session_type") if resolved.get("session_type") in ("Q", "SQ") else "Q"
+    race_session = resolved.get("session_type") if resolved.get("session_type") in ("R", "S") else "R"
 
     plan = {
         "analysis_mode": "driver_comparison",
@@ -1230,34 +1251,36 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
     }
 
     if focus == "qualifying":
+        results_tool = "get_sprint_qualifying_results" if quali_session == "SQ" else "get_qualifying_results"
         plan["tool_calls"] = [
-            ("get_qualifying_results", {"round_number": round_number}),
+            (results_tool, {"round_number": round_number}),
             ("analyze_qualifying_battle", {
                 "round_number": round_number,
                 "driver_a": codes[0],
                 "driver_b": codes[1],
+                "session_type": quali_session,
             }),
             ("compare_corner_profiles", {
                 "round_number": round_number,
-                "session_type": "Q",
+                "session_type": quali_session,
                 "driver_a": codes[0],
                 "driver_b": codes[1],
             }),
             ("analyze_cornering_loads", {
                 "round_number": round_number,
-                "session_type": "Q",
+                "session_type": quali_session,
                 "driver_a": codes[0],
                 "driver_b": codes[1],
             }),
             ("get_team_radio", {
                 "round_number": round_number,
-                "session_type": "Q",
+                "session_type": quali_session,
                 "driver_ref": codes[0],
                 "limit": 6,
             }),
             ("get_team_radio", {
                 "round_number": round_number,
-                "session_type": "Q",
+                "session_type": quali_session,
                 "driver_ref": codes[1],
                 "limit": 6,
             }),
@@ -1266,17 +1289,17 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
 
     if focus in ("race", "session"):
         plan["tool_calls"] = [
-            ("get_driver_race_story", {"round_number": round_number, "driver_name": names[0]}),
-            ("get_driver_race_story", {"round_number": round_number, "driver_name": names[1]}),
+            ("get_driver_race_story", {"round_number": round_number, "driver_name": names[0], "session_type": race_session}),
+            ("get_driver_race_story", {"round_number": round_number, "driver_name": names[1], "session_type": race_session}),
             ("analyze_race_pace_battle", {
                 "round_number": round_number,
                 "driver_a": codes[0],
                 "driver_b": codes[1],
-                "session_type": resolved.get("session_type") or "R",
+                "session_type": race_session,
             }),
             ("get_safety_car_periods", {
                 "round_number": round_number,
-                "session_type": resolved.get("session_type") or "R",
+                "session_type": race_session,
             }),
         ]
         return plan

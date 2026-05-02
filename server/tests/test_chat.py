@@ -138,6 +138,41 @@ def test_answer_f1_question_tool_error_uses_is_error_flag():
     assert tool_result_block["is_error"] is True
 
 
+def test_extract_inline_data_table_widget():
+    import chat
+    importlib.reload(chat)
+
+    text = """Piastri was the cleanest tyre manager.
+
+```f1-widget
+{"type":"data_table","title":"Tyre management ranking","columns":[{"key":"rank","label":"Rank","align":"right"},{"key":"driver","label":"Driver"},{"key":"note","label":"Note"}],"rows":[{"rank":"1","driver":"PIA","note":"Best consistency"},{"rank":"2","driver":"ANT","note":"Strong hard stint"}]}
+```"""
+
+    clean, widgets = chat._extract_inline_widgets(text)
+
+    assert clean == "Piastri was the cleanest tyre manager."
+    assert widgets[0]["type"] == "data_table"
+    assert widgets[0]["columns"][0]["align"] == "right"
+    assert widgets[0]["rows"][1]["driver"] == "ANT"
+
+
+def test_answer_payload_strips_inline_widget_from_anthropic_response():
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = _end_turn_response(
+        'Russell won, but Piastri had the cleaner deg profile.\n\n'
+        '```f1-widget\n'
+        '{"type":"data_table","title":"Consistency ranking","columns":[{"key":"rank","label":"Rank","align":"right"},{"key":"driver","label":"Driver"}],"rows":[{"rank":"1","driver":"PIA"}]}\n'
+        '```'
+    )
+
+    chat = _load_chat_with_client(mock_client)
+    result = chat.answer_f1_payload("Rank tyre management")
+
+    assert "f1-widget" not in result["response"]
+    assert result["widgets"][0]["type"] == "data_table"
+    assert result["widgets"][0]["title"] == "Consistency ranking"
+
+
 def test_answer_f1_question_exceeds_max_rounds():
     """Raises ValueError after MAX_TOOL_ROUNDS tool calls with no final answer."""
     mock_client = MagicMock()
@@ -208,7 +243,7 @@ def test_suggested_tool_args_driver_story():
         "round_number": 3,
         "entity_name": "George Russell",
     }
-    assert chat._suggested_tool_args(resolved) == {"round_number": 3, "driver_name": "George Russell"}
+    assert chat._suggested_tool_args(resolved) == {"round_number": 3, "driver_name": "George Russell", "session_type": "R"}
 
 
 def test_prepare_resolved_context_preloads_high_confidence():
@@ -229,7 +264,7 @@ def test_prepare_resolved_context_preloads_high_confidence():
     assert merged is resolved
     assert preloaded["tool"] == "get_driver_race_story"
     assert preloaded["result"]["driver"] == "George Russell"
-    exec_mock.assert_called_once_with("get_driver_race_story", {"round_number": 3, "driver_name": "George Russell"})
+    exec_mock.assert_called_once_with("get_driver_race_story", {"round_number": 3, "driver_name": "George Russell", "session_type": "R"})
 
 
 def test_try_deterministic_analysis_uses_analysis_and_writer_stages():
@@ -288,8 +323,52 @@ def test_build_analysis_plan_uses_qualifying_battle_tool_for_qualifying_comparis
 
     tool_names = [tool for tool, _ in plan["tool_calls"]]
     assert "analyze_qualifying_battle" in tool_names
+    assert "analyze_cornering_loads" in tool_names
     assert "get_qualifying_results" in tool_names
     assert tool_names.count("get_team_radio") == 2
+
+
+def test_qualifying_widget_includes_grip_commitment_from_cornering_loads():
+    import chat
+
+    evidence = [
+        {
+            "tool": "analyze_qualifying_battle",
+            "result": {
+                "driver_a": "ANT",
+                "driver_b": "RUS",
+                "faster_driver": "ANT",
+            },
+        },
+        {
+            "tool": "analyze_cornering_loads",
+            "result": {
+                "driver_a": "ANT",
+                "driver_b": "RUS",
+                "summary": {
+                    "ANT": {
+                        "avg_grip_utilisation_pct": 72.4,
+                        "pct_time_above_90pct_grip": 18.0,
+                        "avg_corrections_per_corner": 2.1,
+                        "avg_load_variance": 0.041,
+                    },
+                    "RUS": {
+                        "avg_grip_utilisation_pct": 68.2,
+                        "pct_time_above_90pct_grip": 11.0,
+                        "avg_corrections_per_corner": 3.4,
+                        "avg_load_variance": 0.062,
+                    },
+                },
+            },
+        },
+    ]
+
+    widgets = chat._widgets_from_analysis_evidence({"focus": "qualifying"}, evidence)
+
+    assert widgets[0]["type"] == "qualifying_battle"
+    assert widgets[0]["grip_commitment"]["commitment_driver"] == "ANT"
+    assert widgets[0]["grip_commitment"]["edge_driver"] == "ANT"
+    assert widgets[0]["grip_commitment"]["smooth_driver"] == "ANT"
 
 
 def test_canonicalize_qualifying_analysis_aligns_answer_with_widget_source():
@@ -505,6 +584,60 @@ def test_build_analysis_plan_circuit_profile_without_round():
     profile_args = next(args for name, args in plan["tool_calls"] if name == "get_circuit_profile")
     assert profile_args["country"] == "United States"
     assert profile_args["event_name"] == "Miami Grand Prix"
+    assert plan["emit_context_widget"] is True
+
+
+def test_build_analysis_plan_suppresses_inherited_circuit_widget():
+    import chat as chat_module
+    resolved = {
+        "analysis_mode": "circuit_profile",
+        "country": "United States",
+        "event_name": "Miami Grand Prix",
+        "round_number": 6,
+        "has_explicit_context": False,
+        "used_previous_context": True,
+    }
+    plan = chat_module._build_analysis_plan("what about sector 2?", resolved)
+
+    assert plan is not None
+    assert plan["analysis_mode"] == "circuit_profile"
+    assert plan["emit_context_widget"] is False
+
+
+def test_widgets_from_analysis_evidence_suppresses_context_widget_when_requested():
+    import chat as chat_module
+    evidence = [{
+        "tool": "get_circuit_profile",
+        "result": {
+            "circuit_key": "miami",
+            "circuit_name": "Miami International Autodrome",
+        },
+    }]
+
+    widgets = chat_module._widgets_from_analysis_evidence(
+        {"analysis_mode": "circuit_profile", "emit_context_widget": False},
+        evidence,
+    )
+
+    assert widgets == []
+
+
+def test_build_analysis_plan_team_circuit_fit_uses_all_evidence_layers_when_round_known():
+    import chat as chat_module
+    resolved = {
+        "analysis_mode": "team_circuit_fit",
+        "entity_name": "Mercedes",
+        "round_number": 3,
+        "session_type": "Q",
+    }
+    plan = chat_module._build_analysis_plan("what tracks suit Mercedes at Suzuka?", resolved)
+
+    tool_names = [name for name, _ in plan["tool_calls"]]
+    assert tool_names == [
+        "analyze_team_circuit_fit",
+        "get_team_car_profile",
+        "analyze_team_telemetry_traits",
+    ]
 
 
 def test_make_circuit_profile_widget_maps_all_fields():
@@ -558,3 +691,74 @@ def test_make_circuit_profile_widget_maps_all_fields():
     assert widget["energy_profile"]["deployment_demand"] == "high"
     assert widget["style_verdict"]["qualifier"] == "v_line_late_braker"
     assert widget["tyre_challenge"] == "Heavy rear wear from aggressive traction zones."
+
+
+def test_build_analysis_plan_sprint_qualifying_uses_sq_session():
+    import chat
+
+    resolved = {
+        "analysis_mode": "driver_comparison",
+        "analysis_focus": "qualifying",
+        "round_number": 5,
+        "entity_names": ["Lando Norris", "Oscar Piastri"],
+        "entity_codes": ["NOR", "PIA"],
+        "session_type": "SQ",
+    }
+
+    plan = chat._build_analysis_plan("Why was Norris faster than Piastri in sprint qualifying?", resolved)
+
+    assert plan is not None
+    tool_names = [t[0] for t in plan["tool_calls"]]
+    assert "analyze_qualifying_battle" in tool_names
+    sq_battle = next(t for t in plan["tool_calls"] if t[0] == "analyze_qualifying_battle")
+    assert sq_battle[1]["session_type"] == "SQ"
+
+
+def test_build_analysis_plan_sprint_race_uses_s_session_for_story():
+    import chat
+
+    resolved = {
+        "analysis_mode": "driver_comparison",
+        "analysis_focus": "race",
+        "round_number": 5,
+        "entity_names": ["Lando Norris", "Oscar Piastri"],
+        "entity_codes": ["NOR", "PIA"],
+        "session_type": "S",
+    }
+
+    plan = chat._build_analysis_plan("Compare Norris and Piastri in the sprint", resolved)
+
+    assert plan is not None
+    story_calls = [t for t in plan["tool_calls"] if t[0] == "get_driver_race_story"]
+    assert all(t[1].get("session_type") == "S" for t in story_calls)
+
+
+def test_suggested_tool_args_sprint_race_story():
+    import chat
+
+    resolved = {
+        "suggested_tool": "get_driver_race_story",
+        "round_number": 5,
+        "entity_name": "Lando Norris",
+        "session_type": "S",
+    }
+
+    args = chat._suggested_tool_args(resolved)
+
+    assert args is not None
+    assert args["session_type"] == "S"
+
+
+def test_suggested_tool_args_sprint_qualifying():
+    import chat
+
+    resolved = {
+        "suggested_tool": "get_sprint_qualifying_results",
+        "round_number": 5,
+        "session_type": "SQ",
+    }
+
+    args = chat._suggested_tool_args(resolved)
+
+    assert args is not None
+    assert args["round_number"] == 5
