@@ -785,6 +785,21 @@ When evidence contains results from `analyze_cornering_loads` or `analyze_race_c
 - **High corrections_per_corner** → *chasing the balance*, *having to react mid-corner*, *fighting oversteer* or *fighting understeer*. More corrections = the driver is a passenger for part of the corner. "NOR was making four or five corrections where PIA needed two — he was having to drive the car more."
 - **Low corrections_per_corner** → *clean committed arc*, *natural rotation*, *one input and done*, *drives the car in rather than reacting to it*.
 
+- **avg_combined_util_pct** → Total tyre commitment across both cornering AND braking combined. Higher = the driver is asking more of the tyre across both dimensions simultaneously.
+  High (>85%): *fully committed*, *nothing left in reserve*, *using every gram of rubber*, *the tyre is working in every dimension*
+  Compare to avg_grip_utilisation_pct: if combined is noticeably higher than lateral, the driver loads the tyre heavily under braking too — it's not just the cornering.
+  Never say "combined grip utilisation" or "combined util" in your answer. Say: "when you factor in braking on top of cornering, {{driver}} was using more of the tyre's total capability."
+
+- **avg_trail_brake_pct** → % of corner entry spent simultaneously cornering AND braking. Exposed as a raw % for the LLM to characterise in words.
+  High (>35%): *carrying the brake deep*, *loading the front to rotate*, *still on the pedal at turn-in*, *using the brake as a rotation tool*, *trail-braking all the way to the apex*
+  Low (<10%): *finishes braking before the corner*, *clean turn-in on a neutral throttle*, *textbook entry — brake done, then commit*
+  Never say "trail brake percentage" in your answer. Say: "{{driver}} was still on the brakes at turn-in for X% of the entry phase — using it to load the front and rotate."
+
+- **avg_circle_fullness_pct** → % of cornering time where the driver is near the combined grip ceiling (using >75% of total theoretical grip across both lat and long). Rewards blending both dimensions continuously rather than touching the ceiling only at apex.
+  High (>55%): *barely eases off through the whole corner*, *the tyre is working hard start to finish*, *no coasting — every phase of the corner is demanding something*, *living at the limit from entry to exit*
+  Low (<30%): *has a comfort margin mid-corner*, *eases off at the apex*, *keeps something in reserve*, *the middle of the corner is where the time gets left*
+  Never say "circle fullness" in your answer.
+
 **Inferences you can draw from combined signals:**
 - High util + low variance = *confident, committed, clean* — extracting maximum lap time, tyre being loaded efficiently
 - High util + high variance = *committed but fighting it* — fast single lap but burning the tyre, the rear or front is edgy
@@ -792,6 +807,10 @@ When evidence contains results from `analyze_cornering_loads` or `analyze_race_c
 - Low util + high variance = *struggling for confidence* — fighting the car without pushing hard enough to compensate, the worst combination
 - High corrections at high speed = rear stepping out under load, *snap oversteer*, the car is pointy and the driver is managing it
 - High corrections at low speed = *rotating problem*, car won't change direction cleanly, *the front's not biting*
+- High combined_util + high trail_brake = *front-loading style* — loads the entry with the brake to rotate, the front tyre working in both dimensions. Strong single-lap weapon but hard on front tyres over a stint.
+- High combined_util + low trail_brake = *apex commitment* — finishes braking before turn-in but carries huge mid-corner speed. The load is clean but the tyre is working hard through the middle.
+- Low combined_util + high trail_brake = *defensive rotation* — using trail brake to rotate without fully committing combined load. Protective entry style.
+- High circle_fullness + low load_variance = *smooth limit driver* — operating near the total grip ceiling throughout the corner without fighting it. The ideal.
 
 **Core vocabulary list to use naturally:**
 oversteer, understeer, snap oversteer, trailing the rear, the rear's loose, the front's not biting, pushing wide, washes wide, fighting the car, chasing the rear, chasing the balance, committed, on the limit, no margin, natural rotation, rotating the car, one clean arc, smooth progressive arc, the car does what he asks, leaning on the front, trusting the rubber, tyre confidence, living on the edge, pointed car, planted rear, front-end bite, carrying it in, pointy setup, the car's a handful, the rear gets snappy
@@ -801,6 +820,7 @@ oversteer, understeer, snap oversteer, trailing the rear, the rear's loose, the 
 - Use oversteer/understeer naturally — these are the words F1 fans understand.
 - Qualifying: more commitment + cleaner inputs = more single-lap time. Race: high commitment + high variance = *the confidence level drops as the stint ages — the tyre can't keep holding that level of demand*.
 - Never say "lateral load variance" or "grip utilisation percentage" in the answer. Use the vocabulary above instead.
+- Never say "combined grip utilisation", "combined util", "trail brake percentage", "avg_trail_brake_pct", "circle fullness", or "avg_circle_fullness_pct" in the answer. Translate every metric to the character vocabulary above.
 
 ## Race Strategy Reasoning
 
@@ -1365,7 +1385,11 @@ def _prepare_resolved_context(message: str, history: list[dict]) -> tuple[dict, 
 
 def _prepare_resolved_context_from_previous(message: str, previous_context: dict | None) -> tuple[dict, dict | None]:
     resolved = resolve_query_context(message, previous_context)
+    preloaded = _preload_resolved_context(resolved)
+    return resolved, preloaded
 
+
+def _preload_resolved_context(resolved: dict) -> dict | None:
     preloaded = None
     if resolved.get("routing_confidence") == "high":
         args = _suggested_tool_args(resolved)
@@ -1386,7 +1410,7 @@ def _prepare_resolved_context_from_previous(message: str, previous_context: dict
                     "error": str(exc),
                 }
 
-    return resolved, preloaded
+    return preloaded
 
 
 def _build_request_system_prompt(resolved: dict, preloaded: dict | None) -> str:
@@ -1463,9 +1487,12 @@ def _build_answer_writer_prompt(question: str, analysis: dict) -> str:
     }, default=str)
 
 
-def _try_deterministic_analysis(question: str, history: list[dict], *, provider: str) -> dict | None:
-    previous_context = resolve_context_from_history(history)
-    resolved = resolve_query_context(question, previous_context)
+def _try_deterministic_analysis(question: str, history: list[dict], *, provider: str, resolved_context: dict | None = None) -> dict | None:
+    if resolved_context is None:
+        previous_context = resolve_context_from_history(history)
+        resolved = resolve_query_context(question, previous_context)
+    else:
+        resolved = resolved_context
     plan = _build_analysis_plan(question, resolved)
     if not plan:
         return None
@@ -1537,9 +1564,13 @@ def _run_anthropic_answer_writer(question: str, analysis: dict) -> str:
     return "".join(block.text for block in response.content if hasattr(block, "text")).strip()
 
 
-def _answer_anthropic(message: str, history: list[dict]) -> dict:
+def _answer_anthropic(message: str, history: list[dict], resolved_context: dict | None = None, preloaded_context: dict | None = None) -> dict:
     client = _get_anthropic_client()
-    resolved, preloaded = _prepare_resolved_context(message, history)
+    if resolved_context is None:
+        resolved, preloaded = _prepare_resolved_context(message, history)
+    else:
+        resolved = resolved_context
+        preloaded = preloaded_context
     request_system_prompt = _build_request_system_prompt(resolved, preloaded)
     messages = [{"role": h["role"], "content": h["content"]} for h in history]
     messages.append({"role": "user", "content": message})
@@ -1640,9 +1671,13 @@ def _run_openai_answer_writer(question: str, analysis: dict) -> str:
     return response.choices[0].message.content.strip()
 
 
-def _answer_openai(message: str, history: list[dict]) -> dict:
+def _answer_openai(message: str, history: list[dict], resolved_context: dict | None = None, preloaded_context: dict | None = None) -> dict:
     client = _get_openai_client()
-    resolved, preloaded = _prepare_resolved_context(message, history)
+    if resolved_context is None:
+        resolved, preloaded = _prepare_resolved_context(message, history)
+    else:
+        resolved = resolved_context
+        preloaded = preloaded_context
     request_system_prompt = _build_request_system_prompt(resolved, preloaded)
     messages = [{"role": "system", "content": request_system_prompt}]
     messages += [{"role": h["role"], "content": h["content"]} for h in history]
@@ -1712,12 +1747,15 @@ def answer_f1_payload(message: str, history: list[dict] | None = None) -> dict:
     """
     prior = history or []
     provider = os.environ.get("LLM_PROVIDER", "anthropic").lower()
-    deterministic = _try_deterministic_analysis(message, prior, provider=provider)
+    previous_context = resolve_context_from_history(prior)
+    resolved = resolve_query_context(message, previous_context)
+    deterministic = _try_deterministic_analysis(message, prior, provider=provider, resolved_context=resolved)
     if deterministic:
         return deterministic
+    preloaded = _preload_resolved_context(resolved)
     if provider == "openai":
-        return _answer_openai(message, prior)
-    return _answer_anthropic(message, prior)
+        return _answer_openai(message, prior, resolved_context=resolved, preloaded_context=preloaded)
+    return _answer_anthropic(message, prior, resolved_context=resolved, preloaded_context=preloaded)
 
 
 def answer_f1_question(message: str, history: list[dict] | None = None) -> str:
