@@ -2674,3 +2674,35 @@ def test_corner_metrics_trail_brake_nonzero_when_braking_at_entry():
     dist = np.linspace(0, 150, n)
     result = f1_data._corner_metrics(lat_g, long_g, speed, dist, 0, n - 1)
     assert result['trail_brake_pct'] > 50.0
+
+
+def test_aggregate_lap_cornering_stats_new_fields():
+    import numpy as np
+    import pandas as pd
+
+    n = 300
+    t_s = np.linspace(0, 30, n)
+    # Speed: oscillates to create corners
+    speed = 200.0 - 80.0 * np.abs(np.sin(np.pi * np.linspace(0, 6, n)))
+    # Simple circular track
+    theta = np.linspace(0, 4 * np.pi, n)
+    x = np.cos(theta) * 200.0
+    y = np.sin(theta) * 200.0
+    dist = np.linspace(0, 1000, n)
+
+    tel = pd.DataFrame({
+        'Speed': speed,
+        'Time': pd.to_timedelta(t_s, unit='s'),
+        'X': x,
+        'Y': y,
+        'Distance': dist,
+    })
+
+    result = f1_data._aggregate_lap_cornering_stats(tel)
+    assert result is not None
+    assert 'avg_combined_util_pct' in result
+    assert 'avg_trail_brake_pct' in result
+    assert 'avg_circle_fullness_pct' in result
+    assert 0 <= result['avg_combined_util_pct'] <= 200
+    assert 0 <= result['avg_trail_brake_pct'] <= 100
+    assert 0 <= result['avg_circle_fullness_pct'] <= 100

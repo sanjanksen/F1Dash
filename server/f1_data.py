@@ -5476,23 +5476,29 @@ def _aggregate_lap_cornering_stats(tel: pd.DataFrame) -> dict | None:
         dist = tel['Distance'].to_numpy(dtype=float) if 'Distance' in tel.columns else np.arange(len(tel), dtype=float)
         spd = tel['Speed'].to_numpy(dtype=float)
         lat_g = _compute_lateral_g(tel)
+        long_g = _compute_longitudinal_g(tel)
         corners = _detect_corners(lat_g, dist)
         if not corners:
             return None
 
         corner_util_samples = []
+        corner_combined_util_samples = []
+        corner_trail_brake_samples = []
+        corner_fullness_samples = []
         corner_corrections = []
         corner_variances = []
 
         for c_start, c_end in corners:
+            metrics = _corner_metrics(lat_g, long_g, spd, dist, c_start, c_end)
             seg_g = lat_g[c_start:c_end + 1]
             seg_v = spd[c_start:c_end + 1]
             seg_gmax = _theoretical_max_g(seg_v)
             seg_util = np.clip(seg_g / np.where(seg_gmax < 0.1, 0.1, seg_gmax), 0.0, 1.0)
             corner_util_samples.extend(seg_util.tolist())
-
-            dlg = np.gradient(seg_g)
-            corner_corrections.append(int(np.sum(np.diff(np.sign(dlg)) != 0)))
+            corner_combined_util_samples.append(metrics['combined_util_pct'])
+            corner_trail_brake_samples.append(metrics['trail_brake_pct'])
+            corner_fullness_samples.append(metrics['circle_fullness_pct'])
+            corner_corrections.append(metrics['correction_count'])
             corner_variances.append(float(np.std(seg_g)))
 
         if not corner_util_samples:
@@ -5505,6 +5511,9 @@ def _aggregate_lap_cornering_stats(tel: pd.DataFrame) -> dict | None:
             "corners_detected": len(corners),
             "avg_corrections_per_corner": round(float(np.mean(corner_corrections)), 1),
             "avg_load_variance": round(float(np.mean(corner_variances)), 3),
+            "avg_combined_util_pct": round(float(np.mean(corner_combined_util_samples)), 1),
+            "avg_trail_brake_pct": round(float(np.mean(corner_trail_brake_samples)), 1),
+            "avg_circle_fullness_pct": round(float(np.mean(corner_fullness_samples)), 1),
         }
     except Exception:
         return None
@@ -5587,6 +5596,9 @@ def analyze_race_cornering_profile(
             "pct_above_90pct_grip": round(float(np.mean([l["pct_above_90pct_grip"] for l in laps_data])), 1),
             "avg_corrections_per_corner": round(float(np.mean([l["avg_corrections_per_corner"] for l in laps_data])), 1),
             "avg_load_variance": round(float(np.mean([l["avg_load_variance"] for l in laps_data])), 3),
+            "avg_combined_util_pct": round(float(np.mean([l.get("avg_combined_util_pct", 0.0) for l in laps_data])), 1),
+            "avg_trail_brake_pct": round(float(np.mean([l.get("avg_trail_brake_pct", 0.0) for l in laps_data])), 1),
+            "avg_circle_fullness_pct": round(float(np.mean([l.get("avg_circle_fullness_pct", 0.0) for l in laps_data])), 1),
         }
 
     def _aggregate_by_stint(laps_data: list[dict]) -> list[dict]:
@@ -5698,6 +5710,31 @@ def analyze_race_cornering_profile(
                     f"{stint_diff:.1f}pp more committed through the corners. "
                     f"{stint_trailer} kept more in reserve, whether by choice or because the tyre wasn't fully in his window."
                 )
+
+    # --- Combined grip commitment across the race ---
+    comb_a = overall_a.get("avg_combined_util_pct", 0.0)
+    comb_b = overall_b.get("avg_combined_util_pct", 0.0)
+    if abs(comb_a - comb_b) >= 1.0:
+        higher_comb = code_a if comb_a >= comb_b else code_b
+        lower_comb = code_b if higher_comb == code_a else code_a
+        narrative_parts.append(
+            f"Factoring in braking across {laps_a_count} laps for {code_a} and {laps_b_count} for {code_b}, "
+            f"{higher_comb} was asking more of the total grip envelope — "
+            f"{max(comb_a, comb_b):.1f}% combined vs {min(comb_a, comb_b):.1f}% for {lower_comb}. "
+            f"That's braking commitment piling on top of the cornering load, lap after lap."
+        )
+
+    # --- Trail braking style across the race ---
+    tb_a = overall_a.get("avg_trail_brake_pct", 0.0)
+    tb_b = overall_b.get("avg_trail_brake_pct", 0.0)
+    if abs(tb_a - tb_b) >= 5.0:
+        higher_tb = code_a if tb_a >= tb_b else code_b
+        lower_tb = code_b if higher_tb == code_a else code_a
+        narrative_parts.append(
+            f"{higher_tb} was the trail braker of the two — still on the brakes at turn-in "
+            f"for {max(tb_a, tb_b):.1f}% of corner entry across the race vs {min(tb_a, tb_b):.1f}% for {lower_tb}. "
+            f"Over a full race distance that front-tyre load difference adds up."
+        )
 
     return {
         "event": session.event['EventName'],
