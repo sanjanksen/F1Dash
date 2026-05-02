@@ -5094,6 +5094,91 @@ def _compute_longitudinal_g(tel: pd.DataFrame) -> np.ndarray:
     return np.clip(long_g, -6.0, 4.0)
 
 
+_GGV_BIN_EDGES = np.array([0.0, 50.0, 100.0, 150.0, 200.0, 250.0, 300.0, 360.0])
+_GGV_BIN_CENTERS = (_GGV_BIN_EDGES[:-1] + _GGV_BIN_EDGES[1:]) / 2.0
+
+
+def _build_ggv_envelope(telemetry_frames: list) -> dict:
+    """
+    Build a speed-indexed friction ellipse from a list of telemetry DataFrames.
+    Returns dict with lat_max, brake_max, throttle_max (all shape (7,)) and speed_bins.
+    Each value is the 95th-percentile ceiling for that speed band.
+    Falls back to _theoretical_ggv_envelope() if fewer than 2 usable frames.
+    """
+    lat_all, long_all, spd_all = [], [], []
+    for tel in telemetry_frames:
+        if any(c not in tel.columns for c in ('Speed', 'X', 'Y')) or len(tel) < 20:
+            continue
+        try:
+            lat_all.append(_compute_lateral_g(tel))
+            long_all.append(_compute_longitudinal_g(tel))
+            spd_all.append(tel['Speed'].to_numpy(dtype=float))
+        except Exception:
+            continue
+
+    if len(lat_all) < 2:
+        return _theoretical_ggv_envelope()
+
+    lat_cat = np.concatenate(lat_all)
+    long_cat = np.concatenate(long_all)
+    spd_cat = np.concatenate(spd_all)
+
+    n_bins = len(_GGV_BIN_EDGES) - 1
+    lat_max = np.zeros(n_bins)
+    brake_max = np.zeros(n_bins)
+    throttle_max = np.zeros(n_bins)
+
+    for i in range(n_bins):
+        mask = (spd_cat >= _GGV_BIN_EDGES[i]) & (spd_cat < _GGV_BIN_EDGES[i + 1])
+        if mask.sum() < 10:
+            lat_max[i] = float(_theoretical_max_g(np.array([_GGV_BIN_CENTERS[i]]))[0])
+            brake_max[i] = lat_max[i] * 1.1
+            throttle_max[i] = lat_max[i] * 0.65
+            continue
+        lat_bin = lat_cat[mask]
+        long_bin = long_cat[mask]
+        lat_max[i] = max(float(np.percentile(np.abs(lat_bin), 95)), 0.5)
+        braking = -long_bin[long_bin < -0.1]
+        brake_max[i] = max(float(np.percentile(braking, 95)), 0.3) if len(braking) >= 5 else lat_max[i] * 1.1
+        throttle = long_bin[long_bin > 0.1]
+        throttle_max[i] = max(float(np.percentile(throttle, 95)), 0.2) if len(throttle) >= 5 else lat_max[i] * 0.65
+
+    return {'lat_max': lat_max, 'brake_max': brake_max,
+            'throttle_max': throttle_max, 'speed_bins': _GGV_BIN_CENTERS}
+
+
+def _theoretical_ggv_envelope() -> dict:
+    """Fallback GGV envelope from the theoretical max lateral formula."""
+    lat = _theoretical_max_g(_GGV_BIN_CENTERS)
+    return {'lat_max': lat, 'brake_max': lat * 1.1,
+            'throttle_max': lat * 0.65, 'speed_bins': _GGV_BIN_CENTERS}
+
+
+def _ggv_ceiling_at_speed(speed_kph: np.ndarray, envelope: dict) -> tuple:
+    """Interpolate (lat_max, brake_max, throttle_max) arrays for given speed array."""
+    bins = envelope['speed_bins']
+    return (
+        np.interp(speed_kph, bins, envelope['lat_max']),
+        np.interp(speed_kph, bins, envelope['brake_max']),
+        np.interp(speed_kph, bins, envelope['throttle_max']),
+    )
+
+
+def _bravery_score(envelope_time: float | None,
+                   throttle_acc: float | None,
+                   entry_bravery: float | None) -> float:
+    """
+    Composite bravery metric (0–100 range).
+    Weights: throttle acceptance 40 %, envelope time 35 %, entry bravery 25 %.
+    """
+    return round(
+        0.35 * (envelope_time or 0.0) +
+        0.40 * (throttle_acc or 0.0) +
+        0.25 * (entry_bravery or 0.0),
+        1,
+    )
+
+
 def _theoretical_max_g(speed_kph: np.ndarray) -> np.ndarray:
     """Speed-dependent theoretical max lateral G for a 2025-spec F1 car."""
     return 2.0 + speed_kph * 0.012

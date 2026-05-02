@@ -2659,6 +2659,63 @@ def test_compute_lateral_g_unit_conversion():
     )
 
 
+def test_build_ggv_envelope_returns_correct_shape():
+    import pandas as pd
+    import numpy as np
+    n = 120
+    t_s = np.linspace(0, 12, n)
+    theta = np.linspace(0, 4 * np.pi, n)
+    tel = pd.DataFrame({
+        'Speed': np.full(n, 150.0),
+        'X': 1000.0 * np.cos(theta),
+        'Y': 1000.0 * np.sin(theta),
+        'Distance': np.linspace(0, 942.0, n),
+        'Time': pd.to_timedelta(t_s, unit='s'),
+        'Source': np.where(np.arange(n) % 4 == 0, 'pos', 'car'),
+    })
+    result = f1_data._build_ggv_envelope([tel, tel])
+    assert set(result.keys()) == {'lat_max', 'brake_max', 'throttle_max', 'speed_bins'}
+    assert len(result['lat_max']) == len(f1_data._GGV_BIN_CENTERS)
+    assert len(result['brake_max']) == len(f1_data._GGV_BIN_CENTERS)
+    assert np.all(result['lat_max'] > 0)
+
+
+def test_build_ggv_envelope_falls_back_when_empty():
+    import numpy as np
+    result = f1_data._build_ggv_envelope([])
+    assert 'lat_max' in result
+    assert len(result['lat_max']) == len(f1_data._GGV_BIN_CENTERS)
+    assert np.all(result['lat_max'] > 0)
+
+
+def test_theoretical_ggv_envelope_brake_exceeds_lateral():
+    import numpy as np
+    result = f1_data._theoretical_ggv_envelope()
+    # Braking G exceeds lateral G (F1 carbon brakes)
+    assert np.all(result['brake_max'] > result['lat_max'] * 0.9)
+
+
+def test_ggv_ceiling_at_speed_returns_correct_shape():
+    import numpy as np
+    envelope = f1_data._theoretical_ggv_envelope()
+    speeds = np.array([100.0, 150.0, 250.0])
+    lat, brake, thr = f1_data._ggv_ceiling_at_speed(speeds, envelope)
+    assert lat.shape == (3,)
+    assert np.all(lat > 0) and np.all(brake > 0) and np.all(thr > 0)
+
+
+def test_bravery_score_formula():
+    score = f1_data._bravery_score(60.0, 50.0, 40.0)
+    # 0.35*60 + 0.40*50 + 0.25*40 = 21 + 20 + 10 = 51
+    assert abs(score - 51.0) < 0.2
+
+
+def test_bravery_score_handles_none():
+    score = f1_data._bravery_score(None, 50.0, 40.0)
+    # None treated as 0: 0.35*0 + 0.40*50 + 0.25*40 = 30
+    assert abs(score - 30.0) < 0.2
+
+
 def _make_corner_arrays(n=60):
     """
     Synthetic corner: speed dips from 200→100→200 kph (apex at midpoint),
