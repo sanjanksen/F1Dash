@@ -56,6 +56,8 @@ from f1_data import (
     analyze_weather_pace_correlation,
     get_fp_summary,
     get_speed_trap_leaderboard,
+    get_sprint_results,
+    get_sprint_qualifying_results,
 )
 from openf1 import get_intervals, get_live_position_timeline, get_team_radio
 
@@ -75,40 +77,48 @@ def _tool(name: str, description: str, properties: dict, required: list[str]) ->
 COMPOSITE_TOOL_DEFINITIONS = [
     _tool(
         "get_driver_race_story",
-        "COMPOSITE RECAP TOOL. Narrative-ready race story for one driver in one round. "
-        "Use this first for broad prompts like 'how did Russell's race go?' or 'talk me through Norris's race'.",
+        "COMPOSITE RECAP TOOL. Narrative-ready race or sprint story for one driver in one round. "
+        "Use this first for broad prompts like 'how did Russell's race go?' or 'how did Norris do in the sprint?'. "
+        "Pass session_type='S' for a sprint race story, session_type='R' (default) for the main race.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
             "driver_name": {"type": "string", "description": "Driver full name, surname, or 3-letter code."},
+            "session_type": {"type": "string", "description": "R (default, main race) or S (sprint race)."},
         },
         ["round_number", "driver_name"],
     ),
     _tool(
         "get_driver_weekend_overview",
         "COMPOSITE RECAP TOOL. High-level factual weekend or race overview for one driver. "
-        "Use this for broad driver recap questions when you want summary structure more than narrative.",
+        "Use this for broad driver recap questions when you want summary structure more than narrative. "
+        "Pass session_type='S' for a sprint overview, session_type='R' (default) for the main race.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
             "driver_name": {"type": "string", "description": "Driver full name, surname, or 3-letter code."},
+            "session_type": {"type": "string", "description": "R (default, main race) or S (sprint race)."},
         },
         ["round_number", "driver_name"],
     ),
     _tool(
         "get_team_weekend_overview",
         "COMPOSITE RECAP TOOL. High-level weekend overview for a team across both drivers. "
-        "Use this first for broad prompts like 'how did Ferrari do this weekend?'.",
+        "Use this first for broad prompts like 'how did Ferrari do this weekend?'. "
+        "Pass session_type='S' for a sprint weekend overview, session_type='R' (default) for the main race.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
             "team_name": {"type": "string", "description": "Current constructor name or close match."},
+            "session_type": {"type": "string", "description": "R (default, main race) or S (sprint race)."},
         },
         ["round_number", "team_name"],
     ),
     _tool(
         "get_race_report",
-        "COMPOSITE RECAP TOOL. Whole-race recap independent of any one driver or team. "
-        "Use this first for broad race recap prompts like 'what happened in the race?'.",
+        "COMPOSITE RECAP TOOL. Whole-race or sprint recap independent of any one driver or team. "
+        "Use this first for broad race recap prompts like 'what happened in the race?' or 'recap the sprint'. "
+        "Pass session_type='S' for a sprint race recap, session_type='R' (default) for the main race.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "session_type": {"type": "string", "description": "R (default, main race) or S (sprint race recap)."},
         },
         ["round_number"],
     ),
@@ -172,6 +182,22 @@ PRIMITIVE_TOOL_DEFINITIONS = [
     _tool(
         "get_qualifying_results",
         "PRIMITIVE TOOL. Raw qualifying classification with Q1/Q2/Q3 times for one round.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+        },
+        ["round_number"],
+    ),
+    _tool(
+        "get_sprint_results",
+        "PRIMITIVE TOOL. Raw sprint race finishing order for one round. Use for sprint race results lookup.",
+        {
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+        },
+        ["round_number"],
+    ),
+    _tool(
+        "get_sprint_qualifying_results",
+        "PRIMITIVE TOOL. Sprint qualifying/shootout classification for one round (SQ1/SQ2/SQ3 segment times).",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
         },
@@ -411,11 +437,13 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
     _tool(
         "analyze_qualifying_battle",
         "DEEP ANALYSIS PRIMITIVE. Backend-derived causal summary for a qualifying battle between two drivers. "
-        "Use this for questions like 'why was Leclerc faster than Norris in quali?' when you need where and why the gap happened, not just the final times.",
+        "Use this for questions like 'why was Leclerc faster than Norris in quali?' when you need where and why the gap happened, not just the final times. "
+        "Pass session_type='SQ' for sprint qualifying/shootout.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
             "driver_a": {"type": "string", "description": "First driver's 3-letter code."},
             "driver_b": {"type": "string", "description": "Second driver's 3-letter code."},
+            "session_type": {"type": "string", "description": "Q (default, regular qualifying) or SQ (sprint qualifying/shootout)."},
         },
         ["round_number", "driver_a", "driver_b"],
     ),
@@ -667,7 +695,7 @@ def execute_tool(name: str, args: dict):
     if name == "get_live_position_timeline":
         return get_live_position_timeline(args["round_number"], args["session_type"], args.get("driver_ref"), args.get("limit", 50))
     if name == "analyze_qualifying_battle":
-        return analyze_qualifying_battle(args["round_number"], args["driver_a"], args["driver_b"])
+        return analyze_qualifying_battle(args["round_number"], args["driver_a"], args["driver_b"], session_type=args.get("session_type", "Q"))
     if name == "get_driver_standings":
         return get_drivers()[:args.get("limit", 20)]
     if name == "get_constructor_standings":
@@ -689,14 +717,18 @@ def execute_tool(name: str, args: dict):
         return get_head_to_head(args["driver_a"], args["driver_b"])
     if name == "get_driver_strategy":
         return get_driver_strategy(args["round_number"], args["session_type"], args.get("driver_code"))
+    if name == "get_sprint_results":
+        return get_sprint_results(args["round_number"])
+    if name == "get_sprint_qualifying_results":
+        return get_sprint_qualifying_results(args["round_number"])
     if name == "get_driver_weekend_overview":
-        return get_driver_weekend_overview(args["round_number"], args["driver_name"])
+        return get_driver_weekend_overview(args["round_number"], args["driver_name"], session_type=args.get("session_type", "R"))
     if name == "get_driver_race_story":
-        return get_driver_race_story(args["round_number"], args["driver_name"])
+        return get_driver_race_story(args["round_number"], args["driver_name"], session_type=args.get("session_type", "R"))
     if name == "get_team_weekend_overview":
-        return get_team_weekend_overview(args["round_number"], args["team_name"])
+        return get_team_weekend_overview(args["round_number"], args["team_name"], session_type=args.get("session_type", "R"))
     if name == "get_race_report":
-        return get_race_report(args["round_number"])
+        return get_race_report(args["round_number"], session_type=args.get("session_type", "R"))
     if name == "get_qualifying_progression":
         return get_qualifying_progression(args["round_number"])
     if name == "get_session_fastest_laps":

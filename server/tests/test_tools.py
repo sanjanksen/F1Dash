@@ -327,3 +327,71 @@ def test_execute_tool_analyze_team_performance():
             "session_type": "Q",
         })
     assert result["team"] == "Ferrari"
+
+
+def test_execute_tool_analyze_team_circuit_fit():
+    mock = {"team_query": "Mercedes", "strongest_fit": {"character": "stop_and_go"}}
+    with patch('tools.analyze_team_circuit_fit', return_value=mock):
+        result = tools.execute_tool("analyze_team_circuit_fit", {
+            "team_name": "Mercedes",
+            "years": [2023, 2024],
+            "session_type": "Q",
+        })
+    assert result["strongest_fit"]["character"] == "stop_and_go"
+
+
+def test_execute_tool_analyze_team_telemetry_traits():
+    mock = {"team": "Mercedes", "trait_flags": ["straight_line_speed"]}
+    with patch('tools.analyze_team_telemetry_traits', return_value=mock):
+        result = tools.execute_tool("analyze_team_telemetry_traits", {
+            "round_number": 3,
+            "team_name": "Mercedes",
+            "session_type": "Q",
+        })
+    assert result["trait_flags"] == ["straight_line_speed"]
+
+
+def test_execute_tool_get_team_car_profile():
+    result = tools.execute_tool("get_team_car_profile", {"team_name": "Ferrari"})
+    assert result["team"] == "Ferrari"
+    assert result["profile_type"] == "curated_editorial"
+
+
+def test_execute_tool_get_team_car_profile_missing_returns_available_false():
+    result = tools.execute_tool("get_team_car_profile", {"team_name": "McLaren"})
+    assert result["available"] is False
+
+
+def test_execute_tool_get_sprint_results():
+    mock = {"session": "S", "race_name": "Chinese Grand Prix", "results": []}
+    with patch('tools.get_sprint_results', return_value=mock):
+        result = tools.execute_tool("get_sprint_results", {"round_number": 5})
+    assert result["session"] == "S"
+
+
+def test_execute_tool_get_sprint_qualifying_results():
+    mock = {"session": "SQ", "race_name": "Chinese Grand Prix", "results": []}
+    with patch('tools.get_sprint_qualifying_results', return_value=mock):
+        result = tools.execute_tool("get_sprint_qualifying_results", {"round_number": 5})
+    assert result["session"] == "SQ"
+
+
+def test_execute_tool_get_driver_race_story_passes_session_type():
+    mock = {"driver": "Lando Norris", "story_points": []}
+    with patch('tools.get_driver_race_story', return_value=mock) as mock_fn:
+        tools.execute_tool("get_driver_race_story", {"round_number": 5, "driver_name": "norris", "session_type": "S"})
+    mock_fn.assert_called_once_with(5, "norris", session_type="S")
+
+
+def test_execute_tool_get_driver_race_story_defaults_to_r():
+    mock = {"driver": "Lando Norris", "story_points": []}
+    with patch('tools.get_driver_race_story', return_value=mock) as mock_fn:
+        tools.execute_tool("get_driver_race_story", {"round_number": 5, "driver_name": "norris"})
+    mock_fn.assert_called_once_with(5, "norris", session_type="R")
+
+
+def test_execute_tool_analyze_qualifying_battle_passes_session_type():
+    mock = {"session": "SQ", "driver_a": "NOR", "driver_b": "PIA"}
+    with patch('tools.analyze_qualifying_battle', return_value=mock) as mock_fn:
+        tools.execute_tool("analyze_qualifying_battle", {"round_number": 5, "driver_a": "NOR", "driver_b": "PIA", "session_type": "SQ"})
+    mock_fn.assert_called_once_with(5, "NOR", "PIA", session_type="SQ")
