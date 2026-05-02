@@ -2564,7 +2564,7 @@ def test_get_race_report_uses_sprint_data_when_session_type_s():
 # _compute_longitudinal_g tests
 # ---------------------------------------------------------------------------
 
-def _make_tel_df(speeds_kph, times_s=None):
+def _make_longitudinal_tel_df(speeds_kph, times_s=None):
     """Helper: build a minimal telemetry DataFrame with Speed and Time."""
     import pandas as pd
     import numpy as np
@@ -2583,7 +2583,7 @@ def _make_tel_df(speeds_kph, times_s=None):
 def test_compute_longitudinal_g_output_shape():
     import numpy as np
     speeds = np.ones(100) * 200.0
-    tel = _make_tel_df(speeds)
+    tel = _make_longitudinal_tel_df(speeds)
     result = f1_data._compute_longitudinal_g(tel)
     assert result.shape == (100,)
 
@@ -2593,7 +2593,7 @@ def test_compute_longitudinal_g_braking_is_negative():
     # Linearly decelerating from 200 to 100 kph over 1 second
     speeds = np.linspace(200.0, 100.0, 50)
     times_s = np.linspace(0.0, 1.0, 50)
-    tel = _make_tel_df(speeds, times_s)
+    tel = _make_longitudinal_tel_df(speeds, times_s)
     result = f1_data._compute_longitudinal_g(tel)
     # Most samples should be negative (braking)
     assert np.mean(result) < -0.5
@@ -2604,7 +2604,7 @@ def test_compute_longitudinal_g_acceleration_is_positive():
     # Linearly accelerating from 100 to 200 kph over 1 second
     speeds = np.linspace(100.0, 200.0, 50)
     times_s = np.linspace(0.0, 1.0, 50)
-    tel = _make_tel_df(speeds, times_s)
+    tel = _make_longitudinal_tel_df(speeds, times_s)
     result = f1_data._compute_longitudinal_g(tel)
     assert np.mean(result) > 0.5
 
