@@ -5212,7 +5212,9 @@ def _detect_corners(lat_g: np.ndarray, dist: np.ndarray,
 
 
 def _corner_metrics(lat_g: np.ndarray, long_g: np.ndarray, speed_kph: np.ndarray,
-                    dist: np.ndarray, start: int, end: int) -> dict:
+                    dist: np.ndarray, start: int, end: int,
+                    envelope: dict | None = None,
+                    throttle: np.ndarray | None = None) -> dict:
     seg_g = lat_g[start:end + 1]
     seg_lg = long_g[start:end + 1]
     seg_v = speed_kph[start:end + 1]
@@ -5241,6 +5243,47 @@ def _corner_metrics(lat_g: np.ndarray, long_g: np.ndarray, speed_kph: np.ndarray
     # Circle fullness: % of ALL corner samples where combined_util > 0.75
     circle_fullness_pct = round(float(np.mean(combined_util > 0.75) * 100), 1)
 
+    # --- GGV-based metrics (only when envelope is provided) ---
+    if envelope is not None:
+        lat_ceil, brake_ceil, thr_ceil = _ggv_ceiling_at_speed(seg_v, envelope)
+        safe_lat = np.where(lat_ceil < 0.1, 0.1, lat_ceil)
+        long_ceil = np.where(
+            seg_lg < 0.0,
+            np.where(brake_ceil < 0.1, 0.1, brake_ceil),
+            np.where(thr_ceil < 0.1, 0.1, thr_ceil),
+        )
+        ggv_util = np.clip(
+            np.sqrt((seg_g / safe_lat) ** 2 + (seg_lg / long_ceil) ** 2),
+            0.0, 1.5,
+        )
+        ggv_util_pct = round(float(np.mean(ggv_util) * 100), 1)
+        envelope_time_pct = round(float(np.mean(ggv_util >= 0.85) * 100), 1)
+
+        # Throttle acceptance: exit phase (apex→end), full throttle + lateral load > 60% ceiling
+        exit_s = max(apex_idx_local, 0)
+        exit_lat = seg_g[exit_s:]
+        exit_lat_ceil = safe_lat[exit_s:]
+        lat_loaded = (exit_lat / exit_lat_ceil) > 0.60
+        if throttle is not None:
+            seg_thr = throttle[start:end + 1]
+            full_throttle = seg_thr[exit_s:] > 90.0
+        else:
+            full_throttle = seg_lg[exit_s:] > 0.3  # proxy: net positive acceleration
+        ta_mask = full_throttle & lat_loaded
+        throttle_acceptance_pct = round(float(np.mean(ta_mask) * 100), 1) if len(ta_mask) > 0 else 0.0
+
+        # Entry bravery: entry phase (start→apex), ggv_util >= 0.80 AND still braking
+        entry_end_idx = max(apex_idx_local, 1)
+        entry_ggv = ggv_util[:entry_end_idx]
+        entry_long = seg_lg[:entry_end_idx]
+        brave_mask = (entry_ggv >= 0.80) & (entry_long < -0.3)
+        entry_bravery_pct = round(float(np.mean(brave_mask) * 100), 1) if len(brave_mask) > 0 else 0.0
+    else:
+        ggv_util_pct = None
+        envelope_time_pct = None
+        throttle_acceptance_pct = None
+        entry_bravery_pct = None
+
     # count sign changes in d(lat_g) as a proxy for steering corrections
     dlg = np.gradient(seg_g)
     sign_changes = int(np.sum(np.diff(np.sign(dlg)) != 0))
@@ -5260,6 +5303,10 @@ def _corner_metrics(lat_g: np.ndarray, long_g: np.ndarray, speed_kph: np.ndarray
         "circle_fullness_pct": circle_fullness_pct,
         "entry_dist_m": round(float(seg_dist[0]), 0),
         "exit_dist_m": round(float(seg_dist[-1]), 0),
+        "ggv_util_pct": ggv_util_pct,
+        "envelope_time_pct": envelope_time_pct,
+        "throttle_acceptance_pct": throttle_acceptance_pct,
+        "entry_bravery_pct": entry_bravery_pct,
     }
 
 
