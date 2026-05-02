@@ -551,6 +551,7 @@ def get_race_results(round_number: int) -> dict:
         "race_name": race["raceName"],
         "circuit": race["Circuit"]["circuitName"],
         "date": race.get("date", ""),
+        "session": "R",
         "results": [
             {
                 "position": int(r["position"]) if r["position"].isdigit() else None,
@@ -580,6 +581,7 @@ def get_qualifying_results(round_number: int) -> dict:
     return {
         "race_name": race["raceName"],
         "date": race.get("date", ""),
+        "session": "Q",
         "results": [
             {
                 "position": int(r["position"]),
@@ -629,7 +631,7 @@ def get_sprint_results(round_number: int) -> dict:
 def get_sprint_qualifying_results(round_number: int) -> dict:
     """Return sprint qualifying/shootout classification via FastF1."""
     try:
-        session = _load_session(round_number, "SQ", laps=True, telemetry=False, weather=False, messages=False)
+        session = _load_session(round_number, "SQ", laps=False, telemetry=False, weather=False, messages=False)
     except Exception as exc:
         raise ValueError(f"Sprint qualifying data unavailable for round {round_number}: {exc}") from exc
     rows = _session_results_rows(session)
