@@ -500,8 +500,10 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
         "analyze_cornering_loads",
         "DEEP ANALYSIS PRIMITIVE. Compute lateral G and grip utilisation for two drivers across all corners of their fastest laps, "
         "using curvature derived from X/Y position telemetry. Returns per-corner stats (peak G, apex G, load variance, "
-        "steering correction count, % time above 90% theoretical grip) plus an overall summary and a human-readable narrative "
-        "like 'Piastri was above 90% grip for 34% of cornering time vs Norris's 26%'. "
+        "steering correction count, % time above 90% theoretical grip) plus an overall summary and a human-readable narrative. "
+        "Also returns: combined grip utilisation % (lat+long vector vs theoretical max), "
+        "trail brake % at corner entry (% of entry where braking and cornering overlap), "
+        "circle fullness % (% of cornering time near the combined grip ceiling). "
         "Use this for qualifying / single-lap grip style comparisons.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
@@ -518,7 +520,8 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
         "DEEP ANALYSIS PRIMITIVE. Compute lateral G and grip utilisation aggregated across an ENTIRE RACE for two drivers. "
         "Processes every clean race lap (pit laps excluded) and returns overall summary stats plus a per-stint breakdown. "
         "Use this when asked about race-long grip usage, tyre stress, or who pushes harder through corners over a full race distance. "
-        "Returns: avg corner grip utilisation %, % cornering time above 90% grip, corrections per corner, load variance per stint.",
+        "Returns: avg corner grip utilisation %, % cornering time above 90% grip, corrections per corner, load variance per stint, "
+        "combined grip utilisation % (lat+long vector), trail brake % at corner entry, circle fullness % per stint and overall.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
             "driver_a": {"type": "string", "description": "First driver's 3-letter code."},
@@ -691,7 +694,7 @@ def execute_tool(name: str, args: dict):
     if name == "get_team_radio":
         return get_team_radio(args["round_number"], args["session_type"], args.get("driver_ref"), args.get("limit", 10))
     if name == "get_intervals":
-        return get_intervals(args["round_number"], args.get("driver_ref"), args.get("limit", 25))
+        return get_intervals(args["round_number"], args.get("driver_ref"), args.get("limit", 25), args.get("session_type", "R"))
     if name == "get_live_position_timeline":
         return get_live_position_timeline(args["round_number"], args["session_type"], args.get("driver_ref"), args.get("limit", 50))
     if name == "analyze_qualifying_battle":
