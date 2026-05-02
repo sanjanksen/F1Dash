@@ -5107,7 +5107,7 @@ def _build_ggv_envelope(telemetry_frames: list) -> dict:
     """
     lat_all, long_all, spd_all = [], [], []
     for tel in telemetry_frames:
-        if any(c not in tel.columns for c in ('Speed', 'X', 'Y')) or len(tel) < 20:
+        if any(c not in tel.columns for c in ('Speed', 'X', 'Y', 'Time')) or len(tel) < 20:
             continue
         try:
             lat_all.append(_compute_lateral_g(tel))
@@ -5171,12 +5171,12 @@ def _bravery_score(envelope_time: float | None,
     Composite bravery metric (0–100 range).
     Weights: throttle acceptance 40 %, envelope time 35 %, entry bravery 25 %.
     """
-    return round(
+    raw = (
         0.35 * (envelope_time or 0.0) +
         0.40 * (throttle_acc or 0.0) +
-        0.25 * (entry_bravery or 0.0),
-        1,
+        0.25 * (entry_bravery or 0.0)
     )
+    return round(max(0.0, min(100.0, raw)), 1)
 
 
 def _theoretical_max_g(speed_kph: np.ndarray) -> np.ndarray:
