@@ -526,3 +526,21 @@ def test_speed_trap_scope_straight_line_language(mock_circuits, mock_drivers):
     result = resolver.resolve_query_context("who was fastest down the straight in the race at Suzuka?")
     assert result["scope"] == "speed_trap"
     assert result["suggested_tool"] == "get_speed_trap_leaderboard"
+
+
+def test_suggest_tool_sprint_race_driver_entity():
+    from resolver import _suggest_tool
+    result = _suggest_tool("driver", "overview", "S")
+    assert result == "get_driver_race_story"
+
+
+def test_suggest_tool_sprint_qualifying_standalone():
+    from resolver import _suggest_tool
+    result = _suggest_tool(None, "qualifying", "SQ")
+    assert result == "get_sprint_qualifying_results"
+
+
+def test_suggest_tool_sprint_race_no_entity():
+    from resolver import _suggest_tool
+    result = _suggest_tool(None, "race_report", "S")
+    assert result == "get_race_report"

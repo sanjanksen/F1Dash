@@ -393,6 +393,8 @@ def _suggest_tool(entity_type: str | None, scope: str | None, session_type: str 
         return "analyze_stint_degradation"
     # Note: scope == "standings" is handled inline in _base_context because
     # it needs the raw normalized message to distinguish driver vs constructor.
+    if session_type == "SQ" and entity_type is None:
+        return "get_sprint_qualifying_results"
     if entity_type == "driver":
         # Qualifying questions must not route to race-only tools
         if session_type == "Q":
