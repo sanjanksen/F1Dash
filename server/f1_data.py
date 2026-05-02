@@ -5519,7 +5519,6 @@ def analyze_cornering_loads(round_number: int, session_type: str,
         high_util_corners_a = high_util_corners_b = 0
 
     narrative_parts = []
-    lower_var_driver = code_b if higher_var_driver == code_a else code_a
 
     # --- Confidence / commitment on this lap ---
     if abs_util_diff >= 1.0:
@@ -5539,8 +5538,8 @@ def analyze_cornering_loads(round_number: int, session_type: str,
 
     # --- Time on the absolute limit: fully committed, no safety net ---
     if abs_above90_diff >= 1.0:
-        at_limit_driver = higher_util_driver if above90_diff > 0 else lower_util_driver
-        other_driver = lower_util_driver if above90_diff > 0 else higher_util_driver
+        at_limit_driver = code_a if above90_diff > 0 else code_b
+        other_driver = code_b if above90_diff > 0 else code_a
         at_limit_pct = sum_a['pct_time_above_90pct_grip'] if at_limit_driver == code_a else sum_b['pct_time_above_90pct_grip']
         other_pct = sum_b['pct_time_above_90pct_grip'] if at_limit_driver == code_a else sum_a['pct_time_above_90pct_grip']
         narrative_parts.append(
