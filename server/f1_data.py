@@ -5393,10 +5393,31 @@ def analyze_cornering_loads(round_number: int, session_type: str,
     long_g_a = _compute_longitudinal_g(tel_a)
     long_g_b = _compute_longitudinal_g(tel_b)
 
+    # Build shared GGV envelope from fastest laps of both drivers in this session.
+    def _collect_session_tels(code: str, n_laps: int = 6) -> list:
+        laps_for_code = _pick_driver(session.laps, code)
+        if laps_for_code.empty:
+            return []
+        valid = laps_for_code[laps_for_code['LapTime'].notna()].nsmallest(n_laps, 'LapTime')
+        tels = []
+        for _, lap_row in valid.iterrows():
+            try:
+                t = lap_row.get_telemetry().add_distance()
+                if len(t) >= 20:
+                    tels.append(t)
+            except Exception:
+                continue
+        return tels
+
+    envelope = _build_ggv_envelope(_collect_session_tels(code_a) + _collect_session_tels(code_b))
+
     g_max_a = _theoretical_max_g(spd_a)
     g_max_b = _theoretical_max_g(spd_b)
     util_a = np.clip(lat_g_a / np.where(g_max_a < 0.1, 0.1, g_max_a), 0.0, 1.0)
     util_b = np.clip(lat_g_b / np.where(g_max_b < 0.1, 0.1, g_max_b), 0.0, 1.0)
+
+    throttle_a = tel_a['Throttle'].to_numpy(dtype=float) if 'Throttle' in tel_a.columns else None
+    throttle_b = tel_b['Throttle'].to_numpy(dtype=float) if 'Throttle' in tel_b.columns else None
 
     corners_a = _detect_corners(lat_g_a, dist_a)
     corners_b = _detect_corners(lat_g_b, dist_b)
@@ -5405,8 +5426,10 @@ def analyze_cornering_loads(round_number: int, session_type: str,
 
     per_corner = []
     for i, (ca, cb) in enumerate(aligned):
-        ma = _corner_metrics(lat_g_a, long_g_a, spd_a, dist_a, ca[0], ca[1])
-        mb = _corner_metrics(lat_g_b, long_g_b, spd_b, dist_b, cb[0], cb[1])
+        ma = _corner_metrics(lat_g_a, long_g_a, spd_a, dist_a, ca[0], ca[1],
+                             envelope=envelope, throttle=throttle_a)
+        mb = _corner_metrics(lat_g_b, long_g_b, spd_b, dist_b, cb[0], cb[1],
+                             envelope=envelope, throttle=throttle_b)
         per_corner.append({
             "corner_index": i + 1,
             "entry_dist_m": int(ma["entry_dist_m"]),
@@ -5419,6 +5442,10 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             "combined_util_delta_pct": round(ma["combined_util_pct"] - mb["combined_util_pct"], 1),
             "trail_brake_delta_pct": round(ma["trail_brake_pct"] - mb["trail_brake_pct"], 1),
             "circle_fullness_delta_pct": round(ma["circle_fullness_pct"] - mb["circle_fullness_pct"], 1),
+            "ggv_util_delta_pct": round((ma.get("ggv_util_pct") or 0.0) - (mb.get("ggv_util_pct") or 0.0), 1),
+            "envelope_time_delta_pct": round((ma.get("envelope_time_pct") or 0.0) - (mb.get("envelope_time_pct") or 0.0), 1),
+            "throttle_acceptance_delta_pct": round((ma.get("throttle_acceptance_pct") or 0.0) - (mb.get("throttle_acceptance_pct") or 0.0), 1),
+            "entry_bravery_delta_pct": round((ma.get("entry_bravery_pct") or 0.0) - (mb.get("entry_bravery_pct") or 0.0), 1),
         })
 
     # Summary stats
@@ -5446,8 +5473,14 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             avg_combined = round(sum(c[code]["combined_util_pct"] for c in per_corner) / len(per_corner), 1)
             avg_trail = round(sum(c[code]["trail_brake_pct"] for c in per_corner) / len(per_corner), 1)
             avg_fullness = round(sum(c[code]["circle_fullness_pct"] for c in per_corner) / len(per_corner), 1)
+            avg_ggv = round(float(np.mean([c[code].get("ggv_util_pct") or 0.0 for c in per_corner])), 1)
+            avg_env_time = round(float(np.mean([c[code].get("envelope_time_pct") or 0.0 for c in per_corner])), 1)
+            avg_ta = round(float(np.mean([c[code].get("throttle_acceptance_pct") or 0.0 for c in per_corner])), 1)
+            avg_eb = round(float(np.mean([c[code].get("entry_bravery_pct") or 0.0 for c in per_corner])), 1)
+            bscore = _bravery_score(avg_env_time, avg_ta, avg_eb)
         else:
             avg_combined = avg_trail = avg_fullness = None
+            avg_ggv = avg_env_time = avg_ta = avg_eb = bscore = None
         return {
             "avg_grip_utilisation_pct": avg_util,
             "pct_time_above_90pct_grip": pct_above_90,
@@ -5458,6 +5491,11 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             "avg_combined_util_pct": avg_combined,
             "avg_trail_brake_pct": avg_trail,
             "avg_circle_fullness_pct": avg_fullness,
+            "avg_ggv_util_pct": avg_ggv,
+            "avg_envelope_time_pct": avg_env_time,
+            "avg_throttle_acceptance_pct": avg_ta,
+            "avg_entry_bravery_pct": avg_eb,
+            "bravery_score": bscore,
         }
 
     sum_a = _summary(util_a, lat_g_a, code_a, corners_a, spd_a)
@@ -5575,6 +5613,49 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             narrative_parts.append(
                 f"Neither driver was trail braking meaningfully — both finishing braking before turn-in."
             )
+
+    # --- GGV utilisation (empirical envelope) ---
+    ggv_a = sum_a.get("avg_ggv_util_pct") or 0.0
+    ggv_b = sum_b.get("avg_ggv_util_pct") or 0.0
+    if ggv_a and ggv_b and abs(ggv_a - ggv_b) >= 2.0:
+        higher_ggv = code_a if ggv_a >= ggv_b else code_b
+        lower_ggv = code_b if higher_ggv == code_a else code_a
+        narrative_parts.append(
+            f"Against the car's empirical grip ceiling — what this car on these tyres has been "
+            f"shown to do in this session — {higher_ggv} used {max(ggv_a, ggv_b):.1f}% of that "
+            f"envelope vs {lower_ggv}'s {min(ggv_a, ggv_b):.1f}%. "
+            f"{higher_ggv} was asking more of what the car can actually produce."
+        )
+
+    # --- Throttle acceptance (exit bravery) ---
+    ta_a = sum_a.get("avg_throttle_acceptance_pct") or 0.0
+    ta_b = sum_b.get("avg_throttle_acceptance_pct") or 0.0
+    if abs(ta_a - ta_b) >= 5.0:
+        braver_exit = code_a if ta_a >= ta_b else code_b
+        cautious_exit = code_b if braver_exit == code_a else code_a
+        narrative_parts.append(
+            f"{braver_exit} was committing to full power earlier at corner exits — still carrying "
+            f"heavy lateral load in {max(ta_a, ta_b):.1f}% of exits vs {min(ta_a, ta_b):.1f}% "
+            f"for {cautious_exit}. That's asking the rear tyre to drive the car forward and corner "
+            f"simultaneously — the brave part of the exit."
+        )
+    elif max(ta_a, ta_b) < 5.0:
+        narrative_parts.append(
+            f"Neither driver was particularly aggressive at exit — both waiting for the car to "
+            f"settle before committing to power."
+        )
+
+    # --- Bravery score ---
+    bs_a = sum_a.get("bravery_score") or 0.0
+    bs_b = sum_b.get("bravery_score") or 0.0
+    if bs_a and bs_b and abs(bs_a - bs_b) >= 3.0:
+        braver = code_a if bs_a >= bs_b else code_b
+        cautious = code_b if braver == code_a else code_a
+        narrative_parts.append(
+            f"Across all bravery dimensions — envelope proximity, exit commitment, and near-limit "
+            f"entries — {braver} scores {max(bs_a, bs_b):.1f} vs {cautious}'s {min(bs_a, bs_b):.1f} "
+            f"(0–100 scale)."
+        )
 
     return {
         "event": session.event['EventName'],

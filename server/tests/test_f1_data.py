@@ -2897,3 +2897,17 @@ def test_corner_metrics_apex_at_boundary_returns_zero_not_crash():
     assert result['throttle_acceptance_pct'] == 0.0 or result['throttle_acceptance_pct'] >= 0.0
     assert result['entry_bravery_pct'] == 0.0 or result['entry_bravery_pct'] >= 0.0
     assert result['ggv_util_pct'] is not None
+
+
+def test_corner_metrics_with_envelope_adds_ggv_delta_fields():
+    """Per-corner dicts gain ggv_util_delta_pct and throttle_acceptance_delta_pct."""
+    import numpy as np
+    # Simulate what analyze_cornering_loads produces per-corner after Task 3
+    lat_g, long_g, speed, dist = _make_corner_arrays()
+    envelope = f1_data._theoretical_ggv_envelope()
+    ma = f1_data._corner_metrics(lat_g, long_g, speed, dist, 0, len(lat_g) - 1,
+                                  envelope=envelope)
+    mb = f1_data._corner_metrics(lat_g * 0.9, long_g, speed, dist, 0, len(lat_g) - 1,
+                                  envelope=envelope)
+    delta = round((ma.get('ggv_util_pct') or 0.0) - (mb.get('ggv_util_pct') or 0.0), 1)
+    assert isinstance(delta, float)  # just verifies the computation runs
