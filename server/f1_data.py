@@ -5255,6 +5255,8 @@ def analyze_cornering_loads(round_number: int, session_type: str,
 
     lat_g_a = _compute_lateral_g(tel_a)
     lat_g_b = _compute_lateral_g(tel_b)
+    long_g_a = _compute_longitudinal_g(tel_a)
+    long_g_b = _compute_longitudinal_g(tel_b)
 
     g_max_a = _theoretical_max_g(spd_a)
     g_max_b = _theoretical_max_g(spd_b)
@@ -5268,8 +5270,8 @@ def analyze_cornering_loads(round_number: int, session_type: str,
 
     per_corner = []
     for i, (ca, cb) in enumerate(aligned):
-        ma = _corner_metrics(lat_g_a, spd_a, dist_a, ca[0], ca[1])
-        mb = _corner_metrics(lat_g_b, spd_b, dist_b, cb[0], cb[1])
+        ma = _corner_metrics(lat_g_a, long_g_a, spd_a, dist_a, ca[0], ca[1])
+        mb = _corner_metrics(lat_g_b, long_g_b, spd_b, dist_b, cb[0], cb[1])
         per_corner.append({
             "corner_index": i + 1,
             "entry_dist_m": int(ma["entry_dist_m"]),
@@ -5279,6 +5281,9 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             "mean_grip_util_delta_pct": round(ma["mean_grip_util_pct"] - mb["mean_grip_util_pct"], 1),
             "load_variance_delta": round(ma["load_variance"] - mb["load_variance"], 3),
             "corrections_delta": ma["correction_count"] - mb["correction_count"],
+            "combined_util_delta_pct": round(ma["combined_util_pct"] - mb["combined_util_pct"], 1),
+            "trail_brake_delta_pct": round(ma["trail_brake_pct"] - mb["trail_brake_pct"], 1),
+            "circle_fullness_delta_pct": round(ma["circle_fullness_pct"] - mb["circle_fullness_pct"], 1),
         })
 
     # Summary stats
@@ -5302,6 +5307,12 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             avg_var = round(sum(c[code]["load_variance"] for c in per_corner) / len(per_corner), 3)
         else:
             avg_var = None
+        if per_corner:
+            avg_combined = round(sum(c[code]["combined_util_pct"] for c in per_corner) / len(per_corner), 1)
+            avg_trail = round(sum(c[code]["trail_brake_pct"] for c in per_corner) / len(per_corner), 1)
+            avg_fullness = round(sum(c[code]["circle_fullness_pct"] for c in per_corner) / len(per_corner), 1)
+        else:
+            avg_combined = avg_trail = avg_fullness = None
         return {
             "avg_grip_utilisation_pct": avg_util,
             "pct_time_above_90pct_grip": pct_above_90,
@@ -5309,6 +5320,9 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             "corners_detected": len(corners),
             "avg_corrections_per_corner": avg_corr,
             "avg_load_variance": avg_var,
+            "avg_combined_util_pct": avg_combined,
+            "avg_trail_brake_pct": avg_trail,
+            "avg_circle_fullness_pct": avg_fullness,
         }
 
     sum_a = _summary(util_a, lat_g_a, code_a, corners_a, spd_a)
@@ -5396,6 +5410,36 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             f"of the {len(per_corner)} matched corners; "
             f"{lower_util_driver} in {high_util_corners_b if higher_util_driver == code_a else high_util_corners_a}."
         )
+
+    # --- Combined grip commitment (lat + long vector) ---
+    comb_a = sum_a.get("avg_combined_util_pct") or 0.0
+    comb_b = sum_b.get("avg_combined_util_pct") or 0.0
+    if comb_a and comb_b and abs(comb_a - comb_b) >= 1.0:
+        higher_comb = code_a if comb_a >= comb_b else code_b
+        lower_comb = code_b if higher_comb == code_a else code_a
+        narrative_parts.append(
+            f"Factoring braking in alongside cornering, {higher_comb} was using more of the total grip envelope — "
+            f"{max(comb_a, comb_b):.1f}% of combined capability vs {min(comb_a, comb_b):.1f}% for {lower_comb}. "
+            f"The braking load was doing real work on top of the cornering commitment."
+        )
+
+    # --- Trail braking signature ---
+    tb_a = sum_a.get("avg_trail_brake_pct") or 0.0
+    tb_b = sum_b.get("avg_trail_brake_pct") or 0.0
+    if tb_a or tb_b:
+        if abs(tb_a - tb_b) >= 5.0:
+            higher_tb = code_a if tb_a >= tb_b else code_b
+            lower_tb = code_b if higher_tb == code_a else code_a
+            narrative_parts.append(
+                f"{higher_tb} was carrying the brake deep into the corner — "
+                f"still on the pedal at turn-in for {max(tb_a, tb_b):.1f}% of the entry phase, "
+                f"using it to rotate the car. {lower_tb} finished braking earlier ({min(tb_a, tb_b):.1f}%), "
+                f"turning in on a cleaner line."
+            )
+        elif max(tb_a, tb_b) < 5.0:
+            narrative_parts.append(
+                f"Neither driver was trail braking meaningfully — both finishing braking before turn-in."
+            )
 
     return {
         "event": session.event['EventName'],
