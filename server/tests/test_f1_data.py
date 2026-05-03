@@ -2927,4 +2927,3 @@ def test_aggregate_lap_cornering_stats_ggv_fields_with_envelope():
     assert 'avg_envelope_time_pct' in result
     assert 'avg_throttle_acceptance_pct' in result
     assert 'avg_entry_bravery_pct' in result
-    assert 'bravery_score' in result

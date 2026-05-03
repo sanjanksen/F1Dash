@@ -213,64 +213,90 @@ function StylePanel({ style, driverA, driverB }) {
   )
 }
 
-function GripCommitmentPanel({ grip, driverA, driverB }) {
-  if (!grip?.metrics) return null
-  const rows = [
-    { code: driverA, data: grip.metrics[driverA] },
-    { code: driverB, data: grip.metrics[driverB] },
-  ].filter((row) => row.data)
+function formatRowVal(val, fmt) {
+  if (val == null) return '—'
+  if (fmt === 'pct') return `${Number(val).toFixed(1)}%`
+  if (fmt === 'count') return Number(val).toFixed(1)
+  if (fmt === 'raw3') return Number(val).toFixed(3)
+  return String(val)
+}
 
-  if (rows.length === 0) return null
+function CornerAnalysisPanel({ grip, driverA, driverB }) {
+  if (!grip) return null
+
+  const committed = grip.more_committed_driver
+  const cleaner   = grip.cleaner_driver
+
+  const commitmentRows = (grip.data_rows || []).filter((r) => r.group === 'commitment')
+  const techniqueRows  = (grip.data_rows || []).filter((r) => r.group === 'technique')
+  const hasTable = commitmentRows.length > 0 || techniqueRows.length > 0
 
   return (
     <section className="py-4">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h4 className="text-sm font-medium text-foreground">Grip confidence</h4>
-        <div className="text-xs text-muted-foreground">Derived from cornering load</div>
+        <h4 className="text-sm font-medium text-foreground">Corner analysis</h4>
+        <div className="text-xs text-muted-foreground">From cornering load data</div>
       </div>
 
       {grip.confidence_read ? (
         <div className="mt-2 text-sm leading-6 text-foreground">{grip.confidence_read}</div>
       ) : null}
 
-      <div className="mt-4 grid gap-px bg-border/70 sm:grid-cols-2">
-        {rows.map(({ code, data }) => {
-          const braver = grip.braver_driver === code
-          const atLimit = grip.limit_driver === code
-          const smooth = grip.smooth_driver === code
-
-          return (
-            <div key={code} className="bg-background py-3 sm:px-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant={braver || atLimit ? 'accent' : 'muted'}>{code}</Badge>
-                {braver ? <span className="text-xs text-muted-foreground">braver</span> : null}
-                {atLimit ? <span className="text-xs text-muted-foreground">more at the limit</span> : null}
-                {smooth ? <span className="text-xs text-muted-foreground">cleaner arc</span> : null}
-              </div>
-              <div className="mt-3 grid grid-cols-3 gap-3">
-                <div>
-                  <div className="font-mono-data text-sm font-semibold text-foreground">
-                    {formatPct(data.avg_ggv_util_pct)}
-                  </div>
-                  <div className="mt-1 text-[11px] leading-4 text-muted-foreground">of car's limit</div>
-                </div>
-                <div>
-                  <div className="font-mono-data text-sm font-semibold text-foreground">
-                    {formatPct(data.avg_throttle_acceptance_pct)}
-                  </div>
-                  <div className="mt-1 text-[11px] leading-4 text-muted-foreground">exits: power while cornering</div>
-                </div>
-                <div>
-                  <div className="font-mono-data text-sm font-semibold text-foreground">
-                    {formatPct(data.avg_entry_bravery_pct)}
-                  </div>
-                  <div className="mt-1 text-[11px] leading-4 text-muted-foreground">entries: braking deep</div>
-                </div>
-              </div>
-            </div>
-          )
-        })}
+      {/* Driver summary badges */}
+      <div className="mt-3 flex flex-wrap gap-4">
+        {[driverA, driverB].map((code) => (
+          <div key={code} className="flex items-center gap-2">
+            <Badge variant={committed === code ? 'accent' : 'muted'}>{code}</Badge>
+            {committed === code ? <span className="text-xs text-muted-foreground">more committed</span> : null}
+            {cleaner === code && committed !== code ? <span className="text-xs text-muted-foreground">cleaner arc</span> : null}
+            {cleaner === code && committed === code ? <span className="text-xs text-muted-foreground">committed + clean</span> : null}
+          </div>
+        ))}
       </div>
+
+      {/* Grouped data table */}
+      {hasTable && (
+        <div className="mt-4 space-y-4">
+          {[
+            { key: 'commitment', label: 'Commitment — how hard they asked the car', rows: commitmentRows },
+            { key: 'technique',  label: 'Technique — how cleanly they executed',    rows: techniqueRows  },
+          ].map(({ key, label, rows }) =>
+            rows.length === 0 ? null : (
+              <div key={key}>
+                <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  {label}
+                </div>
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-border/40">
+                      <th className="pb-1 text-left text-[11px] font-normal text-muted-foreground w-1/2">Metric</th>
+                      <th className="pb-1 text-right text-[11px] font-normal text-muted-foreground">{driverA}</th>
+                      <th className="pb-1 text-right text-[11px] font-normal text-muted-foreground">{driverB}</th>
+                      <th className="pb-1 text-right text-[11px] font-normal text-muted-foreground">Edge</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row, i) => (
+                      <tr key={i} className="border-b border-border/20 last:border-0">
+                        <td className="py-1.5 text-[11px] text-muted-foreground">{row.label}</td>
+                        <td className={`py-1.5 text-right font-mono-data text-xs tabular-nums ${row.edge === driverA ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>
+                          {formatRowVal(row.a, row.format)}
+                        </td>
+                        <td className={`py-1.5 text-right font-mono-data text-xs tabular-nums ${row.edge === driverB ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>
+                          {formatRowVal(row.b, row.format)}
+                        </td>
+                        <td className="py-1.5 text-right text-[11px] text-muted-foreground">
+                          {row.edge ? `${row.edge} — ${row.edge_label}` : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          )}
+        </div>
+      )}
     </section>
   )
 }
@@ -453,7 +479,7 @@ export default function QualifyingBattleWidget({ widget }) {
                 ) : null}
 
                 {widget.grip_commitment ? (
-                  <GripCommitmentPanel grip={widget.grip_commitment} driverA={driverA} driverB={driverB} />
+                  <CornerAnalysisPanel grip={widget.grip_commitment} driverA={driverA} driverB={driverB} />
                 ) : null}
 
                 {widget.style_comparison ? <StylePanel style={widget.style_comparison} driverA={driverA} driverB={driverB} /> : null}

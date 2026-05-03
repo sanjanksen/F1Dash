@@ -5434,9 +5434,8 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             avg_env_time = round(float(np.mean([c[code].get("envelope_time_pct") or 0.0 for c in per_corner])), 1)
             avg_ta = round(float(np.mean([c[code].get("throttle_acceptance_pct") or 0.0 for c in per_corner])), 1)
             avg_eb = round(float(np.mean([c[code].get("entry_bravery_pct") or 0.0 for c in per_corner])), 1)
-            bscore = _bravery_score(avg_env_time, avg_ta, avg_eb)
         else:
-            avg_trail = avg_ggv = avg_env_time = avg_ta = avg_eb = bscore = None
+            avg_trail = avg_ggv = avg_env_time = avg_ta = avg_eb = None
         return {
             "peak_lateral_g": peak_g,
             "corners_detected": len(corners),
@@ -5447,7 +5446,6 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             "avg_envelope_time_pct": avg_env_time,
             "avg_throttle_acceptance_pct": avg_ta,
             "avg_entry_bravery_pct": avg_eb,
-            "bravery_score": bscore,
         }
 
     sum_a = _summary(lat_g_a, code_a, corners_a)
@@ -5547,18 +5545,6 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             f"settle before committing to power."
         )
 
-    # --- Bravery score ---
-    bs_a = sum_a.get("bravery_score") or 0.0
-    bs_b = sum_b.get("bravery_score") or 0.0
-    if bs_a and bs_b and abs(bs_a - bs_b) >= 3.0:
-        braver = code_a if bs_a >= bs_b else code_b
-        cautious = code_b if braver == code_a else code_a
-        narrative_parts.append(
-            f"Across all bravery dimensions — envelope proximity, exit commitment, and near-limit "
-            f"entries — {braver} scores {max(bs_a, bs_b):.1f} vs {cautious}'s {min(bs_a, bs_b):.1f} "
-            f"(0–100 scale)."
-        )
-
     return {
         "event": session.event['EventName'],
         "session": session_type.upper(),
@@ -5632,11 +5618,6 @@ def _aggregate_lap_cornering_stats(tel: pd.DataFrame, envelope: dict | None = No
             "avg_envelope_time_pct": round(float(np.mean(corner_env_time)), 1) if corner_env_time else None,
             "avg_throttle_acceptance_pct": round(float(np.mean(corner_throttle_acc)), 1) if corner_throttle_acc else None,
             "avg_entry_bravery_pct": round(float(np.mean(corner_entry_bravery)), 1) if corner_entry_bravery else None,
-            "bravery_score": _bravery_score(
-                float(np.mean(corner_env_time)) if corner_env_time else None,
-                float(np.mean(corner_throttle_acc)) if corner_throttle_acc else None,
-                float(np.mean(corner_entry_bravery)) if corner_entry_bravery else None,
-            ),
         }
     except Exception:
         return None
@@ -5738,7 +5719,6 @@ def analyze_race_cornering_profile(
             "avg_envelope_time_pct": round(float(np.mean([l.get("avg_envelope_time_pct") or 0.0 for l in laps_data])), 1),
             "avg_throttle_acceptance_pct": round(float(np.mean([l.get("avg_throttle_acceptance_pct") or 0.0 for l in laps_data])), 1),
             "avg_entry_bravery_pct": round(float(np.mean([l.get("avg_entry_bravery_pct") or 0.0 for l in laps_data])), 1),
-            "bravery_score": round(float(np.mean([l.get("bravery_score") or 0.0 for l in laps_data])), 1),
         }
 
     def _aggregate_by_stint(laps_data: list[dict]) -> list[dict]:

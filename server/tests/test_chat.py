@@ -350,7 +350,6 @@ def test_qualifying_widget_includes_grip_commitment_from_cornering_loads():
                         "avg_ggv_util_pct": 84.9,
                         "avg_throttle_acceptance_pct": 38.0,
                         "avg_entry_bravery_pct": 31.0,
-                        "bravery_score": 52.1,
                         "avg_corrections_per_corner": 2.1,
                         "avg_load_variance": 0.041,
                     },
@@ -358,7 +357,6 @@ def test_qualifying_widget_includes_grip_commitment_from_cornering_loads():
                         "avg_ggv_util_pct": 80.3,
                         "avg_throttle_acceptance_pct": 29.0,
                         "avg_entry_bravery_pct": 25.0,
-                        "bravery_score": 44.7,
                         "avg_corrections_per_corner": 3.4,
                         "avg_load_variance": 0.062,
                     },
@@ -370,9 +368,8 @@ def test_qualifying_widget_includes_grip_commitment_from_cornering_loads():
     widgets = chat._widgets_from_analysis_evidence({"focus": "qualifying"}, evidence)
 
     assert widgets[0]["type"] == "qualifying_battle"
-    assert widgets[0]["grip_commitment"]["braver_driver"] == "ANT"
-    assert widgets[0]["grip_commitment"]["limit_driver"] == "ANT"
-    assert widgets[0]["grip_commitment"]["smooth_driver"] == "ANT"
+    assert widgets[0]["grip_commitment"]["more_committed_driver"] == "ANT"
+    assert widgets[0]["grip_commitment"]["cleaner_driver"] == "ANT"
 
 
 def test_make_qualifying_battle_widget_preserves_location_context():
