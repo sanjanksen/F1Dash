@@ -262,9 +262,9 @@ function GripCommitmentPanel({ grip, driverA, driverB }) {
                 </div>
                 <div>
                   <div className="font-mono-data text-sm font-semibold text-foreground">
-                    {formatCount(data.avg_corrections_per_corner)}
+                    {formatPct(data.avg_entry_bravery_pct)}
                   </div>
-                  <div className="mt-1 text-[11px] leading-4 text-muted-foreground">steers per corner</div>
+                  <div className="mt-1 text-[11px] leading-4 text-muted-foreground">entries: braking deep</div>
                 </div>
               </div>
             </div>
