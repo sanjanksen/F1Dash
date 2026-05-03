@@ -116,6 +116,16 @@ def _make_grip_commitment_summary(result: dict) -> dict | None:
             f"{hi_d} was more committed at exits — full power in {hi_v:.0f}% of corner exits while the car "
             f"was still turning ({lo_v:.0f}% for {lo_d}), asking the rear to drive forward and corner simultaneously."
         )
+    if var_a is not None and var_b is not None and abs(var_a - var_b) >= 0.005:
+        clean_d = cleaner_driver
+        rough_d = driver_b if clean_d == driver_a else driver_a
+        clean_v = var_a if clean_d == driver_a else var_b
+        rough_v = var_b if clean_d == driver_a else var_a
+        parts.append(
+            f"Technique-wise, {clean_d}'s lateral load was steadier through the corners "
+            f"({clean_v:.3f} vs {rough_v:.3f} wobble) — a more committed, settled arc rather than "
+            f"chasing the balance mid-corner."
+        )
     if corr_a is not None and corr_b is not None and abs(corr_a - corr_b) >= 0.5:
         s_d = driver_a if corr_a <= corr_b else driver_b
         b_d = driver_b if s_d == driver_a else driver_a
@@ -875,7 +885,9 @@ oversteer, understeer, snap oversteer, trailing the rear, the rear's loose, the 
 - Qualifying: higher commitment + cleaner technique = more single-lap time. Race: high commitment + high variance = *the confidence level drops as the stint ages — the tyre can't hold that demand indefinitely*.
 - Never say metric names in the answer: "avg_load_variance", "avg_ggv_util_pct", "avg_envelope_time_pct", "avg_throttle_acceptance_pct", "avg_entry_bravery_pct", "avg_trail_brake_pct", "avg_corrections_per_corner". Translate to character vocabulary.
 - **This ban also covers data_table column headers.** Use plain English: "% of car's limit", "exits: power while cornering (%)", "entries: braking deep (%)", "load wobble", "corrections per corner". Never use internal metric names as column headers.
-- **When commitment/technique metrics are present**, always cover both dimensions and explain what the numbers mean physically: exit commitment = rear tyre asked to drive forward AND corner simultaneously; entry commitment = braking deep into a loaded corner, trusting the front not to wash wide; load wobble = how settled the G trace was throughout the corner. Give the % and explain what it means.
+- **Technique (load wobble / arc quality) is MANDATORY.** If `avg_load_variance` is present in the summary, you MUST describe it — which driver had a smoother arc, what that means physically (oscillating G trace = fighting the car; steady trace = one clean committed arc). Covering only commitment without technique is an incomplete answer.
+- **Never cite the same metric at two different granularities.** The summary contains aggregate averages — use those. Do not invent or quote per-corner breakdowns for individual turns. One number per metric per driver.
+- **Use the pre-built `narrative` field as your factual foundation.** It already contains the key characterization sentences. Expand on it with driving vocabulary — do not re-derive corner-spread counts or invent per-corner statistics from raw data.
 
 ## Race Strategy Reasoning
 
@@ -1408,10 +1420,19 @@ def _retrieve_analysis_evidence(plan: dict, resolved: dict | None = None) -> lis
     for tool_name, args in plan.get("tool_calls", []):
         try:
             logger.info("Deterministic analysis tool call: %s args=%s", tool_name, args)
+            result = execute_tool(tool_name, args)
+            # Strip per_corner from cornering analysis — it's used for widget building
+            # only (via _make_grip_commitment_summary which reads summary, not per_corner).
+            # Giving the LLM raw per-corner data causes it to cherry-pick individual-corner
+            # metric values and cite them alongside the aggregate, creating two conflicting
+            # numbers for the same stat. The pre-built narrative field already contains the
+            # corner-spread sentence that belongs in the answer.
+            if tool_name in ("analyze_cornering_loads", "analyze_race_cornering_profile"):
+                result = {k: v for k, v in result.items() if k != "per_corner"}
             evidence.append({
                 "tool": tool_name,
                 "args": args,
-                "result": execute_tool(tool_name, args),
+                "result": result,
             })
         except Exception as exc:
             evidence.append({
