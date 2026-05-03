@@ -252,19 +252,19 @@ function GripCommitmentPanel({ grip, driverA, driverB }) {
                   <div className="font-mono-data text-sm font-semibold text-foreground">
                     {formatPct(data.avg_ggv_util_pct)}
                   </div>
-                  <div className="mt-1 text-[11px] leading-4 text-muted-foreground">envelope</div>
+                  <div className="mt-1 text-[11px] leading-4 text-muted-foreground">of car's limit</div>
                 </div>
                 <div>
                   <div className="font-mono-data text-sm font-semibold text-foreground">
                     {formatPct(data.avg_throttle_acceptance_pct)}
                   </div>
-                  <div className="mt-1 text-[11px] leading-4 text-muted-foreground">exit</div>
+                  <div className="mt-1 text-[11px] leading-4 text-muted-foreground">exits: power while cornering</div>
                 </div>
                 <div>
                   <div className="font-mono-data text-sm font-semibold text-foreground">
                     {formatCount(data.avg_corrections_per_corner)}
                   </div>
-                  <div className="mt-1 text-[11px] leading-4 text-muted-foreground">corrections</div>
+                  <div className="mt-1 text-[11px] leading-4 text-muted-foreground">steers per corner</div>
                 </div>
               </div>
             </div>

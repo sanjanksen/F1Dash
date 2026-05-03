@@ -95,19 +95,37 @@ def _make_grip_commitment_summary(result: dict) -> dict | None:
     if var_a is not None and var_b is not None:
         smooth_driver = driver_a if var_a <= var_b else driver_b
 
-    confidence_read = None
-    if braver_driver and limit_driver:
-        if braver_driver == limit_driver:
-            confidence_read = (
-                f"{braver_driver} was the braver driver — higher bravery score and using more of the car's empirical grip envelope."
+    parts = []
+    if ggv_a is not None and ggv_b is not None:
+        hi_d = driver_a if ggv_a >= ggv_b else driver_b
+        lo_d = driver_b if hi_d == driver_a else driver_a
+        hi_v, lo_v = (ggv_a, ggv_b) if hi_d == driver_a else (ggv_b, ggv_a)
+        if abs(ggv_a - ggv_b) >= 1.0:
+            parts.append(
+                f"{hi_d} used more of what the car can actually do — {hi_v:.0f}% of the car's demonstrated grip ceiling "
+                f"vs {lo_v:.0f}% for {lo_d}."
             )
         else:
-            confidence_read = (
-                f"{limit_driver} was operating closer to the car's demonstrated grip ceiling; "
-                f"{braver_driver} had the higher composite bravery score."
-            )
-    elif limit_driver:
-        confidence_read = f"{limit_driver} was operating closer to the car's demonstrated grip ceiling."
+            parts.append(f"Both drivers used a similar fraction of the car's grip ceiling ({hi_v:.0f}% vs {lo_v:.0f}%).")
+    if ta_a is not None and ta_b is not None and abs(ta_a - ta_b) >= 3.0:
+        hi_d = driver_a if ta_a >= ta_b else driver_b
+        lo_d = driver_b if hi_d == driver_a else driver_a
+        hi_v, lo_v = (ta_a, ta_b) if hi_d == driver_a else (ta_b, ta_a)
+        parts.append(
+            f"{hi_d} was braver at exits — committing to full power in {hi_v:.0f}% of corner exits while the car "
+            f"was still turning ({lo_v:.0f}% for {lo_d}). That means the rear tyre had to drive the car forward "
+            f"and corner at the same time."
+        )
+    if corr_a is not None and corr_b is not None and abs(corr_a - corr_b) >= 0.5:
+        smoother_d = driver_a if corr_a <= corr_b else driver_b
+        busier_d = driver_b if smoother_d == driver_a else driver_a
+        s_v = corr_a if smoother_d == driver_a else corr_b
+        b_v = corr_b if smoother_d == driver_a else corr_a
+        parts.append(
+            f"{smoother_d} needed fewer steering adjustments per corner ({s_v:.1f} vs {b_v:.1f} for {busier_d}) — "
+            f"a cleaner arc through the apex."
+        )
+    confidence_read = " ".join(parts) if parts else None
 
     return {
         "driver_a": driver_a,
@@ -845,6 +863,7 @@ oversteer, understeer, snap oversteer, trailing the rear, the rear's loose, the 
 - Qualifying: more commitment + cleaner inputs = more single-lap time. Race: high commitment + high variance = *the confidence level drops as the stint ages — the tyre can't keep holding that level of demand*.
 - Never say "lateral load variance" or "grip utilisation percentage" in the answer. Use the vocabulary above instead.
 - Never say "trail brake percentage", "avg_trail_brake_pct", "GGV utilisation", "ggv_util_pct", "envelope time", "avg_envelope_time_pct", "throttle acceptance", "avg_throttle_acceptance_pct", "entry bravery", "avg_entry_bravery_pct", or "bravery score" in the answer. Translate every metric to the character vocabulary above.
+- **This ban also covers data_table column headers.** Never use metric names as column headers. Use plain English: "% of car's limit" not "GGV envelope util %", "power before straight (%)" not "Entry bravery %", "steering tweaks / corner" not "Avg corrections / corner", "exit commitment (%)" not "throttle acceptance". Write column headers as if the reader has never seen an F1 data feed.
 - **When bravery metrics are present**, always cover all three dimensions and explain what each one MEANS — not just the character claim, but the physical reality: (1) **Exit**: getting on the power before the car is straight — what this means is the rear tyre is being asked to generate forward drive force AND cornering force simultaneously. That's physically hard for a tyre. Give the percentage and explain it. (2) **Entry**: still braking deep into the corner while already carrying lateral load — the driver is trusting the front end not to wash wide while the rear is already being asked to corner. Give the percentage and explain it. (3) **Proximity to the limit throughout**: how much of every corner the driver spent within touching distance of what the car has demonstrated it can do. Give the percentage and explain it means they weren't saving anything — the car was working at its ceiling for that fraction of the corner. The answer must explain WHAT the numbers mean, not just state them.
 
 ## Race Strategy Reasoning
