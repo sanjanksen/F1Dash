@@ -413,6 +413,20 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
             if w.get("speed_trace_a"):
                 widgets.append(w)
 
+    # Standalone corner_analysis widget: when cornering loads were run but there's no
+    # qualifying_battle widget to embed grip_commitment into (pure grip comparison query).
+    if grip_commitment and not has_primary_qualifying_widget:
+        cornering_result = _find_evidence_result(evidence, "analyze_cornering_loads") or \
+                           _find_evidence_result(evidence, "analyze_race_cornering_profile")
+        widgets.insert(0, {
+            "type": "corner_analysis",
+            "driver_a": grip_commitment["driver_a"],
+            "driver_b": grip_commitment["driver_b"],
+            "event": cornering_result.get("event") if cornering_result else None,
+            "session": cornering_result.get("session") if cornering_result else None,
+            "grip": grip_commitment,
+        })
+
     deduped = []
     seen: set = set()
     for widget in widgets:
@@ -1309,6 +1323,33 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
                 if round_number is not None
                 else []
             ),
+        }
+
+    if analysis_mode == "grip_comparison":
+        codes = resolved.get("entity_codes") or []
+        names = resolved.get("entity_names") or []
+        if round_number is None or len(codes) < 2 or len(names) < 2:
+            return None
+        session_type = resolved.get("session_type") or "Q"
+        return {
+            "analysis_mode": "grip_comparison",
+            "focus": "grip",
+            "question": message,
+            "round_number": round_number,
+            "event_name": resolved.get("event_name"),
+            "country": resolved.get("country"),
+            "drivers": [
+                {"name": names[0], "code": codes[0]},
+                {"name": names[1], "code": codes[1]},
+            ],
+            "tool_calls": [
+                ("analyze_cornering_loads", {
+                    "round_number": round_number,
+                    "session_type": session_type,
+                    "driver_a": codes[0],
+                    "driver_b": codes[1],
+                }),
+            ],
         }
 
     if analysis_mode == "race_pace_comparison":

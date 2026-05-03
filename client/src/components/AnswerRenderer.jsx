@@ -1,5 +1,6 @@
 import { Badge } from './ui/badge.jsx'
 import QualifyingBattleWidget from './chat-widgets/QualifyingBattleWidget.jsx'
+import CornerAnalysisWidget from './chat-widgets/CornerAnalysisWidget.jsx'
 import RaceStoryWidget from './chat-widgets/RaceStoryWidget.jsx'
 import RacePaceBattleWidget from './chat-widgets/RacePaceBattleWidget.jsx'
 import CornerComparisonWidget from './chat-widgets/CornerComparisonWidget.jsx'
@@ -143,6 +144,9 @@ function WidgetRenderer({ widget }) {
   if (!widget?.type) return null
   if (widget.type === 'qualifying_battle') {
     return <QualifyingBattleWidget widget={widget} />
+  }
+  if (widget.type === 'corner_analysis') {
+    return <CornerAnalysisWidget widget={widget} />
   }
   if (widget.type === 'race_story') {
     return <RaceStoryWidget widget={widget} />

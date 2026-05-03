@@ -411,7 +411,7 @@ def _suggest_tool(entity_type: str | None, scope: str | None, session_type: str 
     if scope == "degradation" and entity_type == "driver":
         return "analyze_stint_degradation"
     if scope == "grip_style":
-        if session_type == "Q":
+        if session_type in ("Q", "SQ"):
             return "analyze_cornering_loads"
         return "analyze_race_cornering_profile"
     # Note: scope == "standings" is handled inline in _base_context because
@@ -469,6 +469,18 @@ def _detect_analysis_mode(normalized: str, matched_drivers: list[dict], session_
     ))
     if not comparison_language:
         return None, None
+
+    # Grip / cornering analysis: explicit grip or cornering vocabulary routes to dedicated
+    # grip_comparison mode which calls only analyze_cornering_loads (no qualifying battle needed)
+    grip_terms = any(phrase in normalized for phrase in (
+        "grip", "cornering loads", "corner analysis", "cornering analysis", "cornering style",
+        "tyre confidence", "grip style", "grip confidence", "extract grip",
+        "who pushes harder", "pushes harder", "how committed", "more committed",
+        "on the limit", "at the limit", "limit of the car",
+        "brave", "bravery", "load variance",
+    ))
+    if grip_terms:
+        return "grip_comparison", session_type
 
     # Race pace comparison: explicit race pace / degradation language
     race_pace_terms = any(phrase in normalized for phrase in (
