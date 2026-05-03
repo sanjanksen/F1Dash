@@ -147,7 +147,12 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
     fp_number = _detect_fp_number(normalized)
     if fp_number is not None:
         session_type = f"FP{fp_number}"
-    elif "sprint qualifying" in normalized or "sprint shootout" in normalized:
+    elif (
+        "sprint qualifying" in normalized
+        or "sprint quali" in normalized
+        or "sprint shootout" in normalized
+        or re.search(r"\bsq\b", normalized)
+    ):
         session_type = "SQ"
     elif (
         "qualifying" in normalized
@@ -230,6 +235,20 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
         "fastest on the straight", "speed on the straight",
     )) or re.search(r"\bdrag\b", normalized):
         scope = "speed_trap"
+
+    if any(term in normalized for term in (
+        "brave", "bravery", "braver", "courageous",
+        "grip style", "tyre confidence", "grip confidence",
+        "who pushes harder", "pushes harder",
+        "who extracts", "extracts more", "extract grip",
+        "how committed", "more committed",
+        "confidence through corners", "confidence in corners",
+        "who is braver", "braver driver", "braver through",
+        "on the limit", "at the limit", "reaches the limit",
+        "limit of the car", "limit of their car",
+        "who uses more grip", "grip usage",
+    )):
+        scope = "grip_style"
 
     return session_type, scope
 
@@ -391,9 +410,13 @@ def _suggest_tool(entity_type: str | None, scope: str | None, session_type: str 
         return "analyze_weather_pace_correlation"
     if scope == "degradation" and entity_type == "driver":
         return "analyze_stint_degradation"
+    if scope == "grip_style":
+        if session_type == "Q":
+            return "analyze_cornering_loads"
+        return "analyze_race_cornering_profile"
     # Note: scope == "standings" is handled inline in _base_context because
     # it needs the raw normalized message to distinguish driver vs constructor.
-    if session_type == "SQ" and entity_type is None:
+    if session_type == "SQ" and entity_type in (None, "driver"):
         return "get_sprint_qualifying_results"
     if entity_type == "driver":
         # Qualifying questions must not route to race-only tools

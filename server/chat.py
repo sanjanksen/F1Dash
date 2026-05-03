@@ -851,6 +851,7 @@ oversteer, understeer, snap oversteer, trailing the rear, the rear's loose, the 
 - Qualifying: more commitment + cleaner inputs = more single-lap time. Race: high commitment + high variance = *the confidence level drops as the stint ages — the tyre can't keep holding that level of demand*.
 - Never say "lateral load variance" or "grip utilisation percentage" in the answer. Use the vocabulary above instead.
 - Never say "combined grip utilisation", "combined util", "trail brake percentage", "avg_trail_brake_pct", "circle fullness", "avg_circle_fullness_pct", "GGV utilisation", "ggv_util_pct", "envelope time", "avg_envelope_time_pct", "throttle acceptance", "avg_throttle_acceptance_pct", "entry bravery", "avg_entry_bravery_pct", or "bravery score" in the answer. Translate every metric to the character vocabulary above.
+- **When bravery metrics are present**, always cover all three dimensions and explain what each one MEANS — not just the character claim, but the physical reality: (1) **Exit**: getting on the power before the car is straight — what this means is the rear tyre is being asked to generate forward drive force AND cornering force simultaneously. That's physically hard for a tyre. Give the percentage and explain it. (2) **Entry**: still braking deep into the corner while already carrying lateral load — the driver is trusting the front end not to wash wide while the rear is already being asked to corner. Give the percentage and explain it. (3) **Proximity to the limit throughout**: how much of every corner the driver spent within touching distance of what the car has demonstrated it can do. Give the percentage and explain it means they weren't saving anything — the car was working at its ceiling for that fraction of the corner. The answer must explain WHAT the numbers mean, not just state them.
 
 ## Race Strategy Reasoning
 
@@ -1143,6 +1144,27 @@ def _suggested_tool_args(resolved: dict) -> dict | None:
             "round_number": round_number,
             "driver_code": resolved["entity_code"],
             "session_type": session_type,
+        }
+
+    if tool == "analyze_cornering_loads":
+        codes = resolved.get("entity_codes") or []
+        if len(codes) < 2:
+            return None
+        return {
+            "round_number": round_number,
+            "session_type": resolved.get("session_type") or "Q",
+            "driver_a": codes[0],
+            "driver_b": codes[1],
+        }
+
+    if tool == "analyze_race_cornering_profile":
+        codes = resolved.get("entity_codes") or []
+        if len(codes) < 2:
+            return None
+        return {
+            "round_number": round_number,
+            "driver_a": codes[0],
+            "driver_b": codes[1],
         }
 
     return None
