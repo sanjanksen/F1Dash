@@ -81,10 +81,14 @@ def _make_grip_commitment_summary(result: dict) -> dict | None:
 
     ggv_a   = _num(a, "avg_ggv_util_pct")
     ggv_b   = _num(b, "avg_ggv_util_pct")
+    et_a    = _num(a, "avg_envelope_time_pct")
+    et_b    = _num(b, "avg_envelope_time_pct")
     ta_a    = _num(a, "avg_throttle_acceptance_pct")
     ta_b    = _num(b, "avg_throttle_acceptance_pct")
     eb_a    = _num(a, "avg_entry_bravery_pct")
     eb_b    = _num(b, "avg_entry_bravery_pct")
+    tb_a    = _num(a, "avg_trail_brake_pct")
+    tb_b    = _num(b, "avg_trail_brake_pct")
     var_a   = _num(a, "avg_load_variance")
     var_b   = _num(b, "avg_load_variance")
     corr_a  = _num(a, "avg_corrections_per_corner")
@@ -160,11 +164,13 @@ def _make_grip_commitment_summary(result: dict) -> dict | None:
                 "format": fmt, "edge": ed, "edge_label": edge_label}
 
     data_rows = [r for r in [
-        _row2("commitment", "% of car's limit",            ggv_a,  ggv_b,  "pct",   True,  "more committed"),
-        _row2("commitment", "exits: power while cornering", ta_a,   ta_b,   "pct",   True,  "more aggressive"),
-        _row2("commitment", "entries: braking deep",        eb_a,   eb_b,   "pct",   True,  "deeper"),
-        _row2("technique",  "load wobble",                  var_a,  var_b,  "raw3",  False, "cleaner arc"),
-        _row2("technique",  "corrections per corner",       corr_a, corr_b, "count", False, "smoother"),
+        _row2("commitment", "% of car's limit",             ggv_a,  ggv_b,  "pct",   True,  "more committed"),
+        _row2("commitment", "sustained at the limit",        et_a,   et_b,   "pct",   True,  "more sustained"),
+        _row2("commitment", "exits: power while cornering",  ta_a,   ta_b,   "pct",   True,  "more aggressive"),
+        _row2("commitment", "entries: braking deep",         eb_a,   eb_b,   "pct",   True,  "deeper"),
+        _row2("commitment", "trailing the brake",            tb_a,   tb_b,   "pct",   True,  "carries it deeper"),
+        _row2("technique",  "load wobble",                   var_a,  var_b,  "raw3",  False, "cleaner arc"),
+        _row2("technique",  "corrections per corner",        corr_a, corr_b, "count", False, "smoother"),
     ] if r is not None]
 
     return {

@@ -221,6 +221,21 @@ function formatRowVal(val, fmt) {
   return String(val)
 }
 
+const SECTION_META = {
+  commitment: {
+    label: 'Commitment',
+    sub: 'how hard they asked the car',
+    headerClass: 'bg-primary/8 border-primary/20',
+    labelClass: 'text-primary',
+  },
+  technique: {
+    label: 'Technique',
+    sub: 'the flip side — how cleanly they executed',
+    headerClass: 'bg-muted/40 border-border/50',
+    labelClass: 'text-foreground',
+  },
+}
+
 function CornerAnalysisPanel({ grip, driverA, driverB }) {
   if (!grip) return null
 
@@ -229,7 +244,11 @@ function CornerAnalysisPanel({ grip, driverA, driverB }) {
 
   const commitmentRows = (grip.data_rows || []).filter((r) => r.group === 'commitment')
   const techniqueRows  = (grip.data_rows || []).filter((r) => r.group === 'technique')
-  const hasTable = commitmentRows.length > 0 || techniqueRows.length > 0
+
+  const groups = [
+    { key: 'commitment', rows: commitmentRows },
+    { key: 'technique',  rows: techniqueRows  },
+  ].filter((g) => g.rows.length > 0)
 
   return (
     <section className="py-4">
@@ -239,7 +258,7 @@ function CornerAnalysisPanel({ grip, driverA, driverB }) {
       </div>
 
       {grip.confidence_read ? (
-        <div className="mt-2 text-sm leading-6 text-foreground">{grip.confidence_read}</div>
+        <div className="mt-2 text-sm leading-6 text-muted-foreground">{grip.confidence_read}</div>
       ) : null}
 
       {/* Driver summary badges */}
@@ -247,45 +266,47 @@ function CornerAnalysisPanel({ grip, driverA, driverB }) {
         {[driverA, driverB].map((code) => (
           <div key={code} className="flex items-center gap-2">
             <Badge variant={committed === code ? 'accent' : 'muted'}>{code}</Badge>
-            {committed === code ? <span className="text-xs text-muted-foreground">more committed</span> : null}
+            {committed === code && cleaner !== code ? <span className="text-xs text-muted-foreground">more committed</span> : null}
             {cleaner === code && committed !== code ? <span className="text-xs text-muted-foreground">cleaner arc</span> : null}
             {cleaner === code && committed === code ? <span className="text-xs text-muted-foreground">committed + clean</span> : null}
+            {cleaner !== code && committed !== code ? <span className="text-xs text-muted-foreground/60">—</span> : null}
           </div>
         ))}
       </div>
 
-      {/* Grouped data table */}
-      {hasTable && (
-        <div className="mt-4 space-y-4">
-          {[
-            { key: 'commitment', label: 'Commitment — how hard they asked the car', rows: commitmentRows },
-            { key: 'technique',  label: 'Technique — how cleanly they executed',    rows: techniqueRows  },
-          ].map(({ key, label, rows }) =>
-            rows.length === 0 ? null : (
-              <div key={key}>
-                <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  {label}
+      {/* Two distinct boxed sections */}
+      {groups.length > 0 && (
+        <div className="mt-4 space-y-3">
+          {groups.map(({ key, rows }) => {
+            const meta = SECTION_META[key]
+            return (
+              <div key={key} className={`rounded-lg border overflow-hidden ${meta.headerClass}`}>
+                {/* Section header band */}
+                <div className={`flex items-baseline gap-2 px-3 py-2 border-b ${meta.headerClass}`}>
+                  <span className={`text-xs font-semibold ${meta.labelClass}`}>{meta.label}</span>
+                  <span className="text-[10px] text-muted-foreground">{meta.sub}</span>
                 </div>
+                {/* Data table */}
                 <table className="w-full">
                   <thead>
-                    <tr className="border-b border-border/40">
-                      <th className="pb-1 text-left text-[11px] font-normal text-muted-foreground w-1/2">Metric</th>
-                      <th className="pb-1 text-right text-[11px] font-normal text-muted-foreground">{driverA}</th>
-                      <th className="pb-1 text-right text-[11px] font-normal text-muted-foreground">{driverB}</th>
-                      <th className="pb-1 text-right text-[11px] font-normal text-muted-foreground">Edge</th>
+                    <tr className="border-b border-border/30">
+                      <th className="px-3 pb-1.5 pt-2 text-left text-[10px] font-normal text-muted-foreground w-[44%]">Metric</th>
+                      <th className="pb-1.5 pt-2 pr-2 text-right text-[10px] font-normal text-muted-foreground">{driverA}</th>
+                      <th className="pb-1.5 pt-2 pr-2 text-right text-[10px] font-normal text-muted-foreground">{driverB}</th>
+                      <th className="pb-1.5 pt-2 pr-3 text-right text-[10px] font-normal text-muted-foreground">Edge</th>
                     </tr>
                   </thead>
                   <tbody>
                     {rows.map((row, i) => (
-                      <tr key={i} className="border-b border-border/20 last:border-0">
-                        <td className="py-1.5 text-[11px] text-muted-foreground">{row.label}</td>
-                        <td className={`py-1.5 text-right font-mono-data text-xs tabular-nums ${row.edge === driverA ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>
+                      <tr key={i} className="border-b border-border/15 last:border-0">
+                        <td className="px-3 py-1.5 text-[11px] text-muted-foreground">{row.label}</td>
+                        <td className={`py-1.5 pr-2 text-right font-mono text-xs tabular-nums ${row.edge === driverA ? 'font-semibold text-foreground' : 'text-muted-foreground/70'}`}>
                           {formatRowVal(row.a, row.format)}
                         </td>
-                        <td className={`py-1.5 text-right font-mono-data text-xs tabular-nums ${row.edge === driverB ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>
+                        <td className={`py-1.5 pr-2 text-right font-mono text-xs tabular-nums ${row.edge === driverB ? 'font-semibold text-foreground' : 'text-muted-foreground/70'}`}>
                           {formatRowVal(row.b, row.format)}
                         </td>
-                        <td className="py-1.5 text-right text-[11px] text-muted-foreground">
+                        <td className="py-1.5 pr-3 text-right text-[10px] text-muted-foreground">
                           {row.edge ? `${row.edge} — ${row.edge_label}` : '—'}
                         </td>
                       </tr>
@@ -294,7 +315,7 @@ function CornerAnalysisPanel({ grip, driverA, driverB }) {
                 </table>
               </div>
             )
-          )}
+          })}
         </div>
       )}
     </section>
