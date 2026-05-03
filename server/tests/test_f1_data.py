@@ -2731,21 +2731,14 @@ def _make_corner_arrays(n=60):
     return lat_g, long_g, speed, dist
 
 
-def test_corner_metrics_new_fields_present():
+def test_corner_metrics_base_fields_present():
     import numpy as np
     lat_g, long_g, speed, dist = _make_corner_arrays()
     result = f1_data._corner_metrics(lat_g, long_g, speed, dist, 0, len(lat_g) - 1)
-    assert 'combined_util_pct' in result
     assert 'trail_brake_pct' in result
-    assert 'circle_fullness_pct' in result
-
-
-def test_corner_metrics_combined_util_gte_lateral():
-    import numpy as np
-    lat_g, long_g, speed, dist = _make_corner_arrays()
-    result = f1_data._corner_metrics(lat_g, long_g, speed, dist, 0, len(lat_g) - 1)
-    # Combined (lat+long vector) should be >= lateral-only util
-    assert result['combined_util_pct'] >= result['mean_grip_util_pct'] - 0.1
+    assert 'peak_g' in result
+    assert 'load_variance' in result
+    assert 'correction_count' in result
 
 
 def test_corner_metrics_trail_brake_zero_when_no_braking():
@@ -2796,13 +2789,11 @@ def test_aggregate_lap_cornering_stats_new_fields():
     })
 
     result = f1_data._aggregate_lap_cornering_stats(tel)
-    assert result is not None
-    assert 'avg_combined_util_pct' in result
+    assert result is not None, "Expected corners to be detected"
     assert 'avg_trail_brake_pct' in result
-    assert 'avg_circle_fullness_pct' in result
-    assert 0 <= result['avg_combined_util_pct'] <= 200
+    assert 'avg_ggv_util_pct' in result
+    assert 'avg_corrections_per_corner' in result
     assert 0 <= result['avg_trail_brake_pct'] <= 100
-    assert 0 <= result['avg_circle_fullness_pct'] <= 100
 
 
 def test_corner_metrics_ggv_fields_present_when_envelope_provided():
@@ -2869,17 +2860,17 @@ def test_corner_metrics_entry_bravery_nonzero_for_standard_corner():
     assert isinstance(result['entry_bravery_pct'], float)
 
 
-def test_corner_metrics_existing_fields_unchanged():
-    """Backward compat: old fields still present and correct with envelope provided."""
+def test_corner_metrics_base_fields_present_with_envelope():
+    """All base fields present whether or not envelope is provided."""
     import numpy as np
     lat_g, long_g, speed, dist = _make_corner_arrays()
     envelope = f1_data._theoretical_ggv_envelope()
     result = f1_data._corner_metrics(lat_g, long_g, speed, dist, 0, len(lat_g) - 1,
                                       envelope=envelope)
-    assert 'combined_util_pct' in result
     assert 'trail_brake_pct' in result
-    assert 'circle_fullness_pct' in result
-    assert 'mean_grip_util_pct' in result
+    assert 'peak_g' in result
+    assert 'load_variance' in result
+    assert 'ggv_util_pct' in result
 
 
 def test_corner_metrics_apex_at_boundary_returns_zero_not_crash():

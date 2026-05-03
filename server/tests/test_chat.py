@@ -347,14 +347,18 @@ def test_qualifying_widget_includes_grip_commitment_from_cornering_loads():
                 "driver_b": "RUS",
                 "summary": {
                     "ANT": {
-                        "avg_grip_utilisation_pct": 72.4,
-                        "pct_time_above_90pct_grip": 18.0,
+                        "avg_ggv_util_pct": 84.9,
+                        "avg_throttle_acceptance_pct": 38.0,
+                        "avg_entry_bravery_pct": 31.0,
+                        "bravery_score": 52.1,
                         "avg_corrections_per_corner": 2.1,
                         "avg_load_variance": 0.041,
                     },
                     "RUS": {
-                        "avg_grip_utilisation_pct": 68.2,
-                        "pct_time_above_90pct_grip": 11.0,
+                        "avg_ggv_util_pct": 80.3,
+                        "avg_throttle_acceptance_pct": 29.0,
+                        "avg_entry_bravery_pct": 25.0,
+                        "bravery_score": 44.7,
                         "avg_corrections_per_corner": 3.4,
                         "avg_load_variance": 0.062,
                     },
@@ -366,9 +370,36 @@ def test_qualifying_widget_includes_grip_commitment_from_cornering_loads():
     widgets = chat._widgets_from_analysis_evidence({"focus": "qualifying"}, evidence)
 
     assert widgets[0]["type"] == "qualifying_battle"
-    assert widgets[0]["grip_commitment"]["commitment_driver"] == "ANT"
-    assert widgets[0]["grip_commitment"]["edge_driver"] == "ANT"
+    assert widgets[0]["grip_commitment"]["braver_driver"] == "ANT"
+    assert widgets[0]["grip_commitment"]["limit_driver"] == "ANT"
     assert widgets[0]["grip_commitment"]["smooth_driver"] == "ANT"
+
+
+def test_make_qualifying_battle_widget_preserves_location_context():
+    import chat
+
+    widget = chat._make_qualifying_battle_widget({
+        "driver_a": "NOR",
+        "driver_b": "PIA",
+        "cause_explanations": [{
+            "cause_type": "traction",
+            "rank": 1,
+            "distance_m": 500,
+            "delta_speed_kph": 7.9,
+            "location_context": {
+                "label": "Exit of Turn 1",
+                "plain": "on the run out of Turn 1",
+                "technical": "corner exit from Turn 1",
+                "phase": "corner_exit",
+                "distance_m": 500,
+                "corner": "Turn 1",
+                "previous_corner": {"number": 1, "label": None, "distance_m": 300},
+                "next_corner": {"number": 2, "label": None, "distance_m": 650},
+            },
+        }],
+    })
+
+    assert widget["cause_explanations"][0]["location_context"]["label"] == "Exit of Turn 1"
 
 
 def test_canonicalize_qualifying_analysis_aligns_answer_with_widget_source():
@@ -532,7 +563,9 @@ def test_answer_f1_payload_includes_preloaded_race_story_widget():
 
     chat = _load_chat_with_client(mock_client)
     with patch.object(chat, '_try_deterministic_analysis', return_value=None), \
-         patch.object(chat, '_prepare_resolved_context', return_value=(resolved, preloaded)):
+         patch.object(chat, 'resolve_context_from_history', return_value=None), \
+         patch.object(chat, 'resolve_query_context', return_value=resolved), \
+         patch.object(chat, '_preload_resolved_context', return_value=preloaded):
         payload = chat.answer_f1_payload("How did Russell do at Suzuka?", [])
 
     assert payload["response"] == "Russell ran a tidy race to P4."
@@ -762,3 +795,28 @@ def test_suggested_tool_args_sprint_qualifying():
 
     assert args is not None
     assert args["round_number"] == 5
+
+
+def test_answer_f1_payload_reuses_resolved_context_on_fallback():
+    import chat
+
+    prior_context = {"round_number": 5}
+    resolved = {
+        "suggested_tool": None,
+        "round_number": 5,
+        "routing_confidence": "low",
+        "has_explicit_context": True,
+        "used_previous_context": False,
+    }
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = _end_turn_response("Answer.")
+
+    chat = _load_chat_with_client(mock_client)
+    with patch.object(chat, 'resolve_context_from_history', return_value=prior_context) as history_mock, \
+         patch.object(chat, 'resolve_query_context', return_value=resolved) as resolve_mock, \
+         patch.object(chat, '_build_analysis_plan', return_value=None):
+        payload = chat.answer_f1_payload("How did Norris do?", [{"role": "user", "content": "Tell me about Miami"}])
+
+    assert payload["response"] == "Answer."
+    history_mock.assert_called_once()
+    resolve_mock.assert_called_once_with("How did Norris do?", prior_context)

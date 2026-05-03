@@ -5223,25 +5223,12 @@ def _corner_metrics(lat_g: np.ndarray, long_g: np.ndarray, speed_kph: np.ndarray
     apex_idx_local = int(np.argmin(seg_v))  # apex = min speed
     peak_idx_local = int(np.argmax(seg_g))
 
-    g_max = _theoretical_max_g(seg_v)
-    safe_gmax = np.where(g_max < 0.1, 0.1, g_max)
-
-    # Lateral-only utilisation (kept for backward compat)
-    util = np.clip(seg_g / safe_gmax, 0.0, 1.0)
-
-    # Combined (vector) utilisation
-    combined_g = np.sqrt(seg_g ** 2 + seg_lg ** 2)
-    combined_util = np.clip(combined_g / safe_gmax, 0.0, 1.5)
-
     # Trail brake: % of entry phase (start→apex) where lat>0.4G AND long<-0.3G simultaneously
     entry_end = max(apex_idx_local, 1)
     entry_lat = seg_g[:entry_end]
     entry_long = seg_lg[:entry_end]
     trail_mask = (entry_lat > 0.4) & (entry_long < -0.3)
     trail_brake_pct = round(float(np.mean(trail_mask) * 100), 1) if len(trail_mask) > 0 else 0.0
-
-    # Circle fullness: % of ALL corner samples where combined_util > 0.75
-    circle_fullness_pct = round(float(np.mean(combined_util > 0.75) * 100), 1)
 
     # --- GGV-based metrics (only when envelope is provided) ---
     if envelope is not None:
@@ -5296,11 +5283,7 @@ def _corner_metrics(lat_g: np.ndarray, long_g: np.ndarray, speed_kph: np.ndarray
         "mean_g": round(float(np.mean(seg_g)), 3),
         "load_variance": round(float(np.std(seg_g)), 3),
         "correction_count": sign_changes,
-        "mean_grip_util_pct": round(float(np.mean(util) * 100), 1),
-        "pct_time_above_90pct_grip": round(float(np.mean(util >= 0.9) * 100), 1),
-        "combined_util_pct": round(float(np.mean(combined_util) * 100), 1),
         "trail_brake_pct": trail_brake_pct,
-        "circle_fullness_pct": circle_fullness_pct,
         "entry_dist_m": round(float(seg_dist[0]), 0),
         "exit_dist_m": round(float(seg_dist[-1]), 0),
         "ggv_util_pct": ggv_util_pct,
@@ -5411,11 +5394,6 @@ def analyze_cornering_loads(round_number: int, session_type: str,
 
     envelope = _build_ggv_envelope(_collect_session_tels(code_a) + _collect_session_tels(code_b))
 
-    g_max_a = _theoretical_max_g(spd_a)
-    g_max_b = _theoretical_max_g(spd_b)
-    util_a = np.clip(lat_g_a / np.where(g_max_a < 0.1, 0.1, g_max_a), 0.0, 1.0)
-    util_b = np.clip(lat_g_b / np.where(g_max_b < 0.1, 0.1, g_max_b), 0.0, 1.0)
-
     throttle_a = tel_a['Throttle'].to_numpy(dtype=float) if 'Throttle' in tel_a.columns else None
     throttle_b = tel_b['Throttle'].to_numpy(dtype=float) if 'Throttle' in tel_b.columns else None
 
@@ -5436,12 +5414,9 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             code_a: ma,
             code_b: mb,
             "peak_g_delta": round(ma["peak_g"] - mb["peak_g"], 3),
-            "mean_grip_util_delta_pct": round(ma["mean_grip_util_pct"] - mb["mean_grip_util_pct"], 1),
             "load_variance_delta": round(ma["load_variance"] - mb["load_variance"], 3),
             "corrections_delta": ma["correction_count"] - mb["correction_count"],
-            "combined_util_delta_pct": round(ma["combined_util_pct"] - mb["combined_util_pct"], 1),
             "trail_brake_delta_pct": round(ma["trail_brake_pct"] - mb["trail_brake_pct"], 1),
-            "circle_fullness_delta_pct": round(ma["circle_fullness_pct"] - mb["circle_fullness_pct"], 1),
             "ggv_util_delta_pct": round((ma.get("ggv_util_pct") or 0.0) - (mb.get("ggv_util_pct") or 0.0), 1),
             "envelope_time_delta_pct": round((ma.get("envelope_time_pct") or 0.0) - (mb.get("envelope_time_pct") or 0.0), 1),
             "throttle_acceptance_delta_pct": round((ma.get("throttle_acceptance_pct") or 0.0) - (mb.get("throttle_acceptance_pct") or 0.0), 1),
@@ -5449,48 +5424,25 @@ def analyze_cornering_loads(round_number: int, session_type: str,
         })
 
     # Summary stats
-    def _summary(util: np.ndarray, lat_g: np.ndarray, code: str,
-                 corners: list[tuple[int, int]], spd: np.ndarray) -> dict:
-        # Compute utilisation metrics over corner segments only, not whole lap
-        if corners:
-            corner_util = np.concatenate([util[s:e + 1] for s, e in corners])
-        else:
-            corner_util = util
-        pct_above_90 = round(float(np.mean(corner_util >= 0.9) * 100), 1)
-        avg_util = round(float(np.mean(corner_util) * 100), 1)
+    def _summary(lat_g: np.ndarray, code: str, corners: list[tuple[int, int]]) -> dict:
         peak_g = round(float(lat_g.max()), 2)
-        # average corrections per matched corner
+        avg_corr = round(sum(c[code]["correction_count"] for c in per_corner) / len(per_corner), 1) if per_corner else None
+        avg_var = round(sum(c[code]["load_variance"] for c in per_corner) / len(per_corner), 3) if per_corner else None
         if per_corner:
-            avg_corr = round(sum(c[code]["correction_count"] for c in per_corner) / len(per_corner), 1)
-        else:
-            avg_corr = None
-        # average load variance per corner
-        if per_corner:
-            avg_var = round(sum(c[code]["load_variance"] for c in per_corner) / len(per_corner), 3)
-        else:
-            avg_var = None
-        if per_corner:
-            avg_combined = round(sum(c[code]["combined_util_pct"] for c in per_corner) / len(per_corner), 1)
             avg_trail = round(sum(c[code]["trail_brake_pct"] for c in per_corner) / len(per_corner), 1)
-            avg_fullness = round(sum(c[code]["circle_fullness_pct"] for c in per_corner) / len(per_corner), 1)
             avg_ggv = round(float(np.mean([c[code].get("ggv_util_pct") or 0.0 for c in per_corner])), 1)
             avg_env_time = round(float(np.mean([c[code].get("envelope_time_pct") or 0.0 for c in per_corner])), 1)
             avg_ta = round(float(np.mean([c[code].get("throttle_acceptance_pct") or 0.0 for c in per_corner])), 1)
             avg_eb = round(float(np.mean([c[code].get("entry_bravery_pct") or 0.0 for c in per_corner])), 1)
             bscore = _bravery_score(avg_env_time, avg_ta, avg_eb)
         else:
-            avg_combined = avg_trail = avg_fullness = None
-            avg_ggv = avg_env_time = avg_ta = avg_eb = bscore = None
+            avg_trail = avg_ggv = avg_env_time = avg_ta = avg_eb = bscore = None
         return {
-            "avg_grip_utilisation_pct": avg_util,
-            "pct_time_above_90pct_grip": pct_above_90,
             "peak_lateral_g": peak_g,
             "corners_detected": len(corners),
             "avg_corrections_per_corner": avg_corr,
             "avg_load_variance": avg_var,
-            "avg_combined_util_pct": avg_combined,
             "avg_trail_brake_pct": avg_trail,
-            "avg_circle_fullness_pct": avg_fullness,
             "avg_ggv_util_pct": avg_ggv,
             "avg_envelope_time_pct": avg_env_time,
             "avg_throttle_acceptance_pct": avg_ta,
@@ -5498,67 +5450,26 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             "bravery_score": bscore,
         }
 
-    sum_a = _summary(util_a, lat_g_a, code_a, corners_a, spd_a)
-    sum_b = _summary(util_b, lat_g_b, code_b, corners_b, spd_b)
+    sum_a = _summary(lat_g_a, code_a, corners_a)
+    sum_b = _summary(lat_g_b, code_b, corners_b)
 
     # Human-readable narrative
-    util_diff = round(sum_a["avg_grip_utilisation_pct"] - sum_b["avg_grip_utilisation_pct"], 1)
-    above90_diff = round(sum_a["pct_time_above_90pct_grip"] - sum_b["pct_time_above_90pct_grip"], 1)
-    higher_util_driver = code_a if util_diff > 0 else code_b
-    lower_util_driver = code_b if util_diff > 0 else code_a
-    abs_util_diff = abs(util_diff)
-    abs_above90_diff = abs(above90_diff)
-
     higher_var_driver = code_a if (sum_a.get("avg_load_variance") or 0) > (sum_b.get("avg_load_variance") or 0) else code_b
     lower_var_driver = code_b if higher_var_driver == code_a else code_a
 
     if per_corner:
-        high_util_corners_a = sum(1 for c in per_corner if c[code_a]["mean_grip_util_pct"] > c[code_b]["mean_grip_util_pct"])
-        high_util_corners_b = len(per_corner) - high_util_corners_a
+        ggv_a_corners = sum(1 for c in per_corner if (c[code_a].get("ggv_util_pct") or 0.0) > (c[code_b].get("ggv_util_pct") or 0.0))
+        ggv_b_corners = len(per_corner) - ggv_a_corners
     else:
-        high_util_corners_a = high_util_corners_b = 0
+        ggv_a_corners = ggv_b_corners = 0
 
     narrative_parts = []
-
-    # --- Confidence / commitment on this lap ---
-    if abs_util_diff >= 1.0:
-        hi_util = max(sum_a['avg_grip_utilisation_pct'], sum_b['avg_grip_utilisation_pct'])
-        lo_util = min(sum_a['avg_grip_utilisation_pct'], sum_b['avg_grip_utilisation_pct'])
-        narrative_parts.append(
-            f"{higher_util_driver} was the more committed driver on this lap — really carrying it into the corners, "
-            f"trusting the front end where {lower_util_driver} kept a bit more in reserve "
-            f"({hi_util:.1f}% vs {lo_util:.1f}% of theoretical grip across {len(aligned)} corners)."
-        )
-    else:
-        narrative_parts.append(
-            f"{code_a} and {code_b} showed similar commitment through the corners on this lap "
-            f"({sum_a['avg_grip_utilisation_pct']:.1f}% vs {sum_b['avg_grip_utilisation_pct']:.1f}% of the tyre's limit "
-            f"across {len(aligned)} corners)."
-        )
-
-    # --- Time on the absolute limit: fully committed, no safety net ---
-    if abs_above90_diff >= 1.0:
-        at_limit_driver = code_a if above90_diff > 0 else code_b
-        other_driver = code_b if above90_diff > 0 else code_a
-        at_limit_pct = sum_a['pct_time_above_90pct_grip'] if at_limit_driver == code_a else sum_b['pct_time_above_90pct_grip']
-        other_pct = sum_b['pct_time_above_90pct_grip'] if at_limit_driver == code_a else sum_a['pct_time_above_90pct_grip']
-        narrative_parts.append(
-            f"{at_limit_driver} was on the absolute edge — no margin, fully committed — for {at_limit_pct:.1f}% of every corner, "
-            f"vs {other_pct:.1f}% for {other_driver}. "
-            f"That's the difference between carrying the car right to the limit and keeping a small safety window."
-        )
-    else:
-        narrative_parts.append(
-            f"Both were spending similar time right on the edge with no margin "
-            f"({sum_a['pct_time_above_90pct_grip']:.1f}% vs {sum_b['pct_time_above_90pct_grip']:.1f}%)."
-        )
 
     # --- Smoothness: clean arc vs fighting / correcting ---
     if sum_a.get("avg_load_variance") and sum_b.get("avg_load_variance"):
         var_hi = max(sum_a['avg_load_variance'], sum_b['avg_load_variance'])
         var_lo = min(sum_a['avg_load_variance'], sum_b['avg_load_variance'])
         if var_hi - var_lo >= 0.01:
-            # Infer what the corrections suggest about car behaviour
             corr_hi = sum_a.get("avg_corrections_per_corner", 0) if higher_var_driver == code_a else sum_b.get("avg_corrections_per_corner", 0)
             corr_lo = sum_b.get("avg_corrections_per_corner", 0) if higher_var_driver == code_a else sum_a.get("avg_corrections_per_corner", 0)
             if corr_hi > corr_lo + 1:
@@ -5575,24 +5486,16 @@ def analyze_cornering_loads(round_number: int, session_type: str,
                 )
             narrative_parts.append(balance_desc)
 
-    # --- Corner spread ---
+    # --- Corner spread (GGV-based) ---
     if per_corner and len(per_corner) >= 4:
+        higher_ggv_corners_driver = code_a if ggv_a_corners >= ggv_b_corners else code_b
+        lower_ggv_corners_driver = code_b if higher_ggv_corners_driver == code_a else code_a
+        hi_cnt = max(ggv_a_corners, ggv_b_corners)
+        lo_cnt = min(ggv_a_corners, ggv_b_corners)
         narrative_parts.append(
-            f"{higher_util_driver} had more confidence in {high_util_corners_a if higher_util_driver == code_a else high_util_corners_b} "
+            f"{higher_ggv_corners_driver} used more of the car's grip envelope in {hi_cnt} "
             f"of the {len(per_corner)} matched corners; "
-            f"{lower_util_driver} in {high_util_corners_b if higher_util_driver == code_a else high_util_corners_a}."
-        )
-
-    # --- Combined grip commitment (lat + long vector) ---
-    comb_a = sum_a.get("avg_combined_util_pct") or 0.0
-    comb_b = sum_b.get("avg_combined_util_pct") or 0.0
-    if abs(comb_a - comb_b) >= 1.0:
-        higher_comb = code_a if comb_a >= comb_b else code_b
-        lower_comb = code_b if higher_comb == code_a else code_a
-        narrative_parts.append(
-            f"Factoring braking in alongside cornering, {higher_comb} was using more of the total grip envelope — "
-            f"{max(comb_a, comb_b):.1f}% of combined capability vs {min(comb_a, comb_b):.1f}% for {lower_comb}. "
-            f"The braking load was doing real work on top of the cornering commitment."
+            f"{lower_ggv_corners_driver} in {lo_cnt}."
         )
 
     # --- Trail braking signature ---
@@ -5697,10 +5600,7 @@ def _aggregate_lap_cornering_stats(tel: pd.DataFrame, envelope: dict | None = No
         if not corners:
             return None
 
-        corner_util_samples = []
-        corner_combined_util_samples = []
         corner_trail_brake_samples = []
-        corner_fullness_samples = []
         corner_corrections = []
         corner_variances = []
         corner_ggv_util = []
@@ -5712,13 +5612,7 @@ def _aggregate_lap_cornering_stats(tel: pd.DataFrame, envelope: dict | None = No
             metrics = _corner_metrics(lat_g, long_g, spd, dist, c_start, c_end,
                                       envelope=envelope, throttle=throttle)
             seg_g = lat_g[c_start:c_end + 1]
-            seg_v = spd[c_start:c_end + 1]
-            seg_gmax = _theoretical_max_g(seg_v)
-            seg_util = np.clip(seg_g / np.where(seg_gmax < 0.1, 0.1, seg_gmax), 0.0, 1.0)
-            corner_util_samples.extend(seg_util.tolist())
-            corner_combined_util_samples.append(metrics['combined_util_pct'])
             corner_trail_brake_samples.append(metrics['trail_brake_pct'])
-            corner_fullness_samples.append(metrics['circle_fullness_pct'])
             corner_corrections.append(metrics['correction_count'])
             corner_variances.append(float(np.std(seg_g)))
             corner_ggv_util.append(metrics.get('ggv_util_pct') or 0.0)
@@ -5726,19 +5620,14 @@ def _aggregate_lap_cornering_stats(tel: pd.DataFrame, envelope: dict | None = No
             corner_throttle_acc.append(metrics.get('throttle_acceptance_pct') or 0.0)
             corner_entry_bravery.append(metrics.get('entry_bravery_pct') or 0.0)
 
-        if not corner_util_samples:
+        if not corner_corrections:
             return None
 
-        cu = np.array(corner_util_samples)
         return {
-            "avg_corner_grip_util_pct": round(float(np.mean(cu) * 100), 1),
-            "pct_above_90pct_grip": round(float(np.mean(cu >= 0.9) * 100), 1),
             "corners_detected": len(corners),
             "avg_corrections_per_corner": round(float(np.mean(corner_corrections)), 1),
             "avg_load_variance": round(float(np.mean(corner_variances)), 3),
-            "avg_combined_util_pct": round(float(np.mean(corner_combined_util_samples)), 1),
             "avg_trail_brake_pct": round(float(np.mean(corner_trail_brake_samples)), 1),
-            "avg_circle_fullness_pct": round(float(np.mean(corner_fullness_samples)), 1),
             "avg_ggv_util_pct": round(float(np.mean(corner_ggv_util)), 1) if corner_ggv_util else None,
             "avg_envelope_time_pct": round(float(np.mean(corner_env_time)), 1) if corner_env_time else None,
             "avg_throttle_acceptance_pct": round(float(np.mean(corner_throttle_acc)), 1) if corner_throttle_acc else None,
@@ -5842,13 +5731,9 @@ def analyze_race_cornering_profile(
             return {"laps_analyzed": 0}
         return {
             "laps_analyzed": len(laps_data),
-            "avg_corner_grip_util_pct": round(float(np.mean([l["avg_corner_grip_util_pct"] for l in laps_data])), 1),
-            "pct_above_90pct_grip": round(float(np.mean([l["pct_above_90pct_grip"] for l in laps_data])), 1),
             "avg_corrections_per_corner": round(float(np.mean([l["avg_corrections_per_corner"] for l in laps_data])), 1),
             "avg_load_variance": round(float(np.mean([l["avg_load_variance"] for l in laps_data])), 3),
-            "avg_combined_util_pct": round(float(np.mean([l.get("avg_combined_util_pct", 0.0) for l in laps_data])), 1),
             "avg_trail_brake_pct": round(float(np.mean([l.get("avg_trail_brake_pct", 0.0) for l in laps_data])), 1),
-            "avg_circle_fullness_pct": round(float(np.mean([l.get("avg_circle_fullness_pct", 0.0) for l in laps_data])), 1),
             "avg_ggv_util_pct": round(float(np.mean([l.get("avg_ggv_util_pct") or 0.0 for l in laps_data])), 1),
             "avg_envelope_time_pct": round(float(np.mean([l.get("avg_envelope_time_pct") or 0.0 for l in laps_data])), 1),
             "avg_throttle_acceptance_pct": round(float(np.mean([l.get("avg_throttle_acceptance_pct") or 0.0 for l in laps_data])), 1),
@@ -5876,55 +5761,17 @@ def analyze_race_cornering_profile(
     stints_b = _aggregate_by_stint(laps_b)
 
     # Build narrative
-    util_a = overall_a.get("avg_corner_grip_util_pct", 0.0)
-    util_b = overall_b.get("avg_corner_grip_util_pct", 0.0)
-    above90_a = overall_a.get("pct_above_90pct_grip", 0.0)
-    above90_b = overall_b.get("pct_above_90pct_grip", 0.0)
     var_a = overall_a.get("avg_load_variance", 0.0)
     var_b = overall_b.get("avg_load_variance", 0.0)
     corr_a = overall_a.get("avg_corrections_per_corner", 0.0)
     corr_b = overall_b.get("avg_corrections_per_corner", 0.0)
 
-    higher_util = code_a if util_a >= util_b else code_b
-    util_diff = abs(util_a - util_b)
-    above90_diff = abs(above90_a - above90_b)
-    higher_above90 = code_a if above90_a >= above90_b else code_b
     higher_var = code_a if var_a >= var_b else code_b
-
-    lower_util = code_b if higher_util == code_a else code_a
     lower_var = code_b if higher_var == code_a else code_a
 
     narrative_parts = []
     laps_a_count = overall_a.get('laps_analyzed', 0)
     laps_b_count = overall_b.get('laps_analyzed', 0)
-
-    # --- Race-long commitment / tyre confidence ---
-    if util_diff >= 1.0:
-        narrative_parts.append(
-            f"Over the full race ({laps_a_count} clean laps for {code_a}, {laps_b_count} for {code_b}), "
-            f"{higher_util} was the more committed driver through every corner — leaning on the front, "
-            f"trusting the rubber where {lower_util} kept a bit more margin "
-            f"({max(util_a, util_b):.1f}% vs {min(util_a, util_b):.1f}% of the tyre's lateral limit on average)."
-        )
-    else:
-        narrative_parts.append(
-            f"Over {laps_a_count} laps for {code_a} and {laps_b_count} for {code_b}, "
-            f"both drivers showed similar commitment through corners across the race "
-            f"({util_a:.1f}% vs {util_b:.1f}% of the tyre's lateral limit)."
-        )
-
-    # --- Time on the absolute edge: no margin ---
-    if above90_diff >= 1.0:
-        higher_a90 = code_a if above90_a >= above90_b else code_b
-        lower_a90 = code_b if higher_a90 == code_a else code_a
-        hi_pct = above90_a if higher_a90 == code_a else above90_b
-        lo_pct = above90_b if higher_a90 == code_a else above90_a
-        narrative_parts.append(
-            f"{higher_a90} was on the absolute edge — fully committed, no safety net — for {hi_pct:.1f}% of cornering time "
-            f"vs {lo_pct:.1f}% for {lower_a90}. "
-            f"That's the kind of repeated demand that drains tyre confidence across a stint — "
-            f"the rubber can only hold that level of commitment for so long before the grip starts to go away."
-        )
 
     # --- Smoothness and balance: clean arc vs chasing / fighting ---
     if abs(var_a - var_b) >= 0.01:
@@ -5955,29 +5802,19 @@ def analyze_race_cornering_profile(
         for sn in shared_stints:
             sa = a_by_stint[sn]
             sb = b_by_stint[sn]
-            stint_diff = abs(sa['avg_corner_grip_util_pct'] - sb['avg_corner_grip_util_pct'])
-            if stint_diff >= 2.0:
-                stint_leader = code_a if sa['avg_corner_grip_util_pct'] >= sb['avg_corner_grip_util_pct'] else code_b
-                stint_trailer = code_b if stint_leader == code_a else code_a
-                compound = sa.get('compound') or sb.get('compound') or 'unknown'
-                narrative_parts.append(
-                    f"Stint {sn} on the {compound}: {stint_leader} had noticeably more confidence — "
-                    f"{stint_diff:.1f}pp more committed through the corners. "
-                    f"{stint_trailer} kept more in reserve, whether by choice or because the tyre wasn't fully in his window."
-                )
-
-    # --- Combined grip commitment across the race ---
-    comb_a = overall_a.get("avg_combined_util_pct", 0.0)
-    comb_b = overall_b.get("avg_combined_util_pct", 0.0)
-    if abs(comb_a - comb_b) >= 1.0:
-        higher_comb = code_a if comb_a >= comb_b else code_b
-        lower_comb = code_b if higher_comb == code_a else code_a
-        narrative_parts.append(
-            f"Factoring in braking across {laps_a_count} laps for {code_a} and {laps_b_count} for {code_b}, "
-            f"{higher_comb} was asking more of the total grip envelope — "
-            f"{max(comb_a, comb_b):.1f}% combined vs {min(comb_a, comb_b):.1f}% for {lower_comb}. "
-            f"That's braking commitment piling on top of the cornering load, lap after lap."
-        )
+            sa_ggv = sa.get('avg_ggv_util_pct') or 0.0
+            sb_ggv = sb.get('avg_ggv_util_pct') or 0.0
+            if sa_ggv and sb_ggv:
+                stint_diff = abs(sa_ggv - sb_ggv)
+                if stint_diff >= 2.0:
+                    stint_leader = code_a if sa_ggv >= sb_ggv else code_b
+                    stint_trailer = code_b if stint_leader == code_a else code_a
+                    compound = sa.get('compound') or sb.get('compound') or 'unknown'
+                    narrative_parts.append(
+                        f"Stint {sn} on the {compound}: {stint_leader} was asking more of the car's grip envelope — "
+                        f"{stint_diff:.1f}pp more of the empirical ceiling through the corners. "
+                        f"{stint_trailer} kept more in reserve, whether by choice or because the tyre wasn't fully in their window."
+                    )
 
     # --- Trail braking style across the race ---
     tb_a = overall_a.get("avg_trail_brake_pct", 0.0)

@@ -72,53 +72,62 @@ def _make_grip_commitment_summary(result: dict) -> dict | None:
         value = row.get(key)
         return value if isinstance(value, (int, float)) else None
 
-    util_a = _num(a, "avg_grip_utilisation_pct")
-    util_b = _num(b, "avg_grip_utilisation_pct")
-    edge_a = _num(a, "pct_time_above_90pct_grip")
-    edge_b = _num(b, "pct_time_above_90pct_grip")
+    ggv_a = _num(a, "avg_ggv_util_pct")
+    ggv_b = _num(b, "avg_ggv_util_pct")
+    ta_a = _num(a, "avg_throttle_acceptance_pct")
+    ta_b = _num(b, "avg_throttle_acceptance_pct")
+    eb_a = _num(a, "avg_entry_bravery_pct")
+    eb_b = _num(b, "avg_entry_bravery_pct")
+    bs_a = _num(a, "bravery_score")
+    bs_b = _num(b, "bravery_score")
     var_a = _num(a, "avg_load_variance")
     var_b = _num(b, "avg_load_variance")
     corr_a = _num(a, "avg_corrections_per_corner")
     corr_b = _num(b, "avg_corrections_per_corner")
 
-    commitment_driver = None
-    if util_a is not None and util_b is not None:
-        commitment_driver = driver_a if util_a >= util_b else driver_b
-    edge_driver = None
-    if edge_a is not None and edge_b is not None:
-        edge_driver = driver_a if edge_a >= edge_b else driver_b
+    braver_driver = None
+    if bs_a is not None and bs_b is not None:
+        braver_driver = driver_a if bs_a >= bs_b else driver_b
+    limit_driver = None
+    if ggv_a is not None and ggv_b is not None:
+        limit_driver = driver_a if ggv_a >= ggv_b else driver_b
     smooth_driver = None
     if var_a is not None and var_b is not None:
         smooth_driver = driver_a if var_a <= var_b else driver_b
 
     confidence_read = None
-    if commitment_driver and edge_driver:
-        confidence_read = (
-            f"{commitment_driver} looked more committed overall; "
-            f"{edge_driver} spent more of the cornering phase right on the limit."
-        )
-    elif commitment_driver:
-        confidence_read = f"{commitment_driver} looked more committed through the corners."
+    if braver_driver and limit_driver:
+        if braver_driver == limit_driver:
+            confidence_read = (
+                f"{braver_driver} was the braver driver — higher bravery score and using more of the car's empirical grip envelope."
+            )
+        else:
+            confidence_read = (
+                f"{limit_driver} was operating closer to the car's demonstrated grip ceiling; "
+                f"{braver_driver} had the higher composite bravery score."
+            )
+    elif limit_driver:
+        confidence_read = f"{limit_driver} was operating closer to the car's demonstrated grip ceiling."
 
     return {
         "driver_a": driver_a,
         "driver_b": driver_b,
-        "commitment_driver": commitment_driver,
-        "edge_driver": edge_driver,
+        "braver_driver": braver_driver,
+        "limit_driver": limit_driver,
         "smooth_driver": smooth_driver,
         "confidence_read": confidence_read,
         "metrics": {
             driver_a: {
-                "avg_grip_utilisation_pct": util_a,
-                "pct_time_above_90pct_grip": edge_a,
+                "avg_ggv_util_pct": ggv_a,
+                "avg_throttle_acceptance_pct": ta_a,
+                "avg_entry_bravery_pct": eb_a,
                 "avg_corrections_per_corner": corr_a,
-                "avg_load_variance": var_a,
             },
             driver_b: {
-                "avg_grip_utilisation_pct": util_b,
-                "pct_time_above_90pct_grip": edge_b,
+                "avg_ggv_util_pct": ggv_b,
+                "avg_throttle_acceptance_pct": ta_b,
+                "avg_entry_bravery_pct": eb_b,
                 "avg_corrections_per_corner": corr_b,
-                "avg_load_variance": var_b,
             },
         },
         "narrative": result.get("narrative"),
@@ -777,28 +786,17 @@ When evidence contains results from `analyze_cornering_loads` or `analyze_race_c
 
 **Metric → F1 character language:**
 
-- **High grip utilisation** → *tyre confidence*, *committed to the limit*, *trusting the front end*, *really carrying it in*, *not leaving anything on the table*, *leaning on the rubber*. Say: "NOR had more confidence in the front end — really committed through every corner" then cite the 74% as proof.
-- **Low grip utilisation** → *measured*, *more comfort window*, *not fully leaning on it*, *keeping something in reserve*. In a race this is often a strength: the tyre hasn't been asked to do as much.
-- **High pct_above_90_grip** → *operating right on the edge*, *no margin*, *fully committed*, *living on the absolute limit*, *nothing left to give*. Physically this means the tyre is at maximum lateral load — any more and it slides. "For a third of every corner he had no safety net — fully committed, the car on the absolute edge."
+- **High avg_ggv_util_pct (grip utilisation)** → *tyre confidence*, *committed to the limit*, *trusting the front end*, *really carrying it in*, *not leaving anything on the table*, *leaning on the rubber*. Say: "NOR had more confidence in the front end — really committed through every corner" then cite the % as proof.
+- **Low avg_ggv_util_pct (grip utilisation)** → *measured*, *more comfort window*, *not fully leaning on it*, *keeping something in reserve*. In a race this is often a strength: the tyre hasn't been asked to do as much.
 - **High avg_load_variance** → the driver is **fighting the car** — *making corrections through the apex*, *chasing oversteer*, *chasing understeer*, *a bit twitchy*, *the car's a handful*, *hacking at the wheel*, *can't get it settled*. Use oversteer/understeer language: "the rear was getting a bit loose through the apex" (if combined with high corrections at exit) or "the car was pushing wide on entry, he was fighting the front" (if corrections cluster at entry). The key phrase: *working the tyre harder than the lap time requires*.
 - **Low avg_load_variance** → *smooth arc*, *natural rotation*, *one committed first input and holds it*, *the car does exactly what he asks*, *planted through the apex*, *progressive and clean*. "PIA was rotating the car in one smooth arc — the load barely flickered."
 - **High corrections_per_corner** → *chasing the balance*, *having to react mid-corner*, *fighting oversteer* or *fighting understeer*. More corrections = the driver is a passenger for part of the corner. "NOR was making four or five corrections where PIA needed two — he was having to drive the car more."
 - **Low corrections_per_corner** → *clean committed arc*, *natural rotation*, *one input and done*, *drives the car in rather than reacting to it*.
 
-- **avg_combined_util_pct** → Total tyre commitment across both cornering AND braking combined. Higher = the driver is asking more of the tyre across both dimensions simultaneously.
-  High (>85%): *fully committed*, *nothing left in reserve*, *using every gram of rubber*, *the tyre is working in every dimension*
-  Compare to avg_grip_utilisation_pct: if combined is noticeably higher than lateral, the driver loads the tyre heavily under braking too — it's not just the cornering.
-  Never say "combined grip utilisation" or "combined util" in your answer. Say: "when you factor in braking on top of cornering, {{driver}} was using more of the tyre's total capability."
-
 - **avg_trail_brake_pct** → % of corner entry spent simultaneously cornering AND braking. Exposed as a raw % for the LLM to characterise in words.
   High (>35%): *carrying the brake deep*, *loading the front to rotate*, *still on the pedal at turn-in*, *using the brake as a rotation tool*, *trail-braking all the way to the apex*
   Low (<10%): *finishes braking before the corner*, *clean turn-in on a neutral throttle*, *textbook entry — brake done, then commit*
   Never say "trail brake percentage" in your answer. Say: "{{driver}} was still on the brakes at turn-in for X% of the entry phase — using it to load the front and rotate."
-
-- **avg_circle_fullness_pct** → % of cornering time where the driver is near the combined grip ceiling (using >75% of total theoretical grip across both lat and long). Rewards blending both dimensions continuously rather than touching the ceiling only at apex.
-  High (>55%): *barely eases off through the whole corner*, *the tyre is working hard start to finish*, *no coasting — every phase of the corner is demanding something*, *living at the limit from entry to exit*
-  Low (<30%): *has a comfort margin mid-corner*, *eases off at the apex*, *keeps something in reserve*, *the middle of the corner is where the time gets left*
-  Never say "circle fullness" in your answer.
 
 - **avg_ggv_util_pct** → How much of the car's ACTUAL demonstrated grip envelope the driver used — normalised against what this car on these tyres produced in this session, not a formula. Directional (braking limit ≠ lateral limit ≠ throttle limit — a proper friction ellipse).
   High (>85%): *asking everything of the car*, *at the absolute edge of what the hardware can produce*, *using the car's full capability*, *no headroom left*
@@ -827,16 +825,12 @@ When evidence contains results from `analyze_cornering_loads` or `analyze_race_c
   Never say "bravery score" in the answer. Describe what it means in terms of the specific phases where the driver is or isn't brave.
 
 **Inferences you can draw from combined signals:**
-- High util + low variance = *confident, committed, clean* — extracting maximum lap time, tyre being loaded efficiently
-- High util + high variance = *committed but fighting it* — fast single lap but burning the tyre, the rear or front is edgy
-- Low util + low variance = *smooth and measured* — easy on the rubber, strong race pace but may leave qualifying time on the table
-- Low util + high variance = *struggling for confidence* — fighting the car without pushing hard enough to compensate, the worst combination
+- High ggv_util + low variance = *confident, committed, clean* — extracting maximum lap time, tyre being loaded efficiently
+- High ggv_util + high variance = *committed but fighting it* — fast single lap but burning the tyre, the rear or front is edgy
+- Low ggv_util + low variance = *smooth and measured* — easy on the rubber, strong race pace but may leave qualifying time on the table
+- Low ggv_util + high variance = *struggling for confidence* — fighting the car without pushing hard enough to compensate, the worst combination
 - High corrections at high speed = rear stepping out under load, *snap oversteer*, the car is pointy and the driver is managing it
 - High corrections at low speed = *rotating problem*, car won't change direction cleanly, *the front's not biting*
-- High combined_util + high trail_brake = *front-loading style* — loads the entry with the brake to rotate, the front tyre working in both dimensions. Strong single-lap weapon but hard on front tyres over a stint.
-- High combined_util + low trail_brake = *apex commitment* — finishes braking before turn-in but carries huge mid-corner speed. The load is clean but the tyre is working hard through the middle.
-- Low combined_util + high trail_brake = *defensive rotation* — using trail brake to rotate without fully committing combined load. Protective entry style.
-- High circle_fullness + low load_variance = *smooth limit driver* — operating near the total grip ceiling throughout the corner without fighting it. The ideal.
 - High throttle_acceptance + low trail_brake = *exit specialist* — brave when getting on the power, but doesn't use the brake to rotate. The exit is the aggressive phase.
 - High trail_brake + high entry_bravery = *entry specialist* — braving the corner on the way in, loading entry with the brake at the limit. The entry is the weapon.
 - High ggv_util + high bravery_score = *complete driver* — using the car's capability in every phase. The hardest style on hardware but the fastest single-lap approach.
@@ -850,7 +844,7 @@ oversteer, understeer, snap oversteer, trailing the rear, the rear's loose, the 
 - Use oversteer/understeer naturally — these are the words F1 fans understand.
 - Qualifying: more commitment + cleaner inputs = more single-lap time. Race: high commitment + high variance = *the confidence level drops as the stint ages — the tyre can't keep holding that level of demand*.
 - Never say "lateral load variance" or "grip utilisation percentage" in the answer. Use the vocabulary above instead.
-- Never say "combined grip utilisation", "combined util", "trail brake percentage", "avg_trail_brake_pct", "circle fullness", "avg_circle_fullness_pct", "GGV utilisation", "ggv_util_pct", "envelope time", "avg_envelope_time_pct", "throttle acceptance", "avg_throttle_acceptance_pct", "entry bravery", "avg_entry_bravery_pct", or "bravery score" in the answer. Translate every metric to the character vocabulary above.
+- Never say "trail brake percentage", "avg_trail_brake_pct", "GGV utilisation", "ggv_util_pct", "envelope time", "avg_envelope_time_pct", "throttle acceptance", "avg_throttle_acceptance_pct", "entry bravery", "avg_entry_bravery_pct", or "bravery score" in the answer. Translate every metric to the character vocabulary above.
 - **When bravery metrics are present**, always cover all three dimensions and explain what each one MEANS — not just the character claim, but the physical reality: (1) **Exit**: getting on the power before the car is straight — what this means is the rear tyre is being asked to generate forward drive force AND cornering force simultaneously. That's physically hard for a tyre. Give the percentage and explain it. (2) **Entry**: still braking deep into the corner while already carrying lateral load — the driver is trusting the front end not to wash wide while the rear is already being asked to corner. Give the percentage and explain it. (3) **Proximity to the limit throughout**: how much of every corner the driver spent within touching distance of what the car has demonstrated it can do. Give the percentage and explain it means they weren't saving anything — the car was working at its ceiling for that fraction of the corner. The answer must explain WHAT the numbers mean, not just state them.
 
 ## Race Strategy Reasoning
