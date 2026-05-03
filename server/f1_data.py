@@ -5545,6 +5545,42 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             f"settle before committing to power."
         )
 
+    # --- Outlier detection: load_variance spikes and standout committed corners ---
+    if len(per_corner) >= 4:
+        for code in (code_a, code_b):
+            variances = [c[code]["load_variance"] for c in per_corner if c[code].get("load_variance") is not None]
+            if len(variances) >= 4:
+                var_mean = float(np.mean(variances))
+                var_std = float(np.std(variances))
+                if var_std > 0:
+                    for c in per_corner:
+                        v = c[code].get("load_variance")
+                        if v is not None and v > var_mean + 2 * var_std:
+                            corner_num = c["corner_index"]
+                            dist_m = c["entry_dist_m"]
+                            narrative_parts.append(
+                                f"Standout moment: {code}'s roughest corner was corner {corner_num} "
+                                f"(~{dist_m}m) — load wobble of {v:.3f} vs their {var_mean:.3f} typical. "
+                                f"That spike suggests a snap, oversteer moment, or a correction they had to manage."
+                            )
+                            break  # report only the single worst outlier per driver
+
+            ggv_vals = [c[code].get("ggv_util_pct") or 0.0 for c in per_corner]
+            if len(ggv_vals) >= 4:
+                ggv_mean = float(np.mean(ggv_vals))
+                ggv_std = float(np.std(ggv_vals))
+                if ggv_std > 0:
+                    best_c = max(per_corner, key=lambda c: c[code].get("ggv_util_pct") or 0.0)
+                    best_val = best_c[code].get("ggv_util_pct") or 0.0
+                    if best_val > ggv_mean + 2 * ggv_std and best_val >= 90.0:
+                        corner_num = best_c["corner_index"]
+                        dist_m = best_c["entry_dist_m"]
+                        narrative_parts.append(
+                            f"Corner {corner_num} (~{dist_m}m) was {code}'s standout committed corner — "
+                            f"{best_val:.1f}% of the car's grip ceiling vs their {ggv_mean:.1f}% average. "
+                            f"That's right at the ragged edge of what this car can produce."
+                        )
+
     return {
         "event": session.event['EventName'],
         "session": session_type.upper(),
