@@ -15,7 +15,30 @@
       "Bash(python:*)",
       "Bash(npm run:*)",
       "Bash(node_modules/.bin/vite build:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(git stash *)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "WebFetch(domain:www.tandfonline.com)",
+      "WebFetch(domain:www.researchgate.net)",
+      "WebFetch(domain:link.springer.com)",
+      "WebFetch(domain:www.academia.edu)",
+      "WebFetch(domain:www.sciencedirect.com)",
+      "WebFetch(domain:www.f1technical.net)",
+      "WebFetch(domain:hpwizard.com)",
+      "WebFetch(domain:www.miata.net)",
+      "WebFetch(domain:pmc.ncbi.nlm.nih.gov)",
+      "WebFetch(domain:researchgate.net)",
+      "WebFetch(domain:www.brachengineering.com)",
+      "WebFetch(domain:peer.asee.org)",
+      "WebFetch(domain:trailbrake.com)",
+      "WebFetch(domain:www.yourdatadriven.com)",
+      "WebFetch(domain:performancedriversclub.org)",
+      "WebFetch(domain:www.motorsportmagazine.com)",
+      "WebFetch(domain:tuprints.ulb.tu-darmstadt.de)",
+      "WebFetch(domain:en.racelogic.support)",
+      "WebFetch(domain:vrperfdev.wordpress.com)"
     ]
   }
 }

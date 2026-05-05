@@ -1,28 +1,60 @@
 import { useState } from 'react'
 
-const COLOR_A = 'hsl(0, 75%, 52%)'
-const COLOR_B = 'hsl(186, 100%, 45%)'
+const COLOR_A = 'hsl(var(--primary))'
+const COLOR_B = 'hsl(var(--speed))'
 const CHART_W = 680
 const CHART_H = 180
 const DELTA_H = 60
 
-function linePath(points, width, height, minY, maxY, yKey) {
+const RANK_COLORS = [
+  'hsl(var(--primary))',
+  'hsl(var(--time))',
+  'hsl(var(--accent))',
+]
+const RANK_LABELS = ['P', 'S', 'T']
+const BAND_HALF_WIDTH = 85
+
+function getDistanceDomain(points, causes = []) {
+  const distances = points
+    .map((p) => p.distance_m)
+    .filter((value) => typeof value === 'number')
+  const causeDistances = causes
+    .map((cause) => cause.distance_m)
+    .filter((value) => typeof value === 'number')
+  const allDistances = [...distances, ...causeDistances]
+  const min = Math.min(...allDistances)
+  const max = Math.max(...allDistances)
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) {
+    return { min: 0, max: 1, span: 1 }
+  }
+  return { min, max, span: max - min }
+}
+
+function xForDistance(distance, domain, width) {
+  if (typeof distance !== 'number') return 0
+  const x = ((distance - domain.min) / domain.span) * width
+  return Math.min(Math.max(x, 0), width)
+}
+
+function isInDomain(distance, domain) {
+  return typeof distance === 'number' && distance >= domain.min && distance <= domain.max
+}
+
+function linePath(points, width, height, minY, maxY, yKey, domain) {
   if (!points.length || maxY <= minY) return ''
-  const maxDist = Math.max(points[points.length - 1]?.distance_m ?? 1, 1)
   return points
     .map((p, i) => {
-      const x = (p.distance_m / maxDist) * width
+      const x = xForDistance(p.distance_m, domain, width)
       const y = height - (((p[yKey] ?? minY) - minY) / (maxY - minY)) * height
       return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`
     })
     .join(' ')
 }
 
-function fillPath(points, width, height, minY, maxY, yKey) {
+function fillPath(points, width, height, minY, maxY, yKey, domain) {
   if (!points.length || maxY <= minY) return ''
-  const maxDist = Math.max(points[points.length - 1]?.distance_m ?? 1, 1)
   const coords = points.map((p) => {
-    const x = (p.distance_m / maxDist) * width
+    const x = xForDistance(p.distance_m, domain, width)
     const y = height - (((p[yKey] ?? minY) - minY) / (maxY - minY)) * height
     return [x.toFixed(1), y.toFixed(1)]
   })
@@ -31,16 +63,12 @@ function fillPath(points, width, height, minY, maxY, yKey) {
   return `${linePart} L ${lastX} ${height} L 0 ${height} Z`
 }
 
-// Delta fill: positive (A faster) fills upward, negative (B faster) fills downward
-function deltaFillPath(points, width, height, maxAbs, sign) {
+function deltaFillPath(points, width, height, maxAbs, sign, domain) {
   if (!points.length || maxAbs <= 0) return ''
-  const maxDist = Math.max(points[points.length - 1]?.distance_m ?? 1, 1)
   const zeroY = height / 2
   const coords = points.map((p) => {
-    const x = (p.distance_m / maxDist) * width
+    const x = xForDistance(p.distance_m, domain, width)
     const delta = p.delta_speed ?? 0
-    // For sign=1 (positive/A): clamp to [0, +inf], mirror negative to zero
-    // For sign=-1 (negative/B): clamp to [-inf, 0], mirror positive to zero
     const clampedDelta = sign > 0 ? Math.max(delta, 0) : Math.min(delta, 0)
     const y = zeroY - (clampedDelta / maxAbs) * (height / 2)
     return [x.toFixed(1), y.toFixed(1)]
@@ -50,13 +78,12 @@ function deltaFillPath(points, width, height, maxAbs, sign) {
   return `${linePart} L ${lastX} ${zeroY} L 0 ${zeroY} Z`
 }
 
-function deltaLinePath(points, width, height, maxAbs) {
+function deltaLinePath(points, width, height, maxAbs, domain) {
   if (!points.length || maxAbs <= 0) return ''
-  const maxDist = Math.max(points[points.length - 1]?.distance_m ?? 1, 1)
   const zeroY = height / 2
   return points
     .map((p, i) => {
-      const x = (p.distance_m / maxDist) * width
+      const x = xForDistance(p.distance_m, domain, width)
       const delta = p.delta_speed ?? 0
       const y = zeroY - (delta / maxAbs) * (height / 2)
       return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`
@@ -71,35 +98,57 @@ function nearestPoint(points, cursorDist) {
   )
 }
 
-export default function SpeedTraceChart({ points, driverA, driverB, decisiveDistance, decisiveCorner }) {
+function nearestMechIndex(causes, cursorDist, threshold = 80) {
+  if (!causes?.length) return null
+  let best = null
+  let bestDist = threshold
+  causes.forEach((cause, index) => {
+    const distance = cause.distance_m
+    if (typeof distance !== 'number') return
+    const delta = Math.abs(distance - cursorDist)
+    if (delta < bestDist) {
+      bestDist = delta
+      best = index
+    }
+  })
+  return best
+}
+
+export default function SpeedTraceChart({
+  points,
+  driverA,
+  driverB,
+  decisiveDistance,
+  causes = [],
+  activeMechIndex,
+  onMechHover,
+}) {
   const [hoveredDistance, setHoveredDistance] = useState(decisiveDistance ?? null)
 
   if (!points?.length) return null
 
-  const speeds = points.flatMap((p) => [p.speed_a, p.speed_b]).filter((v) => typeof v === 'number')
+  const domain = getDistanceDomain(points, causes)
+  const speeds = points.flatMap((p) => [p.speed_a, p.speed_b]).filter((value) => typeof value === 'number')
   const minY = Math.max(0, Math.min(...speeds) - 8)
   const maxY = Math.max(...speeds) + 8
-  const maxDist = Math.max(points[points.length - 1]?.distance_m ?? 1, 1)
 
-  const deltas = points.map((p) => p.delta_speed ?? 0).filter((v) => typeof v === 'number')
+  const deltas = points.map((p) => p.delta_speed ?? 0).filter((value) => typeof value === 'number')
   const maxAbsDelta = Math.max(...deltas.map(Math.abs), 1)
-  // Round up to a clean number for the y-axis label
   const deltaScale = Math.ceil(maxAbsDelta / 5) * 5
 
-  const pathA = linePath(points, CHART_W, CHART_H, minY, maxY, 'speed_a')
-  const pathB = linePath(points, CHART_W, CHART_H, minY, maxY, 'speed_b')
-  const fillA = fillPath(points, CHART_W, CHART_H, minY, maxY, 'speed_a')
-  const fillB = fillPath(points, CHART_W, CHART_H, minY, maxY, 'speed_b')
-  const deltaPos = deltaFillPath(points, CHART_W, DELTA_H, deltaScale, 1)
-  const deltaNeg = deltaFillPath(points, CHART_W, DELTA_H, deltaScale, -1)
-  const deltaLine = deltaLinePath(points, CHART_W, DELTA_H, deltaScale)
+  const pathA = linePath(points, CHART_W, CHART_H, minY, maxY, 'speed_a', domain)
+  const pathB = linePath(points, CHART_W, CHART_H, minY, maxY, 'speed_b', domain)
+  const fillA = fillPath(points, CHART_W, CHART_H, minY, maxY, 'speed_a', domain)
+  const fillB = fillPath(points, CHART_W, CHART_H, minY, maxY, 'speed_b', domain)
+  const deltaPos = deltaFillPath(points, CHART_W, DELTA_H, deltaScale, 1, domain)
+  const deltaNeg = deltaFillPath(points, CHART_W, DELTA_H, deltaScale, -1, domain)
+  const deltaLine = deltaLinePath(points, CHART_W, DELTA_H, deltaScale, domain)
 
   const activePoint = nearestPoint(
     points,
-    hoveredDistance ?? decisiveDistance ?? points[Math.floor(points.length * 0.6)]?.distance_m ?? 0,
+    hoveredDistance ?? decisiveDistance ?? points[Math.floor(points.length * 0.6)]?.distance_m ?? domain.min,
   )
-  const activeX = ((activePoint?.distance_m ?? 0) / maxDist) * CHART_W
-  const decisiveX = decisiveDistance != null ? (decisiveDistance / maxDist) * CHART_W : null
+  const activeX = xForDistance(activePoint?.distance_m, domain, CHART_W)
 
   const delta = activePoint?.delta_speed
   const deltaIsA = typeof delta === 'number' && delta > 0
@@ -109,183 +158,195 @@ export default function SpeedTraceChart({ points, driverA, driverB, decisiveDist
     ? 'Level'
     : `${deltaIsA ? driverA : driverB} +${Math.abs(delta).toFixed(1)} kph`
 
+  function handleMouseMove(event) {
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const ratio = Math.min(Math.max((event.clientX - bounds.left - 12) / (bounds.width - 24), 0), 1)
+    const cursorDist = domain.min + ratio * domain.span
+    setHoveredDistance(cursorDist)
+    if (onMechHover) onMechHover(nearestMechIndex(causes, cursorDist))
+  }
+
+  function handleMouseLeave() {
+    setHoveredDistance(decisiveDistance ?? null)
+    if (onMechHover) onMechHover(null)
+  }
+
   return (
-    <div className="overflow-hidden rounded-md border border-border/80 bg-card">
-      {/* Header */}
+    <div className="overflow-hidden rounded-xl border border-border/80 bg-card">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/80 px-3 py-2.5">
         <div>
-          <div className="text-[9px] font-medium uppercase tracking-[0.22em] text-muted-foreground/80">Speed Trace</div>
-          <div className="mt-0.5 text-[10px] text-muted-foreground/50">
-            Hover to inspect · Delta strip shows where the gap accumulates
+          <div className="text-sm font-medium text-foreground">Speed trace</div>
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            P/S/T are the same markers explained below.
           </div>
         </div>
         <div className="flex items-center gap-4 text-[11px]">
-          <span className="flex items-center gap-1.5">
-            <span className="h-[3px] w-5 rounded-full" style={{ background: COLOR_A }} />
+          {causes.slice(0, 3).map((_, index) => (
+            <span key={index} className="flex items-center gap-1 text-xs font-medium" style={{ color: `${RANK_COLORS[index]}cc` }}>
+              <span className="inline-flex h-4 w-4 items-center justify-center rounded-sm" style={{ background: `${RANK_COLORS[index]}20` }}>
+                {RANK_LABELS[index]}
+              </span>
+              {index === 0 ? 'Primary' : index === 1 ? 'Secondary' : 'Tertiary'}
+            </span>
+          ))}
+          <span className="ml-1 flex items-center gap-1.5">
+            <span className="h-[3px] w-5 rounded-sm" style={{ background: COLOR_A }} />
             <span className="font-semibold" style={{ color: COLOR_A }}>{driverA}</span>
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="h-[3px] w-5 rounded-full" style={{ background: COLOR_B }} />
+            <span className="h-[3px] w-5 rounded-sm" style={{ background: COLOR_B }} />
             <span className="font-semibold" style={{ color: COLOR_B }}>{driverB}</span>
           </span>
         </div>
       </div>
 
-      <div
-        className="relative px-3 pt-3"
-        onMouseMove={(event) => {
-          const bounds = event.currentTarget.getBoundingClientRect()
-          const ratio = Math.min(Math.max((event.clientX - bounds.left - 12) / (bounds.width - 24), 0), 1)
-          setHoveredDistance(ratio * maxDist)
-        }}
-        onMouseLeave={() => setHoveredDistance(decisiveDistance ?? null)}
-      >
-        {/* ── Main speed trace ── */}
+      <div className="relative px-3 pt-3" onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave}>
         <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} className="h-44 w-full overflow-visible">
           <defs>
             <linearGradient id="stGradA" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="hsl(0,75%,52%)" stopOpacity="0.22" />
-              <stop offset="100%" stopColor="hsl(0,75%,52%)" stopOpacity="0" />
+              <stop offset="0%" stopColor={COLOR_A} stopOpacity="0.16" />
+              <stop offset="100%" stopColor={COLOR_A} stopOpacity="0" />
             </linearGradient>
             <linearGradient id="stGradB" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="hsl(186,100%,45%)" stopOpacity="0.18" />
-              <stop offset="100%" stopColor="hsl(186,100%,45%)" stopOpacity="0" />
+              <stop offset="0%" stopColor={COLOR_B} stopOpacity="0.12" />
+              <stop offset="100%" stopColor={COLOR_B} stopOpacity="0" />
             </linearGradient>
           </defs>
 
-          {/* Grid */}
-          {[0.25, 0.5, 0.75].map((r) => (
-            <line key={r} x1="0" x2={CHART_W} y1={CHART_H * r} y2={CHART_H * r}
-              stroke="hsl(0,0%,14%)" strokeWidth="1" />
+          {[0.25, 0.5, 0.75].map((ratio) => (
+            <line key={ratio} x1="0" x2={CHART_W} y1={CHART_H * ratio} y2={CHART_H * ratio}
+              stroke="hsl(var(--border))" strokeOpacity="0.65" strokeWidth="1" />
           ))}
 
-          {/* Speed axis labels */}
-          {[0.25, 0.5, 0.75].map((r) => {
-            const spd = Math.round(minY + (1 - r) * (maxY - minY))
+          {[0.25, 0.5, 0.75].map((ratio) => {
+            const speed = Math.round(minY + (1 - ratio) * (maxY - minY))
             return (
-              <text key={r} x="6" y={CHART_H * r - 4} fill="hsl(0,0%,38%)" fontSize="11" fontFamily="monospace">
-                {spd}
+              <text key={ratio} x="6" y={CHART_H * ratio - 4} fill="hsl(var(--muted-foreground))" fontSize="11" fontFamily="monospace">
+                {speed}
               </text>
             )
           })}
 
-          {/* Decisive zone */}
-          {decisiveX != null && (
-            <>
-              <rect x={Math.max(decisiveX - 36, 0)} y="0" width="72" height={CHART_H}
-                fill="hsl(0,75%,52%)" fillOpacity="0.05" />
-              <line x1={decisiveX} x2={decisiveX} y1="0" y2={CHART_H}
-                stroke="hsl(0,75%,52%)" strokeOpacity="0.45" strokeDasharray="4 5" strokeWidth="1.5" />
-              {decisiveCorner && (
-                <text x={decisiveX + 5} y="14" fill="hsl(0,75%,52%)" fillOpacity="0.7"
-                  fontSize="10" fontFamily="monospace">{decisiveCorner}</text>
-              )}
-            </>
-          )}
+          {causes.slice(0, 3).map((cause, index) => {
+            if (!isInDomain(cause.distance_m, domain)) return null
+            const cx = xForDistance(cause.distance_m, domain, CHART_W)
+            const bw = (BAND_HALF_WIDTH / domain.span) * CHART_W
+            const labelX = Math.min(Math.max(cx, 8), CHART_W - 8)
+            const color = RANK_COLORS[index]
+            const isActive = activeMechIndex === index
 
-          {/* Fill areas */}
+            return (
+              <g key={index}>
+                <rect
+                  x={Math.max(cx - bw, 0)}
+                  y={0}
+                  width={Math.min(bw * 2, CHART_W - Math.max(cx - bw, 0))}
+                  height={CHART_H}
+                  fill={color}
+                  fillOpacity={isActive ? 0.18 : 0.07}
+                />
+                <line
+                  x1={cx}
+                  x2={cx}
+                  y1={0}
+                  y2={CHART_H}
+                  stroke={color}
+                  strokeOpacity={isActive ? 0.75 : 0.38}
+                  strokeWidth={isActive ? 2 : 1}
+                  strokeDasharray="4 4"
+                />
+                <rect x={labelX - 8} y={2} width={16} height={14} rx={3} fill={color} fillOpacity={isActive ? 0.95 : 0.68} />
+                <text x={labelX} y={13} textAnchor="middle" fill="white" fontSize="9" fontFamily="monospace" fontWeight="bold">
+                  {RANK_LABELS[index]}
+                </text>
+              </g>
+            )
+          })}
+
           <path d={fillB} fill="url(#stGradB)" />
           <path d={fillA} fill="url(#stGradA)" />
-
-          {/* Speed traces */}
           <path d={pathA} fill="none" stroke={COLOR_A} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
           <path d={pathB} fill="none" stroke={COLOR_B} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
 
-          {/* Cursor */}
           {activePoint && (
             <>
-              <line x1={activeX} x2={activeX} y1="0" y2={CHART_H}
-                stroke="hsl(0,0%,55%)" strokeOpacity="0.2" strokeWidth="1" />
-              <circle cx={activeX}
-                cy={CHART_H - (((activePoint.speed_a ?? minY) - minY) / (maxY - minY)) * CHART_H}
-                r="4.5" fill={COLOR_A} style={{ filter: 'drop-shadow(0 0 5px hsl(0,75%,52%))' }} />
-              <circle cx={activeX}
-                cy={CHART_H - (((activePoint.speed_b ?? minY) - minY) / (maxY - minY)) * CHART_H}
-                r="4.5" fill={COLOR_B} style={{ filter: 'drop-shadow(0 0 5px hsl(186,100%,45%))' }} />
+              <line x1={activeX} x2={activeX} y1="0" y2={CHART_H} stroke="hsl(var(--muted-foreground))" strokeOpacity="0.35" strokeWidth="1" />
+              <circle cx={activeX} cy={CHART_H - (((activePoint.speed_a ?? minY) - minY) / (maxY - minY)) * CHART_H} r="4.5" fill={COLOR_A} />
+              <circle cx={activeX} cy={CHART_H - (((activePoint.speed_b ?? minY) - minY) / (maxY - minY)) * CHART_H} r="4.5" fill={COLOR_B} />
             </>
           )}
         </svg>
 
-        {/* ── Delta strip ── */}
         <div className="mt-1.5">
           <div className="mb-1 flex items-center gap-2">
-            <span className="text-[9px] font-medium uppercase tracking-[0.2em] text-muted-foreground/50">
-              Δ Speed (kph)
-            </span>
-            <span className="rounded px-1.5 py-0.5 text-[10px] font-medium font-mono-data"
-              style={{ background: `${deltaColor}18`, color: deltaColor }}>
+            <span className="text-xs font-medium text-muted-foreground">Speed delta (kph)</span>
+            <span className="rounded px-1.5 py-0.5 font-mono-data text-[10px] font-medium" style={{ background: `${deltaColor}18`, color: deltaColor }}>
               {deltaLabel}
             </span>
           </div>
-          <svg viewBox={`0 0 ${CHART_W} ${DELTA_H}`} className="w-full overflow-visible"
-            style={{ height: `${DELTA_H * 0.6}px` }}>
+          <svg viewBox={`0 0 ${CHART_W} ${DELTA_H}`} className="w-full overflow-visible" style={{ height: `${DELTA_H * 0.6}px` }}>
             <defs>
               <linearGradient id="dGradA" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="hsl(0,75%,52%)" stopOpacity="0.5" />
-                <stop offset="100%" stopColor="hsl(0,75%,52%)" stopOpacity="0.08" />
+                <stop offset="0%" stopColor={COLOR_A} stopOpacity="0.35" />
+                <stop offset="100%" stopColor={COLOR_A} stopOpacity="0.06" />
               </linearGradient>
               <linearGradient id="dGradB" x1="0" y1="1" x2="0" y2="0">
-                <stop offset="0%" stopColor="hsl(186,100%,45%)" stopOpacity="0.5" />
-                <stop offset="100%" stopColor="hsl(186,100%,45%)" stopOpacity="0.08" />
+                <stop offset="0%" stopColor={COLOR_B} stopOpacity="0.35" />
+                <stop offset="100%" stopColor={COLOR_B} stopOpacity="0.06" />
               </linearGradient>
             </defs>
 
-            {/* Zero line */}
-            <line x1="0" x2={CHART_W} y1={DELTA_H / 2} y2={DELTA_H / 2}
-              stroke="hsl(0,0%,30%)" strokeWidth="1" />
+            <line x1="0" x2={CHART_W} y1={DELTA_H / 2} y2={DELTA_H / 2} stroke="hsl(var(--border))" strokeWidth="1" />
+            <text x="4" y={DELTA_H / 2 - 4} fill="hsl(var(--muted-foreground))" fontSize="9" fontFamily="monospace">+{deltaScale}</text>
+            <text x="4" y={DELTA_H / 2 + 13} fill="hsl(var(--muted-foreground))" fontSize="9" fontFamily="monospace">-{deltaScale}</text>
 
-            {/* Y-axis scale labels */}
-            <text x="4" y={DELTA_H / 2 - 4} fill="hsl(0,0%,35%)" fontSize="9" fontFamily="monospace">
-              +{deltaScale}
-            </text>
-            <text x="4" y={DELTA_H / 2 + 13} fill="hsl(0,0%,35%)" fontSize="9" fontFamily="monospace">
-              -{deltaScale}
-            </text>
+            {causes.slice(0, 3).map((cause, index) => {
+              if (!isInDomain(cause.distance_m, domain)) return null
+              const cx = xForDistance(cause.distance_m, domain, CHART_W)
+              const color = RANK_COLORS[index]
+              const isActive = activeMechIndex === index
+              return (
+                <line key={index} x1={cx} x2={cx} y1={0} y2={DELTA_H}
+                  stroke={color} strokeOpacity={isActive ? 0.65 : 0.28}
+                  strokeWidth={isActive ? 1.5 : 1} strokeDasharray="3 4" />
+              )
+            })}
 
-            {/* Fills */}
             <path d={deltaPos} fill="url(#dGradA)" />
             <path d={deltaNeg} fill="url(#dGradB)" />
-
-            {/* Delta line */}
-            <path d={deltaLine} fill="none" stroke="hsl(0,0%,55%)" strokeWidth="1.2"
-              strokeLinecap="round" strokeLinejoin="round" strokeOpacity="0.5" />
-
-            {/* Cursor line */}
+            <path d={deltaLine} fill="none" stroke="hsl(var(--muted-foreground))" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" strokeOpacity="0.5" />
             {activePoint && (
-              <line x1={activeX} x2={activeX} y1="0" y2={DELTA_H}
-                stroke="hsl(0,0%,55%)" strokeOpacity="0.2" strokeWidth="1" />
+              <line x1={activeX} x2={activeX} y1="0" y2={DELTA_H} stroke="hsl(var(--muted-foreground))" strokeOpacity="0.35" strokeWidth="1" />
             )}
           </svg>
         </div>
 
-        {/* Distance axis */}
-        <div className="mt-1.5 flex items-center justify-between pb-3 text-[10px] font-mono-data text-muted-foreground/50">
-          <span>0m</span>
-          <span>{maxDist}m</span>
+        <div className="mt-1.5 flex items-center justify-between pb-3 font-mono-data text-[10px] text-muted-foreground/50">
+          <span>{Math.round(domain.min)}m</span>
+          <span>{Math.round(domain.max)}m</span>
         </div>
       </div>
 
-      {/* Readout footer */}
       <div className="grid grid-cols-3 gap-px border-t border-border/80 bg-border/40">
         {[
           {
             label: 'Distance',
-            value: activePoint?.distance_m != null ? `${activePoint.distance_m}m` : '—',
+            value: activePoint?.distance_m != null ? `${activePoint.distance_m}m` : '-',
             color: 'hsl(var(--foreground))',
           },
           {
             label: driverA,
-            value: activePoint?.speed_a != null ? `${activePoint.speed_a.toFixed(1)} kph` : '—',
+            value: activePoint?.speed_a != null ? `${activePoint.speed_a.toFixed(1)} kph` : '-',
             color: COLOR_A,
           },
           {
             label: driverB,
-            value: activePoint?.speed_b != null ? `${activePoint.speed_b.toFixed(1)} kph` : '—',
+            value: activePoint?.speed_b != null ? `${activePoint.speed_b.toFixed(1)} kph` : '-',
             color: COLOR_B,
           },
         ].map(({ label, value, color }) => (
           <div key={label} className="bg-card px-3 py-2">
-            <div className="text-[9px] uppercase tracking-[0.2em] text-muted-foreground/60">{label}</div>
+            <div className="text-xs text-muted-foreground">{label}</div>
             <div className="mt-0.5 font-mono-data text-xs font-medium" style={{ color }}>{value}</div>
           </div>
         ))}

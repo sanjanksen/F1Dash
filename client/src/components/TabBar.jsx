@@ -1,13 +1,10 @@
 import { cn } from '@/lib/utils'
 
-const tabs = ['Stats', 'Chat']
+const tabs = ['Chat', 'Stats']
 
 export default function TabBar({ activeTab, onTabChange }) {
   return (
-    <div
-      role="tablist"
-      className="inline-flex items-center rounded-md border border-border bg-card p-1"
-    >
+    <div role="tablist" className="flex items-center gap-1">
       {tabs.map((tab) => (
         <button
           key={tab}
@@ -15,13 +12,16 @@ export default function TabBar({ activeTab, onTabChange }) {
           aria-selected={activeTab === tab}
           onClick={() => onTabChange(tab)}
           className={cn(
-            'rounded-sm px-3 py-1.5 text-xs font-medium tracking-[0.12em] uppercase transition-colors',
+            'relative px-2.5 py-1.5 text-sm transition-colors',
             activeTab === tab
-              ? 'bg-primary/15 text-primary ring-1 ring-inset ring-primary/25'
-              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
+              ? 'text-foreground'
+              : 'text-muted-foreground hover:text-foreground',
           )}
         >
           {tab}
+          {activeTab === tab ? (
+            <span className="absolute inset-x-2 -bottom-[13px] h-px bg-primary" />
+          ) : null}
         </button>
       ))}
     </div>

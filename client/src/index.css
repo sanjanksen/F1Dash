@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,400;0,500;0,600;0,700;1,600&family=JetBrains+Mono:wght@400;500&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Geist+Mono:wght@400;500;600&display=swap");
 @import "tailwindcss";
 @import "tw-animate-css";
 
@@ -26,107 +26,92 @@
   --color-ring: hsl(var(--ring));
   --color-speed: hsl(var(--speed));
   --color-time: hsl(var(--time));
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Barlow Condensed", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-active: hsl(var(--sidebar-active));
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 2px);
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
 }
 
 :root {
-  --background: 0 0% 5%;
-  --foreground: 0 0% 96%;
-  --card: 0 0% 7%;
-  --card-foreground: 0 0% 96%;
-  --popover: 0 0% 7%;
-  --popover-foreground: 0 0% 96%;
-  --primary: 0 75% 50%;
-  --primary-foreground: 0 0% 98%;
-  --secondary: 0 0% 11%;
-  --secondary-foreground: 0 0% 92%;
-  --muted: 0 0% 9%;
-  --muted-foreground: 0 0% 58%;
-  --accent: 285 60% 52%;
-  --accent-foreground: 0 0% 98%;
-  --destructive: 0 65% 42%;
-  --destructive-foreground: 0 0% 98%;
-  --border: 0 0% 15%;
-  --input: 0 0% 10%;
-  --ring: 0 75% 50%;
-  --radius: 0.45rem;
-  /* semantic data colors */
-  --speed: 186 100% 45%;
-  --time: 38 95% 55%;
-  --podium-gold: 48 96% 55%;
-  --podium-silver: 0 0% 75%;
-  --podium-bronze: 28 60% 52%;
+  --background: 40 30% 96%;
+  --foreground: 32 16% 11%;
+  --card: 42 36% 98%;
+  --card-foreground: 32 16% 11%;
+  --popover: 42 36% 98%;
+  --popover-foreground: 32 16% 11%;
+  --primary: 357 72% 46%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 38 22% 91%;
+  --secondary-foreground: 32 16% 14%;
+  --muted: 39 21% 92%;
+  --muted-foreground: 34 8% 43%;
+  --accent: 28 62% 45%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 66% 45%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 38 18% 84%;
+  --input: 38 18% 82%;
+  --ring: 357 72% 46%;
+  --radius: 0.75rem;
+  --speed: 166 35% 37%;
+  --time: 34 62% 42%;
+  --podium-gold: 42 72% 45%;
+  --podium-silver: 35 7% 52%;
+  --podium-bronze: 25 45% 47%;
+  --sidebar: 42 25% 93%;
+  --sidebar-foreground: 32 16% 14%;
+  --sidebar-active: 42 36% 98%;
 }
 
 .dark {
-  --background: 0 0% 5%;
-  --foreground: 0 0% 96%;
-  --card: 0 0% 7%;
-  --card-foreground: 0 0% 96%;
-  --popover: 0 0% 7%;
-  --popover-foreground: 0 0% 96%;
-  --primary: 0 75% 50%;
-  --primary-foreground: 0 0% 98%;
-  --secondary: 0 0% 11%;
-  --secondary-foreground: 0 0% 92%;
-  --muted: 0 0% 9%;
-  --muted-foreground: 0 0% 58%;
-  --accent: 285 60% 52%;
-  --accent-foreground: 0 0% 98%;
-  --destructive: 0 65% 42%;
-  --destructive-foreground: 0 0% 98%;
-  --border: 0 0% 15%;
-  --input: 0 0% 10%;
-  --ring: 0 75% 50%;
-  --speed: 186 100% 45%;
-  --time: 38 95% 55%;
-  --podium-gold: 48 96% 55%;
-  --podium-silver: 0 0% 75%;
-  --podium-bronze: 28 60% 52%;
-}
-
-/* --- Keyframes --- */
-
-@keyframes shimmer {
-  0% { background-position: -200% center; }
-  100% { background-position: 200% center; }
+  --background: 240 6% 8%;
+  --foreground: 36 14% 89%;
+  --card: 240 5% 11%;
+  --card-foreground: 36 14% 89%;
+  --popover: 240 5% 11%;
+  --popover-foreground: 36 14% 89%;
+  --primary: 357 70% 57%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 240 4% 16%;
+  --secondary-foreground: 36 12% 86%;
+  --muted: 240 4% 13%;
+  --muted-foreground: 32 6% 64%;
+  --accent: 31 55% 60%;
+  --accent-foreground: 240 6% 8%;
+  --destructive: 0 62% 52%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 240 4% 20%;
+  --input: 240 4% 22%;
+  --ring: 357 70% 57%;
+  --speed: 166 35% 56%;
+  --time: 37 70% 62%;
+  --podium-gold: 42 76% 64%;
+  --podium-silver: 37 7% 68%;
+  --podium-bronze: 25 48% 61%;
+  --sidebar: 240 5% 10%;
+  --sidebar-foreground: 36 14% 89%;
+  --sidebar-active: 240 4% 15%;
 }
 
 @keyframes widget-enter {
   from {
     opacity: 0;
-    transform: translateY(8px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
 @keyframes race-dot {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.35; transform: scale(0.6); }
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
 }
-
-@keyframes live-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 hsl(0 75% 50% / 0.5); }
-  60% { opacity: 0.8; box-shadow: 0 0 0 4px hsl(0 75% 50% / 0); }
-}
-
-@keyframes streak {
-  0% { transform: translateX(-100%); opacity: 0; }
-  20% { opacity: 1; }
-  80% { opacity: 1; }
-  100% { transform: translateX(200%); opacity: 0; }
-}
-
-/* --- Base --- */
 
 @layer base {
   * {
@@ -141,12 +126,7 @@
 
   body {
     @apply bg-background font-sans text-foreground antialiased;
-    font-feature-settings: "cv11", "ss01";
-    /* Atmospheric telemetry glow — red apex, cyan base, amber corner */
-    background-image:
-      radial-gradient(ellipse 80% 50% at 50% -5%, hsl(0 72% 52% / 0.14) 0%, transparent 65%),
-      radial-gradient(ellipse 55% 38% at 5% 100%, hsl(186 100% 50% / 0.09) 0%, transparent 55%),
-      radial-gradient(ellipse 38% 28% at 95% 78%, hsl(38 95% 58% / 0.06) 0%, transparent 50%);
+    font-feature-settings: "kern";
   }
 
   button,
@@ -154,8 +134,6 @@
     font: inherit;
   }
 }
-
-/* --- Utilities --- */
 
 @layer utilities {
   .app-scrollbar {
@@ -174,30 +152,31 @@
 
   .app-scrollbar::-webkit-scrollbar-thumb {
     background: hsl(var(--border));
-    border-radius: 9999px;
+    border-radius: 8px;
   }
 
-  /* Widget enter animation */
-  .widget-enter {
-    animation: widget-enter 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+  .shell-hairline {
+    box-shadow: inset 0 -1px hsl(var(--border) / 0.7);
   }
 
-  /* Staggered entry for multiple widgets */
-  .widget-enter-1 { animation: widget-enter 0.35s 0.05s cubic-bezier(0.16, 1, 0.3, 1) both; }
-  .widget-enter-2 { animation: widget-enter 0.35s 0.12s cubic-bezier(0.16, 1, 0.3, 1) both; }
-
-  /* Live indicator dot */
-  .live-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 9999px;
-    background: hsl(var(--primary));
-    box-shadow: 0 0 6px hsl(var(--primary) / 0.9), 0 0 14px hsl(var(--primary) / 0.5);
-    animation: live-pulse 2.2s ease-in-out infinite;
-    flex-shrink: 0;
+  .composer-shell {
+    box-shadow: 0 2px 8px hsl(var(--foreground) / 0.08);
   }
 
-  /* Font display utility */
+  .dark .composer-shell {
+    box-shadow: 0 14px 36px rgb(0 0 0 / 0.24);
+  }
+
+  .sidebar-shell {
+    box-shadow: inset -1px 0 hsl(var(--border) / 0.85);
+  }
+
+  .widget-enter,
+  .widget-enter-1,
+  .widget-enter-2 {
+    animation: widget-enter 0.18s ease-out both;
+  }
+
   .font-display {
     font-family: var(--font-display);
   }
@@ -207,47 +186,6 @@
     font-feature-settings: "tnum";
   }
 
-  /* Colored top-border cards */
-  .card-accent-primary {
-    border-top: 2px solid hsl(var(--primary) / 0.75);
-  }
-
-  .card-accent-speed {
-    border-top: 2px solid hsl(var(--speed) / 0.75);
-  }
-
-  .card-accent-time {
-    border-top: 2px solid hsl(var(--time) / 0.65);
-  }
-
-  /* Glow variants */
-  .glow-primary {
-    box-shadow: 0 0 0 1px hsl(var(--primary) / 0.3), 0 0 24px hsl(var(--primary) / 0.18);
-  }
-
-  .glow-speed {
-    box-shadow: 0 0 0 1px hsl(var(--speed) / 0.3), 0 0 24px hsl(var(--speed) / 0.16);
-  }
-
-  /* Position badge colors */
-  .pos-p1 { color: hsl(var(--podium-gold)); }
-  .pos-p2 { color: hsl(var(--podium-silver)); }
-  .pos-p3 { color: hsl(var(--podium-bronze)); }
-  .pos-points { color: hsl(var(--primary)); }
-
-  /* Suggestion card hover */
-  .suggestion-card {
-    border-left: 2px solid transparent;
-    transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
-  }
-
-  .suggestion-card:hover {
-    border-left-color: hsl(var(--primary) / 0.75);
-    background: linear-gradient(to right, hsl(var(--primary) / 0.06) 0%, transparent 45%) !important;
-    box-shadow: 0 0 0 1px hsl(var(--primary) / 0.15), inset 0 0 16px hsl(var(--primary) / 0.04);
-  }
-
-  /* Lap time / data value styling */
   .data-time {
     color: hsl(var(--time));
     font-family: var(--font-mono);
@@ -257,4 +195,9 @@
   .data-speed {
     color: hsl(var(--speed));
   }
+
+  .pos-p1 { color: hsl(var(--podium-gold)); }
+  .pos-p2 { color: hsl(var(--podium-silver)); }
+  .pos-p3 { color: hsl(var(--podium-bronze)); }
+  .pos-points { color: hsl(var(--primary)); }
 }

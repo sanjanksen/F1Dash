@@ -103,6 +103,40 @@ def test_get_intervals(mock_resolve_session, mock_openf1_get):
     assert result["intervals"][0]["gap_to_leader"] == "+3.2"
 
 
+@patch('openf1._openf1_get')
+@patch('openf1.get_circuits')
+def test_resolve_openf1_session_caches_schedule(mock_get_circuits, mock_openf1_get):
+    import openf1
+    openf1._circuits_cache = []
+    mock_get_circuits.return_value = [{"round": 3, "event_name": "Japanese Grand Prix", "country": "Japan"}]
+    mock_openf1_get.return_value = [{"session_key": 321, "date_start": "2026-04-05T00:00:00"}]
+
+    openf1._resolve_openf1_session(3, "S")
+    openf1._resolve_openf1_session(3, "SQ")
+
+    mock_get_circuits.assert_called_once()
+
+
+@patch('openf1._driver_number_for_session', return_value=4)
+@patch('openf1._resolve_driver', return_value={"full_name": "Lando Norris"})
+@patch('openf1._openf1_get')
+@patch('openf1._resolve_openf1_session')
+def test_get_intervals_uses_requested_session_type(mock_resolve_session, mock_openf1_get, mock_resolve_driver, mock_driver_number):
+    import openf1
+    mock_resolve_session.return_value = {
+        "session_key": 456,
+        "session_name": "Sprint",
+        "country_name": "China",
+        "circuit_short_name": "Shanghai",
+    }
+    mock_openf1_get.return_value = []
+
+    openf1.get_intervals(5, "NOR", limit=5, session_type="S")
+
+    mock_resolve_session.assert_called_once_with(5, "S")
+    mock_driver_number.assert_called_once_with(5, "S", "NOR")
+
+
 @patch("openf1._openf1_get")
 @patch("openf1._resolve_openf1_session")
 def test_get_live_position_timeline(mock_resolve_session, mock_openf1_get):

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowUp, ChevronRight } from 'lucide-react'
+import { ArrowUp, CornerDownRight } from 'lucide-react'
 
 import AnswerRenderer from './AnswerRenderer.jsx'
 import { Button } from './ui/button.jsx'
@@ -10,7 +10,6 @@ export default function ChatView({ messages, loading, onSend }) {
   const [input, setInput] = useState('')
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
-  const year = new Date().getFullYear()
   const [lastRound, setLastRound] = useState(null)
   const [loadingTooLong, setLoadingTooLong] = useState(false)
 
@@ -19,24 +18,17 @@ export default function ChatView({ messages, loading, onSend }) {
       .then((circuits) => {
         const today = new Date().toISOString().slice(0, 10)
         const completed = circuits.filter((c) => c.date < today)
-        if (completed.length > 0) {
-          setLastRound(completed[completed.length - 1])
-        }
+        if (completed.length > 0) setLastRound(completed[completed.length - 1])
       })
-      .catch(() => {
-        // Silently fall back to static suggestions
-      })
+      .catch(() => {})
   }, [])
 
-  const shortName = lastRound
-    ? lastRound.event_name.replace(' Grand Prix', ' GP')
-    : 'the latest race'
-
+  const shortName = lastRound ? lastRound.event_name.replace(' Grand Prix', ' GP') : 'the latest race'
   const suggestions = [
-    { label: 'Race story', text: `How did Russell do at ${shortName}?`, color: 'hsl(var(--primary))' },
-    { label: 'Team weekend', text: `How did Ferrari do at ${shortName}?`, color: 'hsl(var(--speed))' },
-    { label: 'Race report', text: `Give me the ${shortName} race recap`, color: 'hsl(var(--time))' },
-    { label: 'Qualifying', text: `Why was Norris faster than Leclerc in qualifying at ${shortName}?`, color: 'hsl(var(--primary))' },
+    `How did Russell do at ${shortName}?`,
+    `Why was Norris faster than Leclerc in qualifying at ${shortName}?`,
+    `Give me the ${shortName} race recap`,
+    `How did Ferrari do at ${shortName}?`,
   ]
 
   useEffect(() => {
@@ -67,103 +59,48 @@ export default function ChatView({ messages, loading, onSend }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <div className="app-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="app-scrollbar min-h-0 flex-1 overflow-y-auto">
         {isIntro ? (
-          <div className="mx-auto flex min-h-full w-full max-w-4xl flex-1 flex-col justify-center px-6 py-10 lg:px-10">
-            <div className="max-w-2xl">
-              <div className="mb-3 flex items-center gap-2">
-                <span className="h-px w-6 bg-primary/70" />
-                <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-primary/80">
-                  F1 race intelligence · {year}
-                </div>
-              </div>
-              <h1
-                className="max-w-xl text-foreground"
-                style={{
-                  fontFamily: 'var(--font-display)',
-                  fontSize: 'clamp(2.8rem, 6vw, 4.4rem)',
-                  fontWeight: 700,
-                  lineHeight: 1.05,
-                  letterSpacing: '-0.01em',
-                  textTransform: 'uppercase',
-                }}
-              >
-                Ask for the{' '}
-                <span
-                  style={{
-                    background: 'linear-gradient(120deg, hsl(var(--primary)) 0%, hsl(38 95% 62%) 90%)',
-                    WebkitBackgroundClip: 'text',
-                    WebkitTextFillColor: 'transparent',
-                    backgroundClip: 'text',
-                  }}
-                >
-                  weekend
-                </span>,<br />
-                not just the number.
-              </h1>
-              <p className="mt-5 max-w-lg text-sm leading-7 text-muted-foreground sm:text-[15px]">
-                Race stories, qualifying breakdowns, telemetry diffs, and driver comparisons—all from live {year} FastF1 data.
-              </p>
-            </div>
+          <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-5 py-10 sm:px-8">
+            <h1 className="max-w-2xl text-[2.15rem] font-semibold leading-[1.08] tracking-[-0.045em] text-foreground sm:text-[3.35rem]">
+              What should we analyze?
+            </h1>
+            <p className="mt-4 max-w-xl text-[14px] leading-7 text-muted-foreground">
+              Ask about race pace, qualifying deltas, strategy, driver form, or the next event.
+            </p>
 
-            <div className="mt-10 grid gap-2 md:grid-cols-2">
-              {suggestions.map((suggestion, i) => (
+            <div className="mt-10 divide-y divide-border/70 border-y border-border/70">
+              {suggestions.map((suggestion) => (
                 <button
-                  key={suggestion.text}
+                  key={suggestion}
                   type="button"
-                  onClick={() => handleSend(suggestion.text)}
-                  className="suggestion-card group flex items-start justify-between rounded-md border border-border/70 bg-card px-4 py-3.5 text-left"
-                  style={{ animationDelay: `${i * 60}ms` }}
+                  onClick={() => handleSend(suggestion)}
+                  className="group flex w-full items-center gap-3 py-3.5 text-left text-[14px] leading-6 text-foreground transition-colors hover:text-primary"
                 >
-                  <div>
-                    <div className="text-[9px] font-medium uppercase tracking-[0.2em]" style={{ color: suggestion.color, opacity: 0.85 }}>
-                      {suggestion.label}
-                    </div>
-                    <div className="mt-1.5 text-sm leading-6 text-foreground">
-                      {suggestion.text}
-                    </div>
-                  </div>
-                  <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary/70" />
+                  <CornerDownRight className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-primary" />
+                  <span>{suggestion}</span>
                 </button>
               ))}
             </div>
           </div>
         ) : (
-          <div className="mx-auto flex w-full max-w-4xl flex-col gap-7 px-6 py-7 lg:px-10">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-5 py-8 sm:px-8">
             {messages.map((message) => (
-              <div key={message.id} className="flex flex-col gap-2.5">
-                <div className="flex items-center gap-3">
-                  {message.role === 'assistant' ? (
-                    <>
-                      <div className="flex items-center gap-1.5">
-                        <span className="h-1.5 w-1.5 rounded-full bg-primary/80" />
-                        <div className="text-[10px] font-medium uppercase tracking-[0.18em]" style={{ color: 'hsl(var(--primary) / 0.85)' }}>
-                          F1 Dash
-                        </div>
-                      </div>
-                      <div className="h-px flex-1 bg-gradient-to-r from-primary/20 to-transparent" />
-                    </>
-                  ) : (
-                    <>
-                      <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/70">
-                        You
-                      </div>
-                      <div className="h-px flex-1 bg-border/60" />
-                    </>
-                  )}
-                </div>
-
+              <div
+                key={message.id}
+                className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}
+              >
                 {message.role === 'assistant' && !message.isError ? (
-                  <AnswerRenderer text={message.text} widgets={message.widgets || []} />
+                  <div className="w-full">
+                    <div className="mb-2 text-[13px] text-muted-foreground">F1Dash</div>
+                    <AnswerRenderer text={message.text} widgets={message.widgets || []} />
+                  </div>
                 ) : message.isError ? (
-                  <div className="max-w-3xl rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-7 text-destructive-foreground">
+                  <div className="w-full rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm leading-7 text-foreground">
                     {message.text}
                   </div>
                 ) : (
-                  <div
-                    className="max-w-3xl self-end rounded-md border border-border/60 px-4 py-3 text-sm leading-7 text-foreground"
-                    style={{ background: 'linear-gradient(135deg, hsl(var(--secondary)) 0%, hsl(var(--card)) 100%)' }}
-                  >
+                  <div className="max-w-[78%] rounded-2xl bg-secondary px-4 py-3 text-sm leading-7 text-foreground">
                     {message.text}
                   </div>
                 )}
@@ -171,43 +108,16 @@ export default function ChatView({ messages, loading, onSend }) {
             ))}
 
             {loading && (
-              <div className="flex flex-col gap-2.5">
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-1.5">
-                    <span className="h-1.5 w-1.5 rounded-full bg-primary/80" />
-                    <div className="text-[10px] font-medium uppercase tracking-[0.18em]" style={{ color: 'hsl(var(--primary) / 0.85)' }}>
-                      F1 Dash
-                    </div>
-                  </div>
-                  <div className="h-px flex-1 bg-gradient-to-r from-primary/20 to-transparent" />
-                </div>
-                {/* Racing loader: three color-coded dots */}
-                <div className="inline-flex w-fit items-center gap-1.5 rounded-md border border-border/90 bg-card px-4 py-3">
-                  <span
-                    className="h-1.5 w-1.5 rounded-full"
-                    style={{
-                      background: 'hsl(var(--primary))',
-                      animation: 'race-dot 1.2s 0ms ease-in-out infinite',
-                    }}
-                  />
-                  <span
-                    className="h-1.5 w-1.5 rounded-full"
-                    style={{
-                      background: 'hsl(var(--time))',
-                      animation: 'race-dot 1.2s 200ms ease-in-out infinite',
-                    }}
-                  />
-                  <span
-                    className="h-1.5 w-1.5 rounded-full"
-                    style={{
-                      background: 'hsl(var(--speed))',
-                      animation: 'race-dot 1.2s 400ms ease-in-out infinite',
-                    }}
-                  />
+              <div>
+                <div className="mb-2 text-[13px] text-muted-foreground">F1Dash</div>
+                <div className="inline-flex items-center gap-1.5 rounded-xl bg-card px-3 py-2">
+                  <span className="h-1.5 w-1.5 rounded-sm bg-primary" style={{ animation: 'race-dot 1.1s 0ms ease-in-out infinite' }} />
+                  <span className="h-1.5 w-1.5 rounded-sm bg-muted-foreground" style={{ animation: 'race-dot 1.1s 160ms ease-in-out infinite' }} />
+                  <span className="h-1.5 w-1.5 rounded-sm bg-muted-foreground" style={{ animation: 'race-dot 1.1s 320ms ease-in-out infinite' }} />
                 </div>
                 {loadingTooLong && (
-                  <div className="text-xs text-muted-foreground/70">
-                    Fetching telemetry and session data — this may take a moment.
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    Fetching telemetry and session data. This can take a moment.
                   </div>
                 )}
               </div>
@@ -217,15 +127,14 @@ export default function ChatView({ messages, loading, onSend }) {
         )}
       </div>
 
-      <div className="border-t border-border/90 bg-background/95 backdrop-blur-sm">
-        <div className="mx-auto w-full max-w-4xl px-6 py-3 lg:px-10">
+      <div className="bg-background px-4 pb-4 pt-2 sm:px-6">
+        <div className="mx-auto w-full max-w-3xl">
           <form
             onSubmit={(event) => {
               event.preventDefault()
               handleSend(input)
             }}
-            className="rounded-md border border-border/70 bg-card p-1.5 transition-all duration-200 focus-within:border-primary/40 focus-within:shadow-[0_0_0_1px_hsl(var(--primary)/0.4),0_0_28px_hsl(var(--primary)/0.2),0_0_56px_hsl(var(--primary)/0.08)]"
-            style={{ borderColor: 'hsl(var(--border) / 0.9)' }}
+            className="composer-shell rounded-2xl border border-border/80 bg-card/95 px-2 py-2 transition-colors focus-within:border-primary/45"
           >
             <div className="flex items-center gap-2">
               <Input
@@ -233,17 +142,20 @@ export default function ChatView({ messages, loading, onSend }) {
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 disabled={loading}
-                placeholder="Ask about a driver, team, race, safety car, or qualifying story..."
-                className="h-9 border-0 bg-transparent px-2 shadow-none focus-visible:ring-0"
+                placeholder="Ask F1Dash..."
+                className="h-11 border-0 bg-transparent px-3 text-[15px] shadow-none focus-visible:ring-0"
               />
-              <Button type="submit" size="icon" disabled={loading || !input.trim()} className="h-9 w-9">
+              <Button
+                type="submit"
+                size="icon"
+                disabled={loading || !input.trim()}
+                className="h-10 w-10 rounded-xl"
+                aria-label="Send message"
+              >
                 <ArrowUp className="h-4 w-4" />
               </Button>
             </div>
           </form>
-          <p className="mt-2 text-[11px] text-muted-foreground">
-            FastF1, Jolpica, and route-aware tooling for structured F1 answers.
-          </p>
         </div>
       </div>
     </div>

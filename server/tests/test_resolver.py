@@ -552,6 +552,18 @@ def test_detect_session_scope_sprint_qualifying_gives_sq():
     assert session_type == "SQ", f"expected SQ, got {session_type}"
 
 
+def test_detect_session_scope_sprint_quali_gives_sq():
+    from resolver import _detect_session_scope
+    session_type, scope = _detect_session_scope("sprint quali at miami")
+    assert session_type == "SQ"
+
+
+def test_detect_session_scope_sq_gives_sq():
+    from resolver import _detect_session_scope
+    session_type, scope = _detect_session_scope("who was fastest in sq at miami")
+    assert session_type == "SQ"
+
+
 def test_detect_session_scope_sprint_shootout_gives_sq():
     from resolver import _detect_session_scope
     session_type, _ = _detect_session_scope("recap the sprint shootout")
@@ -568,3 +580,40 @@ def test_detect_session_scope_sprint_race_gives_s():
     from resolver import _detect_session_scope
     session_type, _ = _detect_session_scope("how did piastri do in the sprint")
     assert session_type == "S"
+
+
+@patch('resolver._extract_entities_llm', return_value={})
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_single_driver_sprint_qualifying_routes_to_sprint_qualifying_results(mock_circuits, mock_drivers, mock_llm):
+    mock_drivers.return_value = [
+        {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
+    ]
+    mock_circuits.return_value = [
+        {"round": 6, "event_name": "Miami Grand Prix", "circuit_name": "Miami", "country": "United States"},
+    ]
+
+    result = resolver.resolve_query_context("How did Norris do in sprint qualifying at Miami?")
+
+    assert result["entity_type"] == "driver"
+    assert result["session_type"] == "SQ"
+    assert result["suggested_tool"] == "get_sprint_qualifying_results"
+
+
+@patch('resolver._extract_entities_llm', return_value={})
+@patch('resolver.get_drivers')
+@patch('resolver.get_circuits')
+def test_sprint_quali_comparison_uses_sq_analysis(mock_circuits, mock_drivers, mock_llm):
+    mock_drivers.return_value = [
+        {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
+        {"full_name": "Oscar Piastri", "code": "PIA", "driver_id": "piastri", "team": "McLaren"},
+    ]
+    mock_circuits.return_value = [
+        {"round": 6, "event_name": "Miami Grand Prix", "circuit_name": "Miami", "country": "United States"},
+    ]
+
+    result = resolver.resolve_query_context("Why was Norris faster than Piastri in sprint quali at Miami?")
+
+    assert result["session_type"] == "SQ"
+    assert result["analysis_mode"] == "driver_comparison"
+    assert result["analysis_focus"] == "qualifying"

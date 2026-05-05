@@ -3,6 +3,7 @@ import requests
 from f1_data import CURRENT_YEAR, _resolve_driver, get_circuits, get_session_results
 
 OPENF1_BASE = "https://api.openf1.org/v1"
+_circuits_cache: list[dict] = []
 
 
 def _session_name_for_openf1(session_type: str) -> str:
@@ -28,8 +29,15 @@ def _openf1_get(endpoint: str, **params):
     return response.json()
 
 
+def _cached_circuits() -> list[dict]:
+    global _circuits_cache
+    if not _circuits_cache:
+        _circuits_cache = get_circuits()
+    return _circuits_cache
+
+
 def _resolve_openf1_session(round_number: int, session_type: str) -> dict:
-    circuit = next((row for row in get_circuits() if row.get("round") == round_number), None)
+    circuit = next((row for row in _cached_circuits() if row.get("round") == round_number), None)
     if not circuit:
         raise ValueError(f"Round {round_number} not found in {CURRENT_YEAR} schedule.")
 
@@ -109,13 +117,13 @@ def get_team_radio(round_number: int, session_type: str, driver_ref: str | None 
     }
 
 
-def get_intervals(round_number: int, driver_ref: str | None = None, limit: int = 25) -> dict:
-    session = _resolve_openf1_session(round_number, "R")
+def get_intervals(round_number: int, driver_ref: str | None = None, limit: int = 25, session_type: str = "R") -> dict:
+    session = _resolve_openf1_session(round_number, session_type)
     params = {"session_key": session["session_key"]}
     driver_number = None
     driver_name = None
     if driver_ref:
-        driver_number = _driver_number_for_session(round_number, "R", driver_ref)
+        driver_number = _driver_number_for_session(round_number, session_type, driver_ref)
         matched = _resolve_driver(driver_ref)
         driver_name = matched["full_name"] if matched else driver_ref
         params["driver_number"] = driver_number

@@ -1,5 +1,6 @@
 // client/src/api/f1api.js
 const BASE = '/api'
+let circuitsPromise = null
 
 async function apiFetch(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
@@ -14,6 +15,14 @@ async function apiFetch(path, options = {}) {
 }
 
 export const fetchDriverStats = (name) => apiFetch(`/driver/${encodeURIComponent(name)}/stats`)
-export const fetchCircuits = () => apiFetch('/circuits')
+export const fetchCircuits = () => {
+  if (!circuitsPromise) {
+    circuitsPromise = apiFetch('/circuits').catch((error) => {
+      circuitsPromise = null
+      throw error
+    })
+  }
+  return circuitsPromise
+}
 export const sendChatMessage = (message, history = []) =>
   apiFetch('/chat', { method: 'POST', body: JSON.stringify({ message, history }) })
