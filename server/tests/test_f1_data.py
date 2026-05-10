@@ -187,6 +187,34 @@ def test_load_session_reuses_cached_session_and_upgrades_flags():
     f1_data._clear_session_cache()
 
 
+def test_session_cache_evicts_stale_entry():
+    """An entry older than SESSION_CACHE_TTL is evicted and reloaded on next access."""
+    import time
+    import f1_data
+
+    mock_session = MagicMock()
+    mock_session.load = MagicMock()
+
+    with patch("f1_data.fastf1") as mock_ff1, \
+         patch("f1_data._validate_session_availability", return_value=None):
+
+        mock_ff1.get_session.return_value = mock_session
+
+        # First call — populates cache
+        f1_data._load_session(1, "Q", laps=True)
+        assert mock_ff1.get_session.call_count == 1
+
+        # Manually backdate the cache entry so it appears stale
+        cache_key = (f1_data.CURRENT_YEAR, 1, "Q")
+        f1_data._SESSION_CACHE[cache_key]["created_at"] = (
+            time.monotonic() - f1_data.SESSION_CACHE_TTL - 1
+        )
+
+        # Second call — must evict stale entry and fetch again
+        f1_data._load_session(1, "Q", laps=True)
+        assert mock_ff1.get_session.call_count == 2
+
+
 def test_analyze_energy_management_single_driver_uses_inference_not_direct_measurement():
     telemetry = {
         "event": "Japanese Grand Prix",

@@ -1,5 +1,6 @@
 # server/f1_data.py
 import os
+import time
 import logging
 import threading
 import numbers
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 _SESSION_CACHE: dict[tuple[int, int, str], dict] = {}
 _SESSION_CACHE_LOCK = threading.Lock()
+SESSION_CACHE_TTL = 300  # seconds; session data does not change mid-day
 
 
 def _fmt_td(td) -> str | None:
@@ -46,6 +48,16 @@ def _load_session(round_number: int, session_type: str, *,
 
     with _SESSION_CACHE_LOCK:
         entry = _SESSION_CACHE.get(cache_key)
+        # Evict if stale — safe to do under the global lock
+        if entry is not None and time.monotonic() - entry["created_at"] > SESSION_CACHE_TTL:
+            logger.debug(
+                "Evicting stale FastF1 session cache entry round=%s session=%s",
+                round_number,
+                normalized_session,
+            )
+            del _SESSION_CACHE[cache_key]
+            entry = None
+
         if entry is None:
             entry = {
                 "session": fastf1.get_session(CURRENT_YEAR, round_number, normalized_session),
@@ -54,6 +66,7 @@ def _load_session(round_number: int, session_type: str, *,
                 "weather": False,
                 "messages": False,
                 "lock": threading.Lock(),
+                "created_at": time.monotonic(),
             }
             _SESSION_CACHE[cache_key] = entry
 
