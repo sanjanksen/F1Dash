@@ -1745,30 +1745,39 @@ def _answer_anthropic(message: str, history: list[dict], resolved_context: dict 
             raise ValueError("Claude returned end_turn but no text content block")
 
         if response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
+            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+
+            def _dispatch_block(block):
                 try:
                     logger.info("Anthropic tool call: %s args=%s", block.name, block.input)
                     result = execute_tool(block.name, block.input)
-                    executed_evidence.append({
-                        "tool": block.name,
-                        "args": block.input,
-                        "result": result,
-                    })
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": json.dumps(result, default=str),
-                    })
+                    return block, result, None
                 except Exception as exc:
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": str(exc),
-                        "is_error": True,
-                    })
+                    return block, None, exc
+
+            tool_results = []
+            max_w = min(len(tool_use_blocks), 6) if tool_use_blocks else 1
+            with ThreadPoolExecutor(max_workers=max_w) as executor:
+                for block, result, exc in executor.map(_dispatch_block, tool_use_blocks):
+                    if exc is None:
+                        executed_evidence.append({
+                            "tool": block.name,
+                            "args": block.input,
+                            "result": result,
+                        })
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": json.dumps(result, default=str),
+                        })
+                    else:
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": str(exc),
+                            "is_error": True,
+                        })
+
             messages.append({"role": "assistant", "content": response.content})
             messages.append({"role": "user", "content": tool_results})
 

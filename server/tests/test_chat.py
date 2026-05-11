@@ -852,3 +852,38 @@ def test_retrieve_analysis_evidence_runs_tools_in_parallel():
     assert evidence[0]["tool"] == "tool_a"
     assert evidence[1]["tool"] == "tool_b"
     assert evidence[2]["tool"] == "tool_c"
+
+
+def test_agentic_loop_dispatches_tools_in_parallel():
+    """When Claude calls two tools in one round, they run concurrently."""
+    import time
+
+    SLEEP = 0.15
+
+    mock_client = MagicMock()
+    mock_client.messages.create.side_effect = [
+        _two_tool_use_response(),
+        _end_turn_response("Both done."),
+    ]
+
+    chat = _load_chat_with_client(mock_client)
+
+    call_times = []
+
+    def slow_tool(name, args):
+        call_times.append(time.monotonic())
+        time.sleep(SLEEP)
+        return {"result": name}
+
+    with patch.object(chat, "execute_tool", side_effect=slow_tool):
+        start = time.monotonic()
+        chat.answer_f1_question("parallel test")
+        elapsed = time.monotonic() - start
+
+    # Two tools called in one round — should be ≈ SLEEP, not ≈ 2×SLEEP
+    assert elapsed < SLEEP * 2 + 0.3, f"Expected parallel, took {elapsed:.2f}s"
+    # Both tool calls must have started at roughly the same time
+    assert len(call_times) == 2
+    assert abs(call_times[0] - call_times[1]) < SLEEP * 0.8, (
+        f"Tools started {abs(call_times[0]-call_times[1]):.2f}s apart — likely serial"
+    )
