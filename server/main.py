@@ -80,7 +80,7 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=400, detail="message cannot be empty")
 
     async def event_generator():
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
 
         def producer():
