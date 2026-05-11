@@ -1,7 +1,10 @@
 # server/main.py
+import asyncio
+import json
 import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -11,7 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from f1_data import get_drivers, get_driver_stats, get_circuits
-from chat import answer_f1_payload, answer_f1_question
+from chat import answer_f1_payload_streaming
 
 app = FastAPI(title="F1 Dashboard API", version="1.0.0")
 
@@ -75,10 +78,38 @@ async def circuits_endpoint():
 async def chat_endpoint(request: ChatRequest):
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="message cannot be empty")
-    try:
-        return answer_f1_payload(request.message, request.history)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
-        logger.exception("Error in POST /api/chat")
-        raise HTTPException(status_code=500, detail="Something went wrong processing your request.")
+
+    async def event_generator():
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def producer():
+            try:
+                for chunk in answer_f1_payload_streaming(request.message, request.history):
+                    loop.call_soon_threadsafe(queue.put_nowait, chunk)
+            except ValueError as exc:
+                err = json.dumps({"type": "error", "detail": str(exc)})
+                loop.call_soon_threadsafe(queue.put_nowait, f"data: {err}\n\n")
+            except Exception as exc:
+                logger.exception("Error in POST /api/chat streaming")
+                err = json.dumps({"type": "error", "detail": "Something went wrong processing your request."})
+                loop.call_soon_threadsafe(queue.put_nowait, f"data: {err}\n\n")
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)  # sentinel
+
+        loop.run_in_executor(None, producer)
+
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield item
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

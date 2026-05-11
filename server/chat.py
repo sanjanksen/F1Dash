@@ -1673,6 +1673,94 @@ def _try_deterministic_analysis(question: str, history: list[dict], *, provider:
         logger.warning("Deterministic analysis failed; falling back to normal tool loop. error=%s", exc)
         return None
 
+
+def _try_deterministic_analysis_streaming(
+    question: str,
+    history: list[dict],
+    *,
+    provider: str,
+    resolved_context: dict | None = None,
+):
+    """
+    Returns a generator that yields SSE strings, or None if the question
+    doesn't match a deterministic analysis mode.
+    """
+    resolved = resolved_context or resolve_query_context(
+        question, resolve_context_from_history(history)
+    )
+    plan = _build_analysis_plan(question, resolved)
+    if not plan:
+        return None
+
+    def _gen():
+        evidence = _retrieve_analysis_evidence(plan, resolved)
+        if not evidence:
+            return
+
+        try:
+            if provider == "anthropic":
+                analysis = _run_anthropic_analysis(question, resolved, plan, evidence)
+                if plan.get("focus") == "qualifying":
+                    analysis = _canonicalize_qualifying_analysis(analysis, evidence)
+                elif plan.get("analysis_mode") == "race_pace_comparison":
+                    analysis = _canonicalize_race_pace_analysis(analysis, evidence)
+
+                full_text_parts = []
+                for chunk in _run_anthropic_answer_writer_streaming(question, analysis):
+                    if chunk.startswith("data: "):
+                        try:
+                            ev = json.loads(chunk[6:])
+                            if ev.get("type") == "delta":
+                                full_text_parts.append(ev["text"])
+                        except Exception:
+                            pass
+                    yield chunk
+
+                full_text = "".join(full_text_parts)
+                clean_text, inline_widgets = _extract_inline_widgets(full_text)
+                widgets = _merge_widgets(
+                    _widgets_from_analysis_evidence(plan, evidence),
+                    inline_widgets,
+                )
+                yield f"data: {json.dumps({'type': 'done', 'text': clean_text, 'widgets': widgets}, default=str)}\n\n"
+
+        except Exception as exc:
+            logger.warning("Deterministic streaming analysis failed: %s", exc)
+            raise
+
+    return _gen()
+
+
+def answer_f1_payload_streaming(message: str, history: list[dict] | None = None):
+    """
+    Public entry point. Synchronous generator — yields SSE event strings.
+    Intended to be run in a thread; bridges to FastAPI via asyncio.Queue in main.py.
+    """
+    prior = history or []
+    provider = os.environ.get("LLM_PROVIDER", "anthropic").lower()
+    previous_context = resolve_context_from_history(prior)
+    resolved = resolve_query_context(message, previous_context)
+
+    deterministic_gen = _try_deterministic_analysis_streaming(
+        message, prior, provider=provider, resolved_context=resolved
+    )
+    if deterministic_gen is not None:
+        try:
+            yield from deterministic_gen
+            return
+        except Exception:
+            pass  # fall through to agentic path
+
+    preloaded = _preload_resolved_context(resolved)
+    if provider == "openai":
+        result = _answer_openai(message, prior, resolved_context=resolved, preloaded_context=preloaded)
+        yield f"data: {json.dumps({'type': 'done', 'text': result['response'], 'widgets': result.get('widgets', [])}, default=str)}\n\n"
+    else:
+        yield from _answer_anthropic_streaming(
+            message, prior, resolved_context=resolved, preloaded_context=preloaded
+        )
+
+
 def _get_anthropic_client() -> anthropic.Anthropic:
     global _anthropic_client
     if _anthropic_client is None:
@@ -1709,6 +1797,22 @@ def _run_anthropic_answer_writer(question: str, analysis: dict) -> str:
         }],
     )
     return "".join(block.text for block in response.content if hasattr(block, "text")).strip()
+
+
+def _run_anthropic_answer_writer_streaming(question: str, analysis: dict):
+    """Generator — yields SSE delta strings for the answer writer response."""
+    client = _get_anthropic_client()
+    with client.messages.stream(
+        model="claude-opus-4-7",
+        max_tokens=1200,
+        system=ANSWER_WRITER_SYSTEM_PROMPT,
+        messages=[{
+            "role": "user",
+            "content": _build_answer_writer_prompt(question, analysis),
+        }],
+    ) as stream:
+        for text in stream.text_stream:
+            yield f"data: {json.dumps({'type': 'delta', 'text': text})}\n\n"
 
 
 def _answer_anthropic(message: str, history: list[dict], resolved_context: dict | None = None, preloaded_context: dict | None = None) -> dict:
@@ -1783,6 +1887,88 @@ def _answer_anthropic(message: str, history: list[dict], resolved_context: dict 
 
         else:
             raise ValueError(f"Unexpected stop_reason from Claude: {response.stop_reason!r}")
+
+    raise ValueError(f"Exceeded {MAX_TOOL_ROUNDS} tool-call rounds without a final answer.")
+
+
+def _answer_anthropic_streaming(
+    message: str,
+    history: list[dict],
+    resolved_context: dict | None = None,
+    preloaded_context: dict | None = None,
+):
+    """Generator — SSE-streaming version of _answer_anthropic()."""
+    client = _get_anthropic_client()
+    if resolved_context is None:
+        resolved, preloaded = _prepare_resolved_context(message, history)
+    else:
+        resolved = resolved_context
+        preloaded = preloaded_context
+    request_system_prompt = _build_request_system_prompt(resolved, preloaded)
+    messages = [{"role": h["role"], "content": h["content"]} for h in history]
+    messages.append({"role": "user", "content": message})
+    executed_evidence: list[dict] = []
+
+    for _ in range(MAX_TOOL_ROUNDS):
+        with client.messages.stream(
+            model="claude-opus-4-7",
+            max_tokens=4096,
+            system=request_system_prompt,
+            tools=TOOL_DEFINITIONS,
+            messages=messages,
+        ) as stream:
+            for text in stream.text_stream:
+                yield f"data: {json.dumps({'type': 'delta', 'text': text})}\n\n"
+            final = stream.get_final_message()
+
+        if final.stop_reason == "end_turn":
+            full_text = "".join(b.text for b in final.content if hasattr(b, "text"))
+            clean_text, inline_widgets = _extract_inline_widgets(full_text)
+            widgets = _merge_widgets(
+                _widgets_from_preloaded(preloaded),
+                _widgets_from_analysis_evidence({}, executed_evidence),
+                inline_widgets,
+            )
+            yield f"data: {json.dumps({'type': 'done', 'text': clean_text, 'widgets': widgets}, default=str)}\n\n"
+            return
+
+        if final.stop_reason == "tool_use":
+            tool_use_blocks = [b for b in final.content if b.type == "tool_use"]
+
+            def _dispatch_block(block):
+                try:
+                    result = execute_tool(block.name, block.input)
+                    return block, result, None
+                except Exception as exc:
+                    return block, None, exc
+
+            tool_results = []
+            max_w = min(len(tool_use_blocks), 6) if tool_use_blocks else 1
+            with ThreadPoolExecutor(max_workers=max_w) as executor:
+                for block, result, exc in executor.map(_dispatch_block, tool_use_blocks):
+                    if exc is None:
+                        executed_evidence.append({
+                            "tool": block.name,
+                            "args": block.input,
+                            "result": result,
+                        })
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": json.dumps(result, default=str),
+                        })
+                    else:
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": str(exc),
+                            "is_error": True,
+                        })
+
+            messages.append({"role": "assistant", "content": final.content})
+            messages.append({"role": "user", "content": tool_results})
+        else:
+            raise ValueError(f"Unexpected stop_reason: {final.stop_reason!r}")
 
     raise ValueError(f"Exceeded {MAX_TOOL_ROUNDS} tool-call rounds without a final answer.")
 
