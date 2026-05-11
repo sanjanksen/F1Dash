@@ -46,18 +46,33 @@ export default function App() {
     setLoading(true)
 
     const history = current.map((message) => ({ role: message.role, content: message.text }))
+    const assistantId = crypto.randomUUID()
+
+    updateMessages(sessionId, [
+      ...withUser,
+      { id: assistantId, role: 'assistant', text: '', widgets: [] },
+    ])
 
     try {
-      const { response, widgets = [] } = await sendChatMessage(text, history)
+      const { response, widgets = [] } = await sendChatMessage(
+        text,
+        history,
+        (partial) => {
+          updateMessages(sessionId, [
+            ...withUser,
+            { id: assistantId, role: 'assistant', text: partial, widgets: [] },
+          ])
+        },
+      )
       updateMessages(sessionId, [
         ...withUser,
-        { id: crypto.randomUUID(), role: 'assistant', text: response, widgets },
+        { id: assistantId, role: 'assistant', text: response, widgets },
       ])
     } catch (error) {
       updateMessages(sessionId, [
         ...withUser,
         {
-          id: crypto.randomUUID(),
+          id: assistantId,
           role: 'assistant',
           text: `Something went wrong: ${error.message}`,
           isError: true,
