@@ -817,3 +817,38 @@ def test_answer_f1_payload_reuses_resolved_context_on_fallback():
     assert payload["response"] == "Answer."
     history_mock.assert_called_once()
     resolve_mock.assert_called_once_with("How did Norris do?", prior_context)
+
+
+def test_retrieve_analysis_evidence_runs_tools_in_parallel():
+    """All tools in a plan are dispatched concurrently, not serially."""
+    import time
+    import importlib
+    import chat
+    importlib.reload(chat)
+
+    SLEEP = 0.15  # each tool sleeps this long
+
+    def slow_tool(name, args):
+        time.sleep(SLEEP)
+        return {"tool": name, "data": "ok"}
+
+    plan = {
+        "tool_calls": [
+            ("tool_a", {}),
+            ("tool_b", {}),
+            ("tool_c", {}),
+        ],
+    }
+
+    with patch.object(chat, "execute_tool", side_effect=slow_tool):
+        start = time.monotonic()
+        evidence = chat._retrieve_analysis_evidence(plan)
+        elapsed = time.monotonic() - start
+
+    # Serial would take ≥3×SLEEP; parallel should finish in roughly 1×SLEEP + overhead
+    assert elapsed < SLEEP * 2, f"Expected parallel execution, took {elapsed:.2f}s"
+    assert len(evidence) == 3
+    # Order must match plan order
+    assert evidence[0]["tool"] == "tool_a"
+    assert evidence[1]["tool"] == "tool_b"
+    assert evidence[2]["tool"] == "tool_c"

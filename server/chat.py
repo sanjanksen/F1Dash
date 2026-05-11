@@ -10,6 +10,7 @@ import os
 import logging
 import re
 from typing import Any
+from concurrent.futures import ThreadPoolExecutor
 import anthropic
 try:
     import openai as openai_sdk
@@ -1466,8 +1467,10 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
 
 
 def _retrieve_analysis_evidence(plan: dict, resolved: dict | None = None) -> list[dict]:
-    evidence = []
-    for tool_name, args in plan.get("tool_calls", []):
+    tool_calls = plan.get("tool_calls") or []
+
+    def _run_one(call_pair):
+        tool_name, args = call_pair
         try:
             logger.info("Deterministic analysis tool call: %s args=%s", tool_name, args)
             result = execute_tool(tool_name, args)
@@ -1479,17 +1482,14 @@ def _retrieve_analysis_evidence(plan: dict, resolved: dict | None = None) -> lis
             # corner-spread sentence that belongs in the answer.
             if tool_name in ("analyze_cornering_loads", "analyze_race_cornering_profile"):
                 result = {k: v for k, v in result.items() if k != "per_corner"}
-            evidence.append({
-                "tool": tool_name,
-                "args": args,
-                "result": result,
-            })
+            return {"tool": tool_name, "args": args, "result": result}
         except Exception as exc:
-            evidence.append({
-                "tool": tool_name,
-                "args": args,
-                "error": str(exc),
-            })
+            return {"tool": tool_name, "args": args, "error": str(exc)}
+
+    max_workers = min(len(tool_calls), 6) if tool_calls else 1
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # map() preserves submission order while running concurrently
+        evidence = list(executor.map(_run_one, tool_calls))
 
     # ── Auto-inject driver style context ────────────────────────────────────
     drivers = plan.get("drivers") or []
