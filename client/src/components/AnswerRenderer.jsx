@@ -10,6 +10,10 @@ import PitStopStrategyWidget from './chat-widgets/PitStopStrategyWidget.jsx'
 import DegTrendChart from './chat-widgets/DegTrendChart.jsx'
 import EnergyManagementWidget from './chat-widgets/EnergyManagementWidget.jsx'
 import LapDeltaTrace from './chat-widgets/LapDeltaTrace.jsx'
+import DriverFormTrend from './chat-widgets/DriverFormTrend.jsx'
+import ScProbabilityWidget from './chat-widgets/ScProbabilityWidget.jsx'
+import HeadToHeadHistory from './chat-widgets/HeadToHeadHistory.jsx'
+import StyleFingerprintWidget from './chat-widgets/StyleFingerprintWidget.jsx'
 
 function splitBlocks(text) {
   return text
@@ -175,6 +179,18 @@ function WidgetRenderer({ widget }) {
   }
   if (widget.type === 'lap_delta_trace') {
     return <LapDeltaTrace widget={widget} />
+  }
+  if (widget.type === 'driver_form_trend') {
+    return <DriverFormTrend widget={widget} />
+  }
+  if (widget.type === 'sc_probability') {
+    return <ScProbabilityWidget widget={widget} />
+  }
+  if (widget.type === 'head_to_head_history') {
+    return <HeadToHeadHistory widget={widget} />
+  }
+  if (widget.type === 'style_fingerprint') {
+    return <StyleFingerprintWidget widget={widget} />
   }
   return null
 }

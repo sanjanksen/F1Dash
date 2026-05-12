@@ -59,6 +59,10 @@ from f1_data import (
     get_sprint_results,
     get_sprint_qualifying_results,
     get_lap_delta_trace,
+    get_driver_form_trend,
+    get_sc_probability,
+    get_head_to_head_history,
+    get_session_style_fingerprint,
 )
 from openf1 import get_intervals, get_live_position_timeline, get_team_radio
 
@@ -445,6 +449,43 @@ PRIMITIVE_TOOL_DEFINITIONS = [
             "lap_type":     {"type": "string", "description": "fastest (default) or qualifying."},
         },
         ["round_number", "session_type", "driver_a", "driver_b"],
+    ),
+    _tool(
+        "get_driver_form_trend",
+        "PRIMITIVE TOOL. Rolling form trend for a driver over their last N races: positions gained/lost vs grid at each round, trend classification (improving/declining/stable), and rolling average.",
+        {
+            "driver_name": {"type": "string", "description": "Driver name, code, or abbreviation."},
+            "last_n":      {"type": "integer", "description": "Number of recent races to include (default 8)."},
+        },
+        ["driver_name"],
+    ),
+    _tool(
+        "get_sc_probability",
+        "PRIMITIVE TOOL. Historical safety car / VSC deployment probability for the circuit hosting a given round. Returns probability 0–1, classification, and rank vs other circuits.",
+        {
+            "round_number": {"type": "integer", "description": "Race round number."},
+        },
+        ["round_number"],
+    ),
+    _tool(
+        "get_head_to_head_history",
+        "PRIMITIVE TOOL. Multi-season head-to-head comparison between two drivers: win rate, average finishing position delta, and race-by-race breakdown across shared seasons.",
+        {
+            "driver_a": {"type": "string", "description": "First driver name or code."},
+            "driver_b": {"type": "string", "description": "Second driver name or code."},
+            "seasons":  {"type": "array", "items": {"type": "integer"}, "description": "List of seasons to compare (default: last 3 complete seasons)."},
+        },
+        ["driver_a", "driver_b"],
+    ),
+    _tool(
+        "get_session_style_fingerprint",
+        "PRIMITIVE TOOL. Aggregated driving style fingerprint for a driver across all corners in a session: trail braking rate, throttle acceptance, entry bravery, GGV utilisation, and apex speed.",
+        {
+            "round_number":  {"type": "integer", "description": "Race round number."},
+            "session_type":  {"type": "string", "description": "Q for qualifying, R for race."},
+            "driver_name":   {"type": "string", "description": "Driver name or code."},
+        },
+        ["round_number", "session_type", "driver_name"],
     ),
 ]
 
@@ -924,4 +965,12 @@ def execute_tool(name: str, args: dict):
             args["driver_a"], args["driver_b"],
             args.get("lap_type", "fastest"),
         )
+    if name == "get_driver_form_trend":
+        return get_driver_form_trend(args["driver_name"], args.get("last_n", 8))
+    if name == "get_sc_probability":
+        return get_sc_probability(args["round_number"])
+    if name == "get_head_to_head_history":
+        return get_head_to_head_history(args["driver_a"], args["driver_b"], args.get("seasons"))
+    if name == "get_session_style_fingerprint":
+        return get_session_style_fingerprint(args["round_number"], args["session_type"], args["driver_name"])
     raise ValueError(f"Unknown tool: {name!r}")

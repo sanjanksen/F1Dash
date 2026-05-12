@@ -356,6 +356,66 @@ def _make_lap_delta_trace_widget(result: dict) -> dict:
     }
 
 
+def _make_driver_form_trend_widget(result: dict) -> dict:
+    return {
+        "type":               "driver_form_trend",
+        "driver":             result.get("driver"),
+        "trend":              result.get("trend"),
+        "avg_positions_gained": result.get("avg_positions_gained"),
+        "races_analysed":     result.get("races_analysed"),
+        "per_race":           result.get("per_race", []),
+        "rolling_avg":        result.get("rolling_avg", []),
+    }
+
+
+def _make_sc_probability_widget(result: dict) -> dict:
+    return {
+        "type":                   "sc_probability",
+        "circuit_name":           result.get("circuit_name"),
+        "race_name":              result.get("race_name"),
+        "sc_probability":         result.get("sc_probability"),
+        "sc_probability_pct":     result.get("sc_probability_pct"),
+        "classification":         result.get("classification"),
+        "rank_by_sc_probability": result.get("rank_by_sc_probability"),
+        "circuits_ranked":        result.get("circuits_ranked"),
+        "series_average_pct":     result.get("series_average_pct"),
+        "interpretation":         result.get("interpretation"),
+    }
+
+
+def _make_head_to_head_history_widget(result: dict) -> dict:
+    return {
+        "type":               "head_to_head_history",
+        "driver_a":           result.get("driver_a"),
+        "driver_b":           result.get("driver_b"),
+        "seasons_analysed":   result.get("seasons_analysed", []),
+        "races_together":     result.get("races_together"),
+        "driver_a_wins":      result.get("driver_a_wins"),
+        "driver_b_wins":      result.get("driver_b_wins"),
+        "ties":               result.get("ties"),
+        "driver_a_win_rate":  result.get("driver_a_win_rate"),
+        "driver_b_win_rate":  result.get("driver_b_win_rate"),
+        "avg_position_delta": result.get("avg_position_delta"),
+        "dominant_driver":    result.get("dominant_driver"),
+        "per_race":           result.get("per_race", []),
+    }
+
+
+def _make_style_fingerprint_widget(result: dict) -> dict:
+    return {
+        "type":                    "style_fingerprint",
+        "driver":                  result.get("driver"),
+        "round":                   result.get("round"),
+        "session":                 result.get("session"),
+        "corner_count":            result.get("corner_count"),
+        "trail_brake_pct":         result.get("trail_brake_pct"),
+        "throttle_acceptance_pct": result.get("throttle_acceptance_pct"),
+        "entry_bravery_pct":       result.get("entry_bravery_pct"),
+        "avg_ggv_util_pct":        result.get("avg_ggv_util_pct"),
+        "avg_apex_speed_kph":      result.get("avg_apex_speed_kph"),
+    }
+
+
 def _widgets_from_preloaded(preloaded: dict | None) -> list[dict]:
     if not preloaded or "result" not in preloaded:
         return []
@@ -429,6 +489,14 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
                 widgets.append(w)
         elif tool == "get_lap_delta_trace":
             widgets.append(_make_lap_delta_trace_widget(item["result"]))
+        elif tool == "get_driver_form_trend":
+            widgets.append(_make_driver_form_trend_widget(item["result"]))
+        elif tool == "get_sc_probability":
+            widgets.append(_make_sc_probability_widget(item["result"]))
+        elif tool == "get_head_to_head_history":
+            widgets.append(_make_head_to_head_history_widget(item["result"]))
+        elif tool == "get_session_style_fingerprint":
+            widgets.append(_make_style_fingerprint_widget(item["result"]))
 
     # Standalone corner_analysis widget: when cornering loads were run but there's no
     # qualifying_battle widget to embed grip_commitment into (pure grip comparison query).
