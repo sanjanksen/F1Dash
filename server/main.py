@@ -2,7 +2,7 @@
 import asyncio
 import json
 import os
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -113,3 +113,18 @@ async def chat_endpoint(request: ChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/api/admin/rebuild-driver-ratings")
+async def rebuild_driver_ratings(background_tasks: BackgroundTasks):
+    """
+    Trigger an offline rebuild of the Bayesian driver ratings cache.
+    Takes 5-15 minutes. Returns immediately; build runs in background.
+    """
+    from driver_rating import build_and_cache_ratings
+    background_tasks.add_task(
+        build_and_cache_ratings,
+        seasons=[2021, 2022, 2023, 2024, 2025],
+        draws=1000, tune=500, chains=2,
+    )
+    return {"status": "rebuild started", "note": "check server logs; cache updates in ~10 minutes"}

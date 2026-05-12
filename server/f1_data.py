@@ -6901,3 +6901,60 @@ def get_session_style_fingerprint(
             'avg_ggv_util_pct':        'High (>80%) = near the traction/grip limit throughout',
         },
     }
+
+
+def get_driver_skill_rating(driver_name: str) -> dict:
+    """
+    Return Bayesian skill estimate for a driver from the pre-computed cache.
+    driver_name: 3-letter code (NOR) or surname (normalised internally).
+    Includes rank among all rated drivers, credible interval, and Elo cross-check.
+    """
+    from driver_rating import load_cached_ratings, _CACHE_PATH
+
+    cache = load_cached_ratings(_CACHE_PATH)
+    if cache is None:
+        return {
+            'error': 'Driver rating cache not built yet. Run POST /api/admin/rebuild-driver-ratings to generate ratings.',
+            'driver': driver_name.upper(),
+        }
+
+    driver_code = driver_name.upper().strip()[:3]
+    skills = cache.get('driver_skills', {})
+
+    if driver_code not in skills:
+        return {
+            'error': f"Driver '{driver_code}' not found in ratings. Available: {sorted(skills.keys())}",
+            'driver': driver_code,
+        }
+
+    skill = skills[driver_code]
+
+    sorted_drivers = sorted(skills.items(), key=lambda x: x[1]['mean'], reverse=True)
+    rank = next(i + 1 for i, (k, _) in enumerate(sorted_drivers) if k == driver_code)
+
+    skill_in_seconds = round(skill['mean'] * 0.3, 2)
+
+    elo = cache.get('elo_driver_ratings', {}).get(driver_code)
+    seasons = cache.get('seasons', [])
+
+    return {
+        'driver':            driver_code,
+        'skill_mean':        skill['mean'],
+        'skill_std':         skill['std'],
+        'hdi_5':             skill['hdi_5'],
+        'hdi_95':            skill['hdi_95'],
+        'rank':              rank,
+        'n_drivers_rated':   len(skills),
+        'skill_in_seconds':  skill_in_seconds,
+        'elo_rating':        elo,
+        'seasons_used':      seasons,
+        'n_comparisons':     cache.get('n_comparisons'),
+        'built_at_iso':      time.strftime('%Y-%m-%d', time.gmtime(cache.get('built_at', 0))),
+        'interpretation': (
+            f"{driver_code} is ranked #{rank} of {len(skills)} rated drivers. "
+            f"Posterior mean skill: {skill['mean']:+.2f} SD units "
+            f"({'+' if skill_in_seconds >= 0 else ''}{skill_in_seconds}s/lap vs median driver in median car). "
+            f"90% credible interval: [{skill['hdi_5']:+.2f}, {skill['hdi_95']:+.2f}] SD. "
+            f"Model trained on {cache.get('n_comparisons', '?')} comparisons from {seasons}."
+        ),
+    }

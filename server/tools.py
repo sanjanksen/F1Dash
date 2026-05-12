@@ -63,6 +63,7 @@ from f1_data import (
     get_sc_probability,
     get_head_to_head_history,
     get_session_style_fingerprint,
+    get_driver_skill_rating,
 )
 from openf1 import get_intervals, get_live_position_timeline, get_team_radio
 
@@ -718,6 +719,18 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
         ["round_number", "team_name", "session_type"],
     ),
     _tool(
+        "get_driver_skill_rating",
+        "PRIMITIVE TOOL. Bayesian driver skill estimate: how good is this driver independent of the car? "
+        "Returns posterior mean skill in standard deviation (SD) units (1 SD ≈ 0.3s/lap advantage over a median driver in a median car), "
+        "90% credible interval, rank among all rated drivers, and a plain-English interpretation. "
+        "Model trained on pairwise race finishes across multiple seasons, with constructor-year effects removed. "
+        "Use for questions like 'how good is Norris really?' or 'is Hamilton still elite?' or 'who is the best driver independent of their car?'",
+        {
+            "driver_name": {"type": "string", "description": "Driver full name, surname, or 3-letter code (e.g. NOR, Norris)."},
+        },
+        ["driver_name"],
+    ),
+    _tool(
         "analyze_weather_pace_correlation",
         "DEEP ANALYSIS PRIMITIVE. Correlates track temperature with lap time evolution. "
         "For qualifying: Q1/Q2/Q3 segments with temperature, best lap, and top-5 average. "
@@ -973,4 +986,6 @@ def execute_tool(name: str, args: dict):
         return get_head_to_head_history(args["driver_a"], args["driver_b"], args.get("seasons"))
     if name == "get_session_style_fingerprint":
         return get_session_style_fingerprint(args["round_number"], args["session_type"], args["driver_name"])
+    if name == "get_driver_skill_rating":
+        return get_driver_skill_rating(args["driver_name"])
     raise ValueError(f"Unknown tool: {name!r}")

@@ -14,6 +14,7 @@ import DriverFormTrend from './chat-widgets/DriverFormTrend.jsx'
 import ScProbabilityWidget from './chat-widgets/ScProbabilityWidget.jsx'
 import HeadToHeadHistory from './chat-widgets/HeadToHeadHistory.jsx'
 import StyleFingerprintWidget from './chat-widgets/StyleFingerprintWidget.jsx'
+import DriverSkillRating from './chat-widgets/DriverSkillRating.jsx'
 
 function splitBlocks(text) {
   return text
@@ -191,6 +192,9 @@ function WidgetRenderer({ widget }) {
   }
   if (widget.type === 'style_fingerprint') {
     return <StyleFingerprintWidget widget={widget} />
+  }
+  if (widget.type === 'driver_skill_rating') {
+    return <DriverSkillRating widget={widget} />
   }
   return null
 }

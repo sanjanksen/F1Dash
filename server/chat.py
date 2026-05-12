@@ -421,6 +421,26 @@ def _make_head_to_head_history_widget(result: dict) -> dict:
     }
 
 
+def _make_driver_skill_rating_widget(result: dict) -> dict:
+    if 'error' in result:
+        return {'type': 'driver_skill_rating', 'error': result['error'], 'driver': result.get('driver')}
+    return {
+        'type':              'driver_skill_rating',
+        'driver':            result.get('driver'),
+        'skill_mean':        result.get('skill_mean'),
+        'skill_std':         result.get('skill_std'),
+        'hdi_5':             result.get('hdi_5'),
+        'hdi_95':            result.get('hdi_95'),
+        'rank':              result.get('rank'),
+        'n_drivers_rated':   result.get('n_drivers_rated'),
+        'skill_in_seconds':  result.get('skill_in_seconds'),
+        'elo_rating':        result.get('elo_rating'),
+        'seasons_used':      result.get('seasons_used'),
+        'interpretation':    result.get('interpretation'),
+        'built_at_iso':      result.get('built_at_iso'),
+    }
+
+
 def _make_style_fingerprint_widget(result: dict) -> dict:
     return {
         "type":                    "style_fingerprint",
@@ -517,6 +537,8 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
             widgets.append(_make_head_to_head_history_widget(item["result"]))
         elif tool == "get_session_style_fingerprint":
             widgets.append(_make_style_fingerprint_widget(item["result"]))
+        elif tool == "get_driver_skill_rating":
+            widgets.append(_make_driver_skill_rating_widget(item["result"]))
 
     # Standalone corner_analysis widget: when cornering loads were run but there's no
     # qualifying_battle widget to embed grip_commitment into (pure grip comparison query).
@@ -1087,6 +1109,17 @@ If two teammates (same team) pit within 1–2 consecutive laps, the second car l
 - strongest_evidence: array of strings
 - caveats: array of strings
 - confidence: one of high, medium, low
+
+## Driver Skill Ratings (Bayesian)
+
+When `get_driver_skill_rating` returns data, interpret it as follows:
+- **skill_mean** is in standard deviation (SD) units. Each 1 SD ≈ 0.3 seconds per lap advantage over a median driver in a median car.
+- **skill_in_seconds** converts this to lap-time units for plain English.
+- The **90% credible interval** [hdi_5, hdi_95] expresses uncertainty. A driver at +0.5 SD with interval [+0.2, +0.8] is clearly above average. A driver at +0.3 SD with interval [-0.1, +0.7] overlaps zero — less certain.
+- Do NOT say "skill_mean" or "SD units" directly. Translate: "+0.72 SD = roughly 0.22s/lap faster than a typical driver in a typical car".
+- The **rank** is among all drivers rated. Contextualise: "ranked 3rd of 32 drivers analysed".
+- Always mention that **constructor effects are removed** — this is driver skill, not car+driver combined.
+- When the credible interval spans zero, say the rating is "approximately average" or "uncertain — consistent with average".
 """
 
 ANALYSIS_SYSTEM_PROMPT = _build_analysis_system_prompt()
