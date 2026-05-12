@@ -9,6 +9,7 @@ import DataTableWidget from './chat-widgets/DataTableWidget.jsx'
 import PitStopStrategyWidget from './chat-widgets/PitStopStrategyWidget.jsx'
 import DegTrendChart from './chat-widgets/DegTrendChart.jsx'
 import EnergyManagementWidget from './chat-widgets/EnergyManagementWidget.jsx'
+import LapDeltaTrace from './chat-widgets/LapDeltaTrace.jsx'
 
 function splitBlocks(text) {
   return text
@@ -171,6 +172,9 @@ function WidgetRenderer({ widget }) {
   }
   if (widget.type === 'energy_management') {
     return <EnergyManagementWidget widget={widget} />
+  }
+  if (widget.type === 'lap_delta_trace') {
+    return <LapDeltaTrace widget={widget} />
   }
   return null
 }

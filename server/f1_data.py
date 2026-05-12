@@ -6285,3 +6285,101 @@ def get_speed_trap_leaderboard(round_number: int, session_type: str) -> dict:
         "speed_i1": _ranked("speed_i1"),
         "speed_i2": _ranked("speed_i2"),
     }
+
+
+def _sample_telemetry_at_distances(tel, targets: list[int]) -> list[dict]:
+    """Sample telemetry speed at each target distance using np.interp."""
+    dist_arr = tel['Distance'].to_numpy(dtype=float)
+    speed_arr = tel['Speed'].to_numpy(dtype=float)
+    result = []
+    for d in targets:
+        speed = float(np.interp(d, dist_arr, speed_arr))
+        result.append({'distance_m': d, 'speed_kph': round(speed, 1)})
+    return result
+
+
+def _compute_delta_trace(
+    samples_a: list[dict], samples_b: list[dict], interval_m: float = 100.0
+) -> list[dict]:
+    """
+    Compute cumulative time delta at each 100m mark.
+    delta_s = cum_time_A - cum_time_B.
+    Negative = driver A is ahead (faster to that point).
+    """
+    cum_time_a = 0.0
+    cum_time_b = 0.0
+    result = []
+    for sa, sb in zip(samples_a, samples_b):
+        spd_a = max(sa['speed_kph'], 1.0)
+        spd_b = max(sb['speed_kph'], 1.0)
+        cum_time_a += interval_m / (spd_a / 3.6)
+        cum_time_b += interval_m / (spd_b / 3.6)
+        result.append({
+            'distance_m':  sa['distance_m'],
+            'delta_s':     round(cum_time_a - cum_time_b, 4),
+            'speed_a_kph': sa['speed_kph'],
+            'speed_b_kph': sb['speed_kph'],
+        })
+    return result
+
+
+def get_lap_delta_trace(
+    round_number: int, session_type: str, driver_a: str, driver_b: str,
+    lap_type: str = "fastest"
+) -> dict:
+    """
+    Cumulative time delta at every 100m between driver_a and driver_b.
+    lap_type: 'fastest' uses each driver's fastest lap.
+    """
+    sess = _load_session(
+        round_number,
+        session_type,
+        laps=True,
+        telemetry=True,
+        weather=False,
+        messages=_session_needs_race_control_messages(session_type),
+    )
+    laps = sess.laps
+
+    driver_a = driver_a.upper()
+    driver_b = driver_b.upper()
+
+    def _pick_lap(drv):
+        dl = _pick_driver(laps, drv)
+        if lap_type == "qualifying":
+            dl = dl[dl['IsPersonalBest'] == True]
+        return _pick_fastest_lap(dl)
+
+    lap_a = _pick_lap(driver_a)
+    lap_b = _pick_lap(driver_b)
+
+    tel_a = lap_a.get_telemetry().add_distance()
+    tel_b = lap_b.get_telemetry().add_distance()
+
+    total_dist = min(float(tel_a['Distance'].max()), float(tel_b['Distance'].max()))
+    INTERVAL_M = 100
+    targets = list(range(0, int(total_dist), INTERVAL_M))
+
+    samples_a_list = _sample_telemetry_at_distances(tel_a, targets)
+    samples_b_list = _sample_telemetry_at_distances(tel_b, targets)
+
+    delta_trace = _compute_delta_trace(samples_a_list, samples_b_list, interval_m=INTERVAL_M)
+
+    lt_a_raw = lap_a.get('LapTime')
+    lt_b_raw = lap_b.get('LapTime')
+    lt_a = float(lt_a_raw.total_seconds()) if hasattr(lt_a_raw, 'total_seconds') else None
+    lt_b = float(lt_b_raw.total_seconds()) if hasattr(lt_b_raw, 'total_seconds') else None
+
+    final_delta = delta_trace[-1]['delta_s'] if delta_trace else 0.0
+
+    return {
+        'driver_a':         driver_a,
+        'driver_b':         driver_b,
+        'lap_type':         lap_type,
+        'lap_time_a_s':     round(lt_a, 3) if lt_a else None,
+        'lap_time_b_s':     round(lt_b, 3) if lt_b else None,
+        'total_delta_s':    round(final_delta, 3),
+        'fastest_driver':   driver_a if final_delta < 0 else driver_b,
+        'circuit_length_m': int(total_dist),
+        'delta_trace':      delta_trace,
+    }

@@ -342,6 +342,20 @@ def _make_energy_management_widget(result: dict) -> dict:
     }
 
 
+def _make_lap_delta_trace_widget(result: dict) -> dict:
+    return {
+        "type":             "lap_delta_trace",
+        "driver_a":         result.get("driver_a"),
+        "driver_b":         result.get("driver_b"),
+        "lap_time_a_s":     result.get("lap_time_a_s"),
+        "lap_time_b_s":     result.get("lap_time_b_s"),
+        "total_delta_s":    result.get("total_delta_s"),
+        "fastest_driver":   result.get("fastest_driver"),
+        "circuit_length_m": result.get("circuit_length_m"),
+        "delta_trace":      result.get("delta_trace", []),
+    }
+
+
 def _widgets_from_preloaded(preloaded: dict | None) -> list[dict]:
     if not preloaded or "result" not in preloaded:
         return []
@@ -413,6 +427,8 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
             w = _make_energy_management_widget(item["result"])
             if w.get("speed_trace_a"):
                 widgets.append(w)
+        elif tool == "get_lap_delta_trace":
+            widgets.append(_make_lap_delta_trace_widget(item["result"]))
 
     # Standalone corner_analysis widget: when cornering loads were run but there's no
     # qualifying_battle widget to embed grip_commitment into (pure grip comparison query).

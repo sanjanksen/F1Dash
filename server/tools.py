@@ -58,6 +58,7 @@ from f1_data import (
     get_speed_trap_leaderboard,
     get_sprint_results,
     get_sprint_qualifying_results,
+    get_lap_delta_trace,
 )
 from openf1 import get_intervals, get_live_position_timeline, get_team_radio
 
@@ -429,6 +430,21 @@ PRIMITIVE_TOOL_DEFINITIONS = [
             "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
         },
         ["round_number", "session_type"],
+    ),
+    _tool(
+        "get_lap_delta_trace",
+        "PRIMITIVE TOOL. Cumulative time delta at every 100m of the lap between two drivers. "
+        "Use for precise spatial questions like 'where did Norris gain time on Leclerc?' — "
+        "returns a trace showing exactly which sectors, corners, or straights produced the gap. "
+        "Works for qualifying and race fastest laps.",
+        {
+            "round_number": {"type": "integer", "description": "Race round number."},
+            "session_type": {"type": "string", "description": "Q for qualifying, R for race."},
+            "driver_a":     {"type": "string", "description": "First driver code (e.g. NOR)."},
+            "driver_b":     {"type": "string", "description": "Second driver code (e.g. LEC)."},
+            "lap_type":     {"type": "string", "description": "fastest (default) or qualifying."},
+        },
+        ["round_number", "session_type", "driver_a", "driver_b"],
     ),
 ]
 
@@ -902,4 +918,10 @@ def execute_tool(name: str, args: dict):
         return get_fp_summary(args["round_number"], args["fp_number"])
     if name == "get_speed_trap_leaderboard":
         return get_speed_trap_leaderboard(args["round_number"], args["session_type"])
+    if name == "get_lap_delta_trace":
+        return get_lap_delta_trace(
+            args["round_number"], args["session_type"],
+            args["driver_a"], args["driver_b"],
+            args.get("lap_type", "fastest"),
+        )
     raise ValueError(f"Unknown tool: {name!r}")

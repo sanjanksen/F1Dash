@@ -2955,3 +2955,40 @@ def test_aggregate_lap_cornering_stats_ggv_fields_with_envelope():
     assert 'avg_envelope_time_pct' in result
     assert 'avg_throttle_acceptance_pct' in result
     assert 'avg_entry_bravery_pct' in result
+
+
+def test_compute_delta_trace_equal_speeds():
+    """Equal speeds throughout produce zero cumulative delta."""
+    from f1_data import _compute_delta_trace
+    samples = [{'distance_m': i * 100, 'speed_kph': 150.0} for i in range(10)]
+    result = _compute_delta_trace(samples, samples, interval_m=100.0)
+    assert len(result) == 10
+    for point in result:
+        assert abs(point['delta_s']) < 1e-9, f"Expected zero delta, got {point['delta_s']}"
+
+
+def test_compute_delta_trace_faster_driver_gains():
+    """Driver A at 200 kph vs Driver B at 100 kph: delta_s monotonically negative."""
+    from f1_data import _compute_delta_trace
+    sa = [{'distance_m': i * 100, 'speed_kph': 200.0} for i in range(5)]
+    sb = [{'distance_m': i * 100, 'speed_kph': 100.0} for i in range(5)]
+    result = _compute_delta_trace(sa, sb, interval_m=100.0)
+    # dt_A per 100m = 100 / (200/3.6) = 1.8s; dt_B = 100 / (100/3.6) = 3.6s
+    # After 5 intervals: delta = 5 * (1.8 - 3.6) = -9.0s
+    assert result[-1]['delta_s'] < 0, "Faster driver A should have negative delta"
+    assert abs(result[-1]['delta_s'] - (-9.0)) < 0.01
+    # Monotonically decreasing
+    for i in range(1, len(result)):
+        assert result[i]['delta_s'] <= result[i - 1]['delta_s']
+
+
+def test_compute_delta_trace_returns_speed_fields():
+    """Each point must include speed_a_kph and speed_b_kph."""
+    from f1_data import _compute_delta_trace
+    sa = [{'distance_m': 0, 'speed_kph': 120.0}]
+    sb = [{'distance_m': 0, 'speed_kph': 140.0}]
+    result = _compute_delta_trace(sa, sb)
+    assert 'speed_a_kph' in result[0]
+    assert 'speed_b_kph' in result[0]
+    assert result[0]['speed_a_kph'] == 120.0
+    assert result[0]['speed_b_kph'] == 140.0
