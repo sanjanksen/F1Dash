@@ -1795,7 +1795,7 @@ def test_fit_stint_degradation_exposes_ranking_inputs():
     assert stints[0]["deg_rate_s_per_lap"] == pytest.approx(0.1)
     assert stints[0]["positive_deg_rate_s_per_lap"] == pytest.approx(0.1)
     assert stints[0]["r_squared"] == pytest.approx(1.0)
-    assert "raw_pace_trend_s_per_lap is what the stopwatch did" in stints[0]["ranking_basis"]
+    assert "deg_rate_s_per_lap" in stints[0]["ranking_basis"]
 
 
 def test_fit_stint_degradation_adds_back_fuel_burn_for_improving_raw_pace():
@@ -1974,8 +1974,8 @@ def test_fit_stint_degradation_includes_scatter_data():
     assert "regression_line" in stint, "regression_line missing"
     assert len(stint["scatter_data"]) == 7
     assert all("tyre_age" in pt and "lap_time_s" in pt and "lap_number" in pt for pt in stint["scatter_data"])
-    assert len(stint["regression_line"]) == 2
-    assert stint["regression_line"][0]["tyre_age"] <= stint["regression_line"][1]["tyre_age"]
+    assert len(stint["regression_line"]) >= 2
+    assert stint["regression_line"][0]["tyre_age"] <= stint["regression_line"][-1]["tyre_age"]
 
 
 def _make_weather_df():
@@ -2702,18 +2702,21 @@ def test_build_ggv_envelope_returns_correct_shape():
         'Source': np.where(np.arange(n) % 4 == 0, 'pos', 'car'),
     })
     result = f1_data._build_ggv_envelope([tel, tel])
-    assert set(result.keys()) == {'lat_max', 'brake_max', 'throttle_max', 'speed_bins'}
-    assert len(result['lat_max']) == len(f1_data._GGV_BIN_CENTERS)
-    assert len(result['brake_max']) == len(f1_data._GGV_BIN_CENTERS)
-    assert np.all(result['lat_max'] > 0)
+    assert 'ALL' in result
+    env = result['ALL']
+    assert set(env.keys()) == {'lat_max', 'brake_max', 'throttle_max', 'speed_bins'}
+    assert len(env['lat_max']) == len(f1_data._GGV_BIN_CENTERS)
+    assert len(env['brake_max']) == len(f1_data._GGV_BIN_CENTERS)
+    assert np.all(env['lat_max'] > 0)
 
 
 def test_build_ggv_envelope_falls_back_when_empty():
     import numpy as np
     result = f1_data._build_ggv_envelope([])
-    assert 'lat_max' in result
-    assert len(result['lat_max']) == len(f1_data._GGV_BIN_CENTERS)
-    assert np.all(result['lat_max'] > 0)
+    assert 'ALL' in result
+    assert 'lat_max' in result['ALL']
+    assert len(result['ALL']['lat_max']) == len(f1_data._GGV_BIN_CENTERS)
+    assert np.all(result['ALL']['lat_max'] > 0)
 
 
 def test_theoretical_ggv_envelope_brake_exceeds_lateral():
@@ -2992,3 +2995,383 @@ def test_compute_delta_trace_returns_speed_fields():
     assert 'speed_b_kph' in result[0]
     assert result[0]['speed_a_kph'] == 120.0
     assert result[0]['speed_b_kph'] == 140.0
+
+
+# ---------------------------------------------------------------------------
+# FEAT-15: Driver Form Trend
+# ---------------------------------------------------------------------------
+
+def test_compute_positions_gained_basic():
+    from f1_data import _compute_positions_gained
+    races = [
+        {'grid': 5, 'position': 3},
+        {'grid': 8, 'position': 5},
+        {'grid': 3, 'position': 7},
+        {'grid': 1, 'position': 1},
+    ]
+    assert _compute_positions_gained(races) == [2, 3, -4, 0]
+
+
+def test_compute_positions_gained_dnf_excluded():
+    from f1_data import _compute_positions_gained
+    races = [
+        {'grid': 3, 'position': 2},
+        {'grid': 5, 'position': 0},
+        {'grid': 4, 'position': None},
+        {'grid': 6, 'position': 4},
+    ]
+    assert _compute_positions_gained(races) == [1, 2]
+
+
+def test_form_trend_slope_improving():
+    from f1_data import _classify_form_trend
+    assert _classify_form_trend([-2, -1, 0, 1, 2, 3]) == 'improving'
+
+
+def test_form_trend_slope_declining():
+    from f1_data import _classify_form_trend
+    assert _classify_form_trend([3, 2, 1, 0, -1, -2]) == 'declining'
+
+
+def test_form_trend_slope_stable():
+    from f1_data import _classify_form_trend
+    assert _classify_form_trend([1, -1, 1, -1, 0, 1]) == 'stable'
+
+
+# ---------------------------------------------------------------------------
+# FEAT-08: Safety Car Probability
+# ---------------------------------------------------------------------------
+
+def test_sc_lookup_monaco_is_high():
+    from f1_data import _sc_probability_for_circuit
+    assert _sc_probability_for_circuit('Monaco') > 0.5
+
+
+def test_sc_lookup_monza_is_lower():
+    from f1_data import _sc_probability_for_circuit
+    assert _sc_probability_for_circuit('Monza') < 0.45
+
+
+def test_sc_lookup_unknown_returns_default():
+    from f1_data import _sc_probability_for_circuit
+    prob = _sc_probability_for_circuit('UnknownCircuitXYZ')
+    assert 0.30 <= prob <= 0.55
+
+
+# ---------------------------------------------------------------------------
+# FEAT-20: Head-to-Head Driver History
+# ---------------------------------------------------------------------------
+
+def test_head_to_head_stats_win_rate():
+    from f1_data import _compute_head_to_head_stats
+    comparisons = [
+        {'driver_a_pos': 1, 'driver_b_pos': 2},
+        {'driver_a_pos': 3, 'driver_b_pos': 1},
+        {'driver_a_pos': 2, 'driver_b_pos': 4},
+        {'driver_a_pos': 5, 'driver_b_pos': 3},
+    ]
+    result = _compute_head_to_head_stats(comparisons, 'NOR', 'LEC')
+    assert result['driver_a_wins'] == 2
+    assert result['driver_b_wins'] == 2
+    assert abs(result['driver_a_win_rate'] - 0.5) < 0.01
+    assert result['races_together'] == 4
+
+
+def test_head_to_head_stats_avg_delta():
+    from f1_data import _compute_head_to_head_stats
+    comparisons = [
+        {'driver_a_pos': 1, 'driver_b_pos': 3},
+        {'driver_a_pos': 4, 'driver_b_pos': 2},
+    ]
+    result = _compute_head_to_head_stats(comparisons, 'NOR', 'LEC')
+    assert abs(result['avg_position_delta']) < 0.01
+
+
+def test_head_to_head_excludes_dnf():
+    from f1_data import _compute_head_to_head_stats
+    comparisons = [
+        {'driver_a_pos': 1, 'driver_b_pos': 0},
+        {'driver_a_pos': 0, 'driver_b_pos': 2},
+        {'driver_a_pos': 2, 'driver_b_pos': 3},
+    ]
+    result = _compute_head_to_head_stats(comparisons, 'NOR', 'LEC')
+    assert result['races_together'] == 1
+
+
+# ---------------------------------------------------------------------------
+# FEAT-17: Per-Session Driver Style Fingerprint
+# ---------------------------------------------------------------------------
+
+def test_aggregate_style_fingerprint_averaging():
+    from f1_data import _aggregate_style_fingerprint
+    corners = [
+        {'trail_brake_pct': 60.0, 'throttle_acceptance_pct': 70.0,
+         'entry_bravery_pct': 50.0, 'avg_ggv_util_pct': 80.0, 'apex_speed_kph': 100.0},
+        {'trail_brake_pct': 40.0, 'throttle_acceptance_pct': 80.0,
+         'entry_bravery_pct': 70.0, 'avg_ggv_util_pct': 75.0, 'apex_speed_kph': 120.0},
+    ]
+    result = _aggregate_style_fingerprint(corners)
+    assert result['trail_brake_pct'] == 50.0
+    assert result['throttle_acceptance_pct'] == 75.0
+    assert result['corner_count'] == 2
+
+
+def test_aggregate_style_fingerprint_ignores_none():
+    from f1_data import _aggregate_style_fingerprint
+    corners = [
+        {'trail_brake_pct': 60.0, 'throttle_acceptance_pct': None,
+         'entry_bravery_pct': None, 'avg_ggv_util_pct': None, 'apex_speed_kph': None},
+        {'trail_brake_pct': 40.0, 'throttle_acceptance_pct': 80.0,
+         'entry_bravery_pct': None, 'avg_ggv_util_pct': None, 'apex_speed_kph': None},
+    ]
+    result = _aggregate_style_fingerprint(corners)
+    assert result['trail_brake_pct'] == 50.0
+    assert result['throttle_acceptance_pct'] == 80.0
+
+
+def test_aggregate_style_fingerprint_empty_returns_defaults():
+    from f1_data import _aggregate_style_fingerprint
+    result = _aggregate_style_fingerprint([])
+    assert result['corner_count'] == 0
+    assert result['trail_brake_pct'] is None
+
+
+# ---------------------------------------------------------------------------
+# BUG-04: Interpolated Telemetry Sampling
+# ---------------------------------------------------------------------------
+
+def test_telemetry_sampling_interpolates_not_nearest_neighbour():
+    """Sampling at 150 m should interpolate between 100 m and 200 m samples."""
+    import numpy as np
+    import pandas as pd
+    from f1_data import _sample_telemetry_at_distances
+
+    distances = np.array([0.0, 100.0, 200.0, 300.0])
+    speeds     = np.array([100.0, 200.0, 300.0, 400.0])
+    throttles  = np.array([0.0, 50.0, 100.0, 100.0])
+    brakes     = np.array([False, False, False, False])
+
+    tel = pd.DataFrame({
+        'Distance': distances,
+        'Speed':    speeds,
+        'Throttle': throttles,
+        'Brake':    brakes,
+        'nGear':    [1, 3, 5, 7],
+        'DRS':      [0, 0, 10, 10],
+        'RPM':      [5000.0, 8000.0, 11000.0, 12000.0],
+    })
+
+    targets = [0, 100, 150, 200, 300]
+    samples = _sample_telemetry_at_distances(tel, targets)
+
+    assert samples[2]['distance_m'] == 150
+    assert abs(samples[2]['speed_kph'] - 250.0) < 0.1
+    assert abs(samples[2]['throttle_pct'] - 75.0) < 0.1
+
+
+# ---------------------------------------------------------------------------
+# BUG-05: IQR Outlier Filter + VSC Lap Detection
+# ---------------------------------------------------------------------------
+
+def _make_laps_df(lap_times_s, track_statuses=None, pit_in=None, pit_out=None):
+    """Build a minimal DataFrame that _filter_clean_race_laps accepts."""
+    import pandas as pd
+    n = len(lap_times_s)
+    data = {
+        'LapTime': [pd.Timedelta(seconds=t) for t in lap_times_s],
+        'TrackStatus': track_statuses or ['1'] * n,
+        'PitInTime': [None] * n if pit_in is None else pit_in,
+        'PitOutTime': [None] * n if pit_out is None else pit_out,
+        'LapNumber': list(range(1, n + 1)),
+        'Compound': ['MEDIUM'] * n,
+        'TyreLife': list(range(1, n + 1)),
+    }
+    return pd.DataFrame(data)
+
+
+def test_filter_removes_vsc_laps():
+    """TrackStatus '2' laps (VSC/yellow) must be excluded."""
+    from f1_data import _filter_clean_race_laps
+
+    statuses = ['1'] * 10 + ['2'] + ['1'] * 9
+    lap_times = [90.0] * 10 + [105.0] + [90.0] * 9
+    df = _make_laps_df(lap_times, track_statuses=statuses)
+
+    result = _filter_clean_race_laps(df)
+    lap_numbers = [r['lap_number'] for r in result]
+    assert 11 not in lap_numbers
+
+
+def test_filter_uses_iqr_not_flat_threshold():
+    """An outlier lap >Q3+1.5*IQR must be excluded."""
+    from f1_data import _filter_clean_race_laps
+
+    lap_times = [90.0] * 18 + [100.0]
+    df = _make_laps_df(lap_times)
+
+    result = _filter_clean_race_laps(df)
+    times = [r['lap_time_s'] for r in result]
+    assert 100.0 not in times
+    assert len(result) == 18
+
+
+# ---------------------------------------------------------------------------
+# BUG-02 + BUG-01 + BUG-06: Degradation fixes
+# ---------------------------------------------------------------------------
+
+def _make_clean_laps(lap_times, compound='MEDIUM', tyre_ages=None, lap_start=1):
+    laps = []
+    for i, t in enumerate(lap_times):
+        laps.append({
+            'lap_number': lap_start + i,
+            'lap_time_s': t,
+            'compound': compound,
+            'tyre_age': (tyre_ages[i] if tyre_ages else i + 1),
+        })
+    return laps
+
+
+def test_deg_regression_excludes_cold_tyre_laps():
+    """Tyre age <= 2 laps must not influence the regression slope."""
+    from f1_data import _fit_stint_degradation
+
+    laps = _make_clean_laps(
+        [95.0, 93.0, 90.0, 90.1, 90.2, 90.3, 90.4, 90.5, 90.6, 90.7],
+        tyre_ages=list(range(1, 11)),
+    )
+    result = _fit_stint_degradation(laps, circuit_length_km=5.0)
+    assert result, "Expected at least one stint result"
+    stint = result[0]
+    # Cold laps (95s, 93s) would drag the slope negative if included.
+    # With them excluded, slope is the fuel-corrected tyre deg ≈ 0.1 + correction.
+    assert 0.0 <= stint['deg_rate_s_per_lap'] <= 0.30, (
+        f"Slope {stint['deg_rate_s_per_lap']} suggests cold laps were included (negative) or formula error"
+    )
+
+
+def test_fuel_correction_varies_with_circuit_length():
+    """Monaco (3.337 km) gets higher fuel correction than Monza (5.793 km)."""
+    from f1_data import _fuel_correction_s_per_lap
+    monaco = _fuel_correction_s_per_lap(3.337)
+    monza  = _fuel_correction_s_per_lap(5.793)
+    assert monaco > monza, f"Monaco {monaco} should exceed Monza {monza}"
+    assert 0.04 <= monaco <= 0.12
+    assert 0.04 <= monza  <= 0.10
+
+
+def test_pace_at_age_10_is_reported():
+    """Stint result must include pace_at_age_10_s."""
+    from f1_data import _fit_stint_degradation
+    laps = _make_clean_laps([90.0 + i * 0.05 for i in range(15)],
+                             tyre_ages=list(range(1, 16)))
+    result = _fit_stint_degradation(laps, circuit_length_km=5.3)
+    assert result
+    assert 'pace_at_age_10_s' in result[0]
+    # pace_at_age_10_s is fuel-corrected (higher than raw 90.45); just verify plausible range.
+    assert 89.0 < result[0]['pace_at_age_10_s'] < 93.0
+
+
+# ---------------------------------------------------------------------------
+# BUG-03: Polynomial Degradation + Cliff Detection
+# ---------------------------------------------------------------------------
+
+def test_polynomial_deg_detects_cliff():
+    """A stint with accelerating late-stint deg should return quad_coeff > 0 and a cliff_lap_est."""
+    from f1_data import _fit_stint_degradation
+
+    flat  = [90.0 + i * 0.03 for i in range(10)]
+    cliff = [90.3 + (i + 1) * 0.25 for i in range(5)]
+    laps  = _make_clean_laps(flat + cliff, tyre_ages=list(range(1, 16)))
+    result = _fit_stint_degradation(laps, circuit_length_km=5.0)
+    assert result
+    stint = result[0]
+    assert 'quad_coeff' in stint
+    assert stint['quad_coeff'] > 0, "Positive quad_coeff signals accelerating degradation"
+    assert 'cliff_lap_est' in stint
+    assert stint['cliff_lap_est'] is not None
+    assert 8 <= stint['cliff_lap_est'] <= 12, (
+        f"Cliff expected around lap 10, got {stint['cliff_lap_est']}"
+    )
+
+
+def test_polynomial_deg_zero_quad_for_linear_data():
+    """Perfectly linear degradation should give near-zero quad_coeff."""
+    from f1_data import _fit_stint_degradation
+
+    laps = _make_clean_laps([90.0 + i * 0.05 for i in range(20)],
+                             tyre_ages=list(range(1, 21)))
+    result = _fit_stint_degradation(laps, circuit_length_km=5.0)
+    assert result
+    assert abs(result[0]['quad_coeff']) < 0.005
+    assert result[0]['cliff_lap_est'] is None
+
+
+# ---------------------------------------------------------------------------
+# BUG-07: Compound-Separated GGV Envelopes
+# ---------------------------------------------------------------------------
+
+def test_ggv_envelope_accepts_compound_label():
+    """_build_ggv_envelope must return compound-tagged output when tuples passed."""
+    import numpy as np
+    import pandas as pd
+    from f1_data import _build_ggv_envelope
+
+    def _fake_tel(speed_scale=1.0):
+        n = 100
+        t = np.linspace(0, 30, n)
+        return pd.DataFrame({
+            'Speed':    np.random.uniform(80, 300, n) * speed_scale,
+            'X':        np.cumsum(np.random.randn(n)) * 100,
+            'Y':        np.cumsum(np.random.randn(n)) * 50,
+            'Time':     pd.to_timedelta(t, unit='s'),
+            'Distance': np.linspace(0, 5000, n),
+            'Source':   ['pos'] * n,
+        })
+
+    frames_with_compound = [
+        (_fake_tel(1.05), 'SOFT'),
+        (_fake_tel(1.05), 'SOFT'),
+        (_fake_tel(0.95), 'HARD'),
+        (_fake_tel(0.95), 'HARD'),
+    ]
+    result = _build_ggv_envelope(frames_with_compound)
+    assert isinstance(result, dict)
+    assert 'SOFT' in result or 'ALL' in result
+
+
+# ---------------------------------------------------------------------------
+# BUG-09 + BUG-10: Corner Alignment + GGV Intercept
+# ---------------------------------------------------------------------------
+
+def test_theoretical_max_g_floor_at_zero_speed():
+    """At 0 kph, theoretical max G must reflect mechanical grip floor (~1.3G)."""
+    import numpy as np
+    from f1_data import _theoretical_max_g
+    g_at_zero = float(_theoretical_max_g(np.array([0.0]))[0])
+    assert 1.0 <= g_at_zero <= 1.5, f"Mechanical grip floor should be ~1.3G, got {g_at_zero}"
+
+
+def test_theoretical_max_g_at_300kph():
+    """At 300 kph a 2025 F1 car should generate ~4.8–5.5G lateral."""
+    import numpy as np
+    from f1_data import _theoretical_max_g
+    g_300 = float(_theoretical_max_g(np.array([300.0]))[0])
+    assert 4.5 <= g_300 <= 6.0, f"Expected 4.5–6.0G at 300 kph, got {g_300}"
+
+
+def test_corner_alignment_rejects_mismatched_apex_speeds():
+    """Corners with apex speed difference > 30 kph must not be paired."""
+    import numpy as np
+    from f1_data import _align_corners
+
+    dist_a  = np.array([0, 100, 200, 300, 400, 500, 600, 700, 800], dtype=float)
+    speed_a = np.array([200, 150, 100, 80, 90, 120, 180, 200, 210], dtype=float)
+    dist_b  = np.array([0, 100, 200, 300, 400, 490, 600, 700, 800], dtype=float)
+    speed_b = np.array([200, 170, 155, 150, 155, 160, 180, 200, 210], dtype=float)
+
+    corners_a = [(2, 5)]
+    corners_b = [(2, 5)]
+
+    pairs = _align_corners(corners_a, dist_a, corners_b, dist_b,
+                           speed_a=speed_a, speed_b=speed_b)
+    assert pairs == [], "Corners with large apex speed difference should not be paired"

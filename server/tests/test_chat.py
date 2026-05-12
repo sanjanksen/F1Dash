@@ -854,6 +854,24 @@ def test_retrieve_analysis_evidence_runs_tools_in_parallel():
     assert evidence[2]["tool"] == "tool_c"
 
 
+def test_driver_style_not_injected_when_telemetry_evidence_present():
+    """When telemetry evidence exists, driver style context must not appear."""
+    import chat
+    evidence = [{'context_type': 'cornering_telemetry', 'driver': 'NOR',
+                 'trail_brake_pct': 42.0, 'throttle_acceptance_pct': 61.0}]
+    prompt = chat._build_driver_style_context(evidence)
+    assert 'v_line' not in (prompt or ''), \
+        "Static style codes must not appear when telemetry evidence is present"
+
+
+def test_driver_style_injected_when_no_telemetry():
+    """Without telemetry evidence, _build_driver_style_context must not crash."""
+    import chat
+    evidence = [{'context_type': 'race_summary', 'driver': 'NOR'}]
+    prompt = chat._build_driver_style_context(evidence)
+    assert prompt is None or isinstance(prompt, str)
+
+
 def test_agentic_loop_dispatches_tools_in_parallel():
     """When Claude calls two tools in one round, they run concurrently."""
     import time

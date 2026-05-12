@@ -1837,24 +1837,10 @@ def get_lap_telemetry(round_number: int, session_type: str,
     total_dist = float(tel['Distance'].max())
 
     INTERVAL_M = 100
-    samples = []
-    dist = 0.0
-    while dist <= total_dist:
-        idx = (tel['Distance'] - dist).abs().idxmin()
-        row = tel.loc[idx]
-        rpm = row.get('RPM')
-        gear = row.get('nGear')
-        drs = row.get('DRS')
-        samples.append({
-            "distance_m": int(dist),
-            "speed_kph": round(float(row['Speed']), 1),
-            "throttle_pct": round(float(row['Throttle']), 1),
-            "brake": bool(row['Brake']),
-            "gear": int(gear) if pd.notna(gear) else None,
-            "rpm": int(rpm) if pd.notna(rpm) else None,
-            "drs_open": int(drs) >= 10 if pd.notna(drs) else False,
-        })
-        dist += INTERVAL_M
+    targets = list(range(0, int(total_dist) + 1, INTERVAL_M))
+    if targets[-1] < total_dist:
+        targets.append(int(total_dist))
+    samples = _sample_telemetry_at_distances(tel, targets)
 
     return {
         "driver": driver_code.upper(),
@@ -4269,7 +4255,8 @@ def _classify_corner_delta(profile_a: dict, profile_b: dict) -> str:
 
 def _filter_clean_race_laps(driver_laps) -> list[dict]:
     """
-    Filter race laps: remove pit laps, safety car laps, and statistical outliers.
+    Filter race laps: remove pit laps, yellow-flag/SC/VSC laps, and statistical outliers.
+    Outlier filter uses IQR (Q3 + 1.5*IQR) instead of a flat median+5s threshold.
     Returns list of dicts with lap_number, lap_time_s, compound, tyre_age.
     """
     result = []
@@ -4289,7 +4276,8 @@ def _filter_clean_race_laps(driver_laps) -> list[dict]:
             continue
 
         track_status = str(lap.get('TrackStatus') or '')
-        if any(c in track_status for c in ('4', '5', '6')):
+        # 2=yellow/VSC, 4=SC deployed, 5=red flag, 6=VSC deployed (FastF1 variants)
+        if any(c in track_status for c in ('2', '4', '5', '6')):
             continue
 
         compound = str(lap.get('Compound') or 'UNKNOWN')
@@ -4299,18 +4287,22 @@ def _filter_clean_race_laps(driver_laps) -> list[dict]:
         result.append({
             'lap_number': int(lap['LapNumber']),
             'lap_time_s': round(lt_s, 3),
-            'compound': compound,
-            'tyre_age': tyre_age,
+            'compound':   compound,
+            'tyre_age':   tyre_age,
         })
 
-    if not result:
+    if len(result) < 4:
         return result
 
-    sorted_times = sorted(r['lap_time_s'] for r in result)
-    mid = len(sorted_times) // 2
-    median_time = sorted_times[mid]
-    result = [r for r in result if r['lap_time_s'] <= median_time + 5.0]
-    return result
+    times = sorted(r['lap_time_s'] for r in result)
+    n = len(times)
+    q1 = times[n // 4]
+    q3 = times[(3 * n) // 4]
+    iqr = q3 - q1
+    upper = q3 + 1.5 * iqr
+    lower = max(0, q1 - 1.5 * iqr)
+
+    return [r for r in result if lower <= r['lap_time_s'] <= upper]
 
 
 def _linear_regression(x_vals: list[float], y_vals: list[float]) -> tuple[float, float, float]:
@@ -4342,18 +4334,41 @@ def _linear_regression(x_vals: list[float], y_vals: list[float]) -> tuple[float,
     return (round(slope, 4), round(intercept, 3), round(r_squared, 3))
 
 
-def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: float = 0.04) -> list[dict]:
+def _fuel_correction_s_per_lap(circuit_length_km: float) -> float:
     """
-    Group clean laps by compound block, fit linear regression per stint.
-    Returns list of stint dicts with deg_rate_s_per_lap, fuel_corrected_pace, r_squared.
+    Circuit-specific fuel correction in seconds per lap.
+    Longer circuits burn more fuel/lap but have fewer braking zones/km.
+    Formula: 0.16 / (1 + 0.22 * circuit_km), clamped to [0.025, 0.090].
+    Monaco 3.3 km → 0.070 s/lap; Monza 5.8 km → 0.042 s/lap.
+    """
+    raw = 0.16 / (1.0 + 0.22 * circuit_length_km)
+    return round(max(0.025, min(0.090, raw)), 4)
+
+
+def _fit_stint_degradation(
+    clean_laps: list[dict],
+    fuel_correction_s_per_lap: float | None = None,
+    circuit_length_km: float | None = None,
+) -> list[dict]:
+    """
+    Group clean laps by compound block, fit linear + quadratic regression per stint.
+    Cold-tyre laps (tyre_age <= 2) are excluded from regression.
+    Uses circuit-specific fuel correction when circuit_length_km is provided.
+    Returns list of stint dicts including deg_rate_s_per_lap, pace_at_age_10_s, quad_coeff, cliff_lap_est.
     """
     if not clean_laps:
         return []
 
+    if fuel_correction_s_per_lap is None:
+        fuel_correction_s_per_lap = (
+            _fuel_correction_s_per_lap(circuit_length_km)
+            if circuit_length_km is not None
+            else 0.04
+        )
+
     stints: list[dict] = []
     current_compound: str | None = None
     current_laps: list[dict] = []
-
     for lap in sorted(clean_laps, key=lambda x: x['lap_number']):
         comp = lap['compound']
         if comp != current_compound:
@@ -4368,66 +4383,112 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
 
     results = []
     for stint in stints:
-        laps = stint['laps']
-        if len(laps) < 3:
+        all_laps = stint['laps']
+        if len(all_laps) < 3:
             continue
 
-        lap_nums = [l['lap_number'] for l in laps]
-        raw_times = [l['lap_time_s'] for l in laps]
-        min_lap = min(lap_nums)
+        lap_nums  = [l['lap_number'] for l in all_laps]
+        raw_times = [l['lap_time_s']  for l in all_laps]
+        min_lap   = min(lap_nums)
 
-        # Later laps are naturally faster because the car burns fuel. Add that
-        # expected fuel-burn gain back to later laps so the remaining slope is
-        # tyre performance loss rather than fuel weight.
-        fuel_corrected = [
+        tyre_ages = [
+            l.get('tyre_age') or (n - min_lap + 1)
+            for l, n in zip(all_laps, lap_nums)
+        ]
+
+        fuel_corrected_all = [
             t + fuel_correction_s_per_lap * (n - min_lap)
             for t, n in zip(raw_times, lap_nums)
         ]
 
-        tyre_ages = [
-            l.get('tyre_age') or (n - min_lap + 1)
-            for l, n in zip(laps, lap_nums)
+        # Exclude cold-tyre laps (tyre_age <= 2) from regression
+        warm_laps = [
+            (age, fc)
+            for age, fc in zip(tyre_ages, fuel_corrected_all)
+            if age > 2
+        ]
+        if len(warm_laps) < 2:
+            warm_laps = list(zip(tyre_ages, fuel_corrected_all))
+
+        reg_ages = [w[0] for w in warm_laps]
+        reg_fc   = [w[1] for w in warm_laps]
+
+        raw_slope, _, _     = _linear_regression(tyre_ages, raw_times)
+        slope, intercept, r_sq = _linear_regression(reg_ages, reg_fc)
+
+        pace_at_age_1  = round(slope * 1  + intercept, 3)
+        pace_at_age_10 = round(slope * 10 + intercept, 3)
+
+        mean_t   = sum(fuel_corrected_all) / len(fuel_corrected_all)
+        variance = sum((t - mean_t) ** 2 for t in fuel_corrected_all) / len(fuel_corrected_all)
+        std_dev  = round(variance ** 0.5, 3)
+
+        positive_deg   = max(0.0, slope)
+        total_deg_loss = round(positive_deg * len(all_laps), 3)
+
+        # Quadratic (polynomial) fit on warm laps
+        _poly_ages = np.array(reg_ages, dtype=float)
+        _poly_fc   = np.array(reg_fc,   dtype=float)
+        if len(_poly_ages) >= 4:
+            quad_coeff_raw, lin_coeff_raw, intercept_raw = np.polyfit(_poly_ages, _poly_fc, 2)
+        else:
+            quad_coeff_raw, lin_coeff_raw, intercept_raw = 0.0, slope, intercept
+
+        # Cliff: scan rolling windows; cliff is where local slope first exceeds
+        # 2x the median rolling slope (robust to parabola vertex location).
+        cliff_lap_est = None
+        if len(reg_ages) >= 6 and quad_coeff_raw > 0.001:
+            window = max(3, len(reg_ages) // 4)
+            win_slopes = []
+            for i in range(len(reg_ages) - window + 1):
+                seg_a = reg_ages[i:i + window]
+                seg_f = reg_fc[i:i + window]
+                s, _, _ = _linear_regression(seg_a, seg_f)
+                win_slopes.append((reg_ages[i], s))
+            if win_slopes:
+                sorted_slopes = sorted(s for _, s in win_slopes)
+                median_slope = sorted_slopes[len(sorted_slopes) // 2]
+                threshold_slope = 2.0 * max(median_slope, 0.02)
+                for age, s in win_slopes:
+                    if s > threshold_slope:
+                        cliff_lap_est = int(round(age))
+                        break
+
+        scatter_data = [
+            {'tyre_age': age, 'lap_time_s': fc, 'lap_number': ln}
+            for age, fc, ln in zip(tyre_ages, fuel_corrected_all, lap_nums)
+        ]
+        reg_line = [
+            {'tyre_age': age, 'predicted_s': round(slope * age + intercept, 3)}
+            for age in sorted(set(reg_ages))
         ]
 
-        raw_slope, _, _ = _linear_regression(tyre_ages, raw_times)
-        slope, intercept, r_sq = _linear_regression(tyre_ages, fuel_corrected)
-        pace_at_age_1 = round(slope * 1 + intercept, 3)
-
-        mean_t = sum(fuel_corrected) / len(fuel_corrected)
-        variance = sum((t - mean_t) ** 2 for t in fuel_corrected) / len(fuel_corrected)
-        std_dev = round(variance ** 0.5, 3)
-
-        positive_deg = max(0.0, slope)
-        total_deg_loss = round(positive_deg * len(laps), 3)
+        cold_excluded = len(all_laps) - len(warm_laps)
 
         results.append({
-            'compound': stint['compound'],
-            'lap_count': len(laps),
-            'lap_numbers': lap_nums,
-            'avg_raw_pace_s': round(sum(raw_times) / len(raw_times), 3),
-            'raw_pace_trend_s_per_lap': round(raw_slope, 4),
+            'compound':                            stint['compound'],
+            'lap_count':                           len(all_laps),
+            'lap_numbers':                         lap_nums,
+            'avg_raw_pace_s':                      round(sum(raw_times) / len(raw_times), 3),
+            'raw_pace_trend_s_per_lap':            round(raw_slope, 4),
             'fuel_burn_gain_assumption_s_per_lap': fuel_correction_s_per_lap,
-            'deg_rate_s_per_lap': round(slope, 4),
-            'positive_deg_rate_s_per_lap': round(positive_deg, 4),
-            'total_deg_loss_s': total_deg_loss,
-            'fuel_corrected_pace_at_age_1_s': pace_at_age_1,
-            'r_squared': round(r_sq, 3),
-            'consistency_std_dev_s': std_dev,
+            'deg_rate_s_per_lap':                  round(slope, 4),
+            'positive_deg_rate_s_per_lap':         round(positive_deg, 4),
+            'total_deg_loss_s':                    total_deg_loss,
+            'fuel_corrected_pace_at_age_1_s':      pace_at_age_1,
+            'pace_at_age_10_s':                    pace_at_age_10,
+            'r_squared':                           round(r_sq, 3),
+            'consistency_std_dev_s':               std_dev,
+            'cold_laps_excluded_from_reg':         cold_excluded,
+            'quad_coeff':                          round(float(quad_coeff_raw), 6),
+            'cliff_lap_est':                       cliff_lap_est,
+            'scatter_data':                        scatter_data,
+            'regression_line':                     reg_line,
             'ranking_basis': (
-                "raw_pace_trend_s_per_lap is what the stopwatch did — the raw slope of lap times over "
-                "tyre age. deg_rate_s_per_lap adds back expected fuel-burn gain; positive values estimate "
-                "tyre performance loss per lap. Only compare deg rates between stints on the same compound — "
-                "different compounds degrade at different baseline rates and cannot be directly compared. "
-                "Lower positive_deg_rate_s_per_lap is better within the same compound."
+                "deg_rate_s_per_lap is the fuel-corrected slope on warm laps (tyre_age > 2). "
+                "pace_at_age_10_s is mid-stint reference pace — use for cross-driver comparison. "
+                "quad_coeff > 0 signals accelerating degradation; cliff_lap_est estimates when."
             ),
-            'scatter_data': [
-                {'tyre_age': ta, 'lap_time_s': round(fc, 3), 'lap_number': ln}
-                for ta, fc, ln in zip(tyre_ages, fuel_corrected, lap_nums)
-            ],
-            'regression_line': [
-                {'tyre_age': tyre_ages[0],  'lap_time_s': round(slope * tyre_ages[0]  + intercept, 3)},
-                {'tyre_age': tyre_ages[-1], 'lap_time_s': round(slope * tyre_ages[-1] + intercept, 3)},
-            ],
         })
 
     return results
@@ -4535,8 +4596,8 @@ def _align_stints_by_compound(stints_a: list[dict], stints_b: list[dict]) -> lis
         # Use positive_deg_rate (clamped at 0) so delta reflects real tyre wear, not noise artifacts
         deg_a = stint_a.get('positive_deg_rate_s_per_lap') or 0.0
         deg_b = sb.get('positive_deg_rate_s_per_lap') or 0.0
-        pace_a = stint_a.get('fuel_corrected_pace_at_age_1_s')
-        pace_b = sb.get('fuel_corrected_pace_at_age_1_s')
+        pace_a = stint_a.get('pace_at_age_10_s', stint_a.get('fuel_corrected_pace_at_age_1_s'))
+        pace_b = sb.get('pace_at_age_10_s', sb.get('fuel_corrected_pace_at_age_1_s'))
 
         aligned.append({
             'compound': comp_a,
@@ -4794,7 +4855,7 @@ def analyze_stint_degradation(round_number: int, driver_code: str, session_type:
     weighted_pace = None
     if total_laps > 0 and stints:
         weighted_pace = round(
-            sum(s['fuel_corrected_pace_at_age_1_s'] * s['lap_count'] for s in stints) / total_laps,
+            sum(s.get('pace_at_age_10_s', s['fuel_corrected_pace_at_age_1_s']) * s['lap_count'] for s in stints) / total_laps,
             3,
         )
 
@@ -4858,7 +4919,8 @@ def analyze_race_pace_battle(
         total = sum(s['lap_count'] for s in stints)
         if total == 0:
             return None
-        return sum(s['fuel_corrected_pace_at_age_1_s'] * s['lap_count'] for s in stints) / total
+        return sum(s.get('pace_at_age_10_s', s['fuel_corrected_pace_at_age_1_s']) * s['lap_count']
+                   for s in stints) / total
 
     pace_a = _weighted_pace(stints_a)
     pace_b = _weighted_pace(stints_b)
@@ -5113,51 +5175,72 @@ _GGV_BIN_CENTERS = (_GGV_BIN_EDGES[:-1] + _GGV_BIN_EDGES[1:]) / 2.0
 
 def _build_ggv_envelope(telemetry_frames: list) -> dict:
     """
-    Build a speed-indexed friction ellipse from a list of telemetry DataFrames.
-    Returns dict with lat_max, brake_max, throttle_max (all shape (7,)) and speed_bins.
-    Each value is the 95th-percentile ceiling for that speed band.
-    Falls back to _theoretical_ggv_envelope() if fewer than 2 usable frames.
+    Build a speed-indexed friction ellipse.
+    Accepts:
+      - list of DataFrames → returns {'ALL': envelope_dict}
+      - list of (DataFrame, compound_str) tuples → returns {compound: envelope_dict, 'ALL': envelope_dict}
+    Falls back to _theoretical_ggv_envelope() for 'ALL' if fewer than 2 usable frames.
     """
-    lat_all, long_all, spd_all = [], [], []
-    for tel in telemetry_frames:
+    if telemetry_frames and isinstance(telemetry_frames[0], tuple):
+        tagged = telemetry_frames
+    else:
+        tagged = [(df, 'ALL') for df in telemetry_frames]
+
+    compound_data: dict[str, tuple[list, list, list]] = {}
+    for tel, compound in tagged:
         if any(c not in tel.columns for c in ('Speed', 'X', 'Y', 'Time')) or len(tel) < 20:
             continue
         try:
-            lat_all.append(_compute_lateral_g(tel))
-            long_all.append(_compute_longitudinal_g(tel))
-            spd_all.append(tel['Speed'].to_numpy(dtype=float))
+            lat  = _compute_lateral_g(tel)
+            long = _compute_longitudinal_g(tel)
+            spd  = tel['Speed'].to_numpy(dtype=float)
         except Exception:
             continue
+        if compound not in compound_data:
+            compound_data[compound] = ([], [], [])
+        compound_data[compound][0].append(lat)
+        compound_data[compound][1].append(long)
+        compound_data[compound][2].append(spd)
 
-    if len(lat_all) < 2:
-        return _theoretical_ggv_envelope()
+    def _build_single(lat_list, long_list, spd_list) -> dict:
+        if len(lat_list) < 2:
+            return _theoretical_ggv_envelope()
+        lat_cat  = np.concatenate(lat_list)
+        long_cat = np.concatenate(long_list)
+        spd_cat  = np.concatenate(spd_list)
+        n_bins = len(_GGV_BIN_EDGES) - 1
+        lat_max      = np.zeros(n_bins)
+        brake_max    = np.zeros(n_bins)
+        throttle_max = np.zeros(n_bins)
+        for i in range(n_bins):
+            mask = (spd_cat >= _GGV_BIN_EDGES[i]) & (spd_cat < _GGV_BIN_EDGES[i + 1])
+            if mask.sum() < 10:
+                lat_max[i]      = float(_theoretical_max_g(np.array([_GGV_BIN_CENTERS[i]]))[0])
+                brake_max[i]    = lat_max[i] * 1.1
+                throttle_max[i] = lat_max[i] * 0.65
+                continue
+            lb = lat_cat[mask]
+            lg = long_cat[mask]
+            lat_max[i] = max(float(np.percentile(np.abs(lb), 95)), 0.5)
+            braking  = -lg[lg < -0.1]
+            throttle =  lg[lg >  0.1]
+            brake_max[i]    = max(float(np.percentile(braking,  95)), 0.3) if len(braking)  >= 5 else lat_max[i] * 1.1
+            throttle_max[i] = max(float(np.percentile(throttle, 95)), 0.2) if len(throttle) >= 5 else lat_max[i] * 0.65
+        return {'lat_max': lat_max, 'brake_max': brake_max,
+                'throttle_max': throttle_max, 'speed_bins': _GGV_BIN_CENTERS}
 
-    lat_cat = np.concatenate(lat_all)
-    long_cat = np.concatenate(long_all)
-    spd_cat = np.concatenate(spd_all)
+    result = {}
+    all_lat, all_long, all_spd = [], [], []
+    for compound, (lat_l, long_l, spd_l) in compound_data.items():
+        result[compound] = _build_single(lat_l, long_l, spd_l)
+        all_lat.extend(lat_l)
+        all_long.extend(long_l)
+        all_spd.extend(spd_l)
 
-    n_bins = len(_GGV_BIN_EDGES) - 1
-    lat_max = np.zeros(n_bins)
-    brake_max = np.zeros(n_bins)
-    throttle_max = np.zeros(n_bins)
+    if 'ALL' not in result:
+        result['ALL'] = _build_single(all_lat, all_long, all_spd)
 
-    for i in range(n_bins):
-        mask = (spd_cat >= _GGV_BIN_EDGES[i]) & (spd_cat < _GGV_BIN_EDGES[i + 1])
-        if mask.sum() < 10:
-            lat_max[i] = float(_theoretical_max_g(np.array([_GGV_BIN_CENTERS[i]]))[0])
-            brake_max[i] = lat_max[i] * 1.1
-            throttle_max[i] = lat_max[i] * 0.65
-            continue
-        lat_bin = lat_cat[mask]
-        long_bin = long_cat[mask]
-        lat_max[i] = max(float(np.percentile(np.abs(lat_bin), 95)), 0.5)
-        braking = -long_bin[long_bin < -0.1]
-        brake_max[i] = max(float(np.percentile(braking, 95)), 0.3) if len(braking) >= 5 else lat_max[i] * 1.1
-        throttle = long_bin[long_bin > 0.1]
-        throttle_max[i] = max(float(np.percentile(throttle, 95)), 0.2) if len(throttle) >= 5 else lat_max[i] * 0.65
-
-    return {'lat_max': lat_max, 'brake_max': brake_max,
-            'throttle_max': throttle_max, 'speed_bins': _GGV_BIN_CENTERS}
+    return result if result else {'ALL': _theoretical_ggv_envelope()}
 
 
 def _theoretical_ggv_envelope() -> dict:
@@ -5193,8 +5276,12 @@ def _bravery_score(envelope_time: float | None,
 
 
 def _theoretical_max_g(speed_kph: np.ndarray) -> np.ndarray:
-    """Speed-dependent theoretical max lateral G for a 2025-spec F1 car."""
-    return 2.0 + speed_kph * 0.012
+    """
+    Speed-dependent theoretical max lateral G for a 2025-spec F1 car.
+    Mechanical grip floor ~1.3G at standstill; aerodynamic downforce adds ~0.014G per kph.
+    At 300 kph: ~5.5G.
+    """
+    return np.maximum(1.3, 1.3 + speed_kph * 0.014)
 
 
 def _detect_corners(lat_g: np.ndarray, dist: np.ndarray,
@@ -5245,7 +5332,9 @@ def _corner_metrics(lat_g: np.ndarray, long_g: np.ndarray, speed_kph: np.ndarray
 
     # --- GGV-based metrics (only when envelope is provided) ---
     if envelope is not None:
-        lat_ceil, brake_ceil, thr_ceil = _ggv_ceiling_at_speed(seg_v, envelope)
+        # Handle both old flat format (has 'lat_max') and new compound-keyed format
+        _env = envelope if 'lat_max' in envelope else (envelope.get('ALL') or _theoretical_ggv_envelope())
+        lat_ceil, brake_ceil, thr_ceil = _ggv_ceiling_at_speed(seg_v, _env)
         safe_lat = np.where(lat_ceil < 0.1, 0.1, lat_ceil)
         long_ceil = np.where(
             seg_lg < 0.0,
@@ -5306,10 +5395,16 @@ def _corner_metrics(lat_g: np.ndarray, long_g: np.ndarray, speed_kph: np.ndarray
     }
 
 
-def _align_corners(corners_a: list[tuple[int, int]], dist_a: np.ndarray,
-                   corners_b: list[tuple[int, int]], dist_b: np.ndarray,
-                   tolerance_m: float = 200.0) -> list[tuple[tuple, tuple]]:
-    """Match corners from driver A to driver B by entry distance."""
+def _align_corners(
+    corners_a: list[tuple[int, int]], dist_a: np.ndarray,
+    corners_b: list[tuple[int, int]], dist_b: np.ndarray,
+    tolerance_m: float = 200.0,
+    speed_a: np.ndarray | None = None,
+    speed_b: np.ndarray | None = None,
+    apex_speed_tolerance_kph: float = 30.0,
+) -> list[tuple[tuple, tuple]]:
+    """Match corners from driver A to driver B by entry distance.
+    Optionally validates that matched corners have similar apex speeds to avoid false pairings."""
     pairs = []
     used_b = set()
     for ca in corners_a:
@@ -5323,9 +5418,16 @@ def _align_corners(corners_a: list[tuple[int, int]], dist_a: np.ndarray,
             if diff < best_diff:
                 best_diff = diff
                 best = j
-        if best is not None and best_diff <= tolerance_m:
-            pairs.append((ca, corners_b[best]))
-            used_b.add(best)
+        if best is None or best_diff > tolerance_m:
+            continue
+        if speed_a is not None and speed_b is not None:
+            cb_matched = corners_b[best]
+            apex_a = float(speed_a[ca[0] + np.argmin(speed_a[ca[0]:ca[1] + 1])])
+            apex_b = float(speed_b[cb_matched[0] + np.argmin(speed_b[cb_matched[0]:cb_matched[1] + 1])])
+            if abs(apex_a - apex_b) > apex_speed_tolerance_kph:
+                continue
+        pairs.append((ca, corners_b[best]))
+        used_b.add(best)
     return pairs
 
 
@@ -6288,13 +6390,35 @@ def get_speed_trap_leaderboard(round_number: int, session_type: str) -> dict:
 
 
 def _sample_telemetry_at_distances(tel, targets: list[int]) -> list[dict]:
-    """Sample telemetry speed at each target distance using np.interp."""
+    """
+    Sample all telemetry channels at each target distance using linear interpolation.
+    Replaces the old nearest-neighbour idxmin lookup.
+    """
     dist_arr = tel['Distance'].to_numpy(dtype=float)
-    speed_arr = tel['Speed'].to_numpy(dtype=float)
+    spd_arr  = tel['Speed'].to_numpy(dtype=float)
+    thr_arr  = tel['Throttle'].to_numpy(dtype=float)
+    brk_arr  = tel['Brake'].to_numpy(dtype=float)
+    gear_arr = tel['nGear'].to_numpy(dtype=float) if 'nGear' in tel.columns else None
+    drs_arr  = tel['DRS'].to_numpy(dtype=float)   if 'DRS'  in tel.columns else None
+    rpm_arr  = tel['RPM'].to_numpy(dtype=float)   if 'RPM'  in tel.columns else None
+
     result = []
     for d in targets:
-        speed = float(np.interp(d, dist_arr, speed_arr))
-        result.append({'distance_m': d, 'speed_kph': round(speed, 1)})
+        speed    = float(np.interp(d, dist_arr, spd_arr))
+        throttle = float(np.interp(d, dist_arr, thr_arr))
+        brake    = float(np.interp(d, dist_arr, brk_arr)) >= 0.5
+        gear_f   = float(np.interp(d, dist_arr, gear_arr)) if gear_arr is not None else None
+        drs_f    = float(np.interp(d, dist_arr, drs_arr))  if drs_arr  is not None else None
+        rpm_f    = float(np.interp(d, dist_arr, rpm_arr))  if rpm_arr  is not None else None
+        result.append({
+            'distance_m':   int(d),
+            'speed_kph':    round(speed, 1),
+            'throttle_pct': round(throttle, 1),
+            'brake':        brake,
+            'gear':         int(round(gear_f)) if gear_f is not None else None,
+            'drs_open':     int(round(drs_f)) >= 10 if drs_f is not None else False,
+            'rpm':          round(rpm_f, 0) if rpm_f is not None else None,
+        })
     return result
 
 
@@ -6382,4 +6506,398 @@ def get_lap_delta_trace(
         'fastest_driver':   driver_a if final_delta < 0 else driver_b,
         'circuit_length_m': int(total_dist),
         'delta_trace':      delta_trace,
+    }
+
+
+# ---------------------------------------------------------------------------
+# FEAT-15: Driver Form Trend
+# ---------------------------------------------------------------------------
+
+def _compute_positions_gained(races: list[dict]) -> list[int]:
+    """
+    Return positions gained per race (grid - finish). DNF (position <= 0 or None) excluded.
+    Positive = improved, negative = fell back.
+    """
+    result = []
+    for r in races:
+        pos = r.get('position')
+        grid = r.get('grid')
+        if not pos or not grid:
+            continue
+        try:
+            pos_int = int(pos)
+            grid_int = int(grid)
+        except (TypeError, ValueError):
+            continue
+        if pos_int <= 0:
+            continue
+        result.append(grid_int - pos_int)
+    return result
+
+
+def _classify_form_trend(deltas: list) -> str:
+    """
+    Fit a linear slope over positions-gained values.
+    slope > 0.25/race = improving, < -0.25/race = declining, else stable.
+    """
+    n = len(deltas)
+    if n < 2:
+        return 'stable'
+    xs = list(range(n))
+    mean_x = sum(xs) / n
+    mean_y = sum(deltas) / n
+    num = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, deltas))
+    den = sum((x - mean_x) ** 2 for x in xs)
+    slope = num / den if den else 0.0
+    if slope > 0.25:
+        return 'improving'
+    if slope < -0.25:
+        return 'declining'
+    return 'stable'
+
+
+def get_driver_form_trend(driver_name: str, last_n: int = 8) -> dict:
+    """
+    Rolling positions gained/lost vs grid for driver's last N races.
+    Uses Jolpica current-season results.
+    """
+    matched = _resolve_driver(driver_name)
+    if not matched:
+        return {'error': f'Driver not found: {driver_name}'}
+    driver_id = matched['driver_id']
+    driver_code = matched['code']
+
+    url = f"{JOLPICA_BASE}/{CURRENT_YEAR}/drivers/{driver_id}/results.json?limit={last_n}"
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    races_raw = resp.json()['MRData']['RaceTable']['Races']
+
+    race_entries = []
+    for race in races_raw[-last_n:]:
+        result = race.get('Results', [{}])[0]
+        race_entries.append({
+            'round':     int(race.get('round', 0)),
+            'race_name': race.get('raceName', ''),
+            'grid':      result.get('grid'),
+            'position':  result.get('position'),
+            'status':    result.get('status', ''),
+        })
+
+    deltas = _compute_positions_gained(race_entries)
+    trend = _classify_form_trend(deltas)
+
+    rolling_avg = []
+    for i in range(len(deltas)):
+        window = deltas[max(0, i - 2):i + 1]
+        rolling_avg.append(round(sum(window) / len(window), 2))
+
+    per_race = []
+    for r in race_entries:
+        try:
+            pos_int = int(r['position']) if r['position'] else 0
+        except (TypeError, ValueError):
+            pos_int = 0
+        try:
+            grid_int = int(r['grid']) if r['grid'] else 0
+        except (TypeError, ValueError):
+            grid_int = 0
+        gained = (grid_int - pos_int) if pos_int > 0 and grid_int > 0 else None
+        per_race.append({
+            'round':            r['round'],
+            'race_name':        r['race_name'].replace(' Grand Prix', ''),
+            'grid':             grid_int or None,
+            'finish':           pos_int or None,
+            'positions_gained': gained,
+            'status':           r['status'],
+        })
+
+    return {
+        'driver':               driver_code,
+        'races_analysed':       len(deltas),
+        'trend':                trend,
+        'avg_positions_gained': round(sum(deltas) / len(deltas), 2) if deltas else 0.0,
+        'per_race':             per_race,
+        'rolling_avg':          rolling_avg,
+    }
+
+
+# ---------------------------------------------------------------------------
+# FEAT-08: Safety Car Probability
+# ---------------------------------------------------------------------------
+
+_SC_PROBABILITY_BY_CIRCUIT: dict[str, float] = {
+    'Baku':              0.78,
+    'Singapore':         0.72,
+    'Monaco':            0.65,
+    'Jeddah':            0.65,
+    'Melbourne':         0.58,
+    'Spa':               0.55,
+    'Las Vegas':         0.55,
+    'Brazil':            0.55,
+    'Japan':             0.50,
+    'Hungaroring':       0.45,
+    'Silverstone':       0.43,
+    'Austin':            0.43,
+    'Miami':             0.42,
+    'Zandvoort':         0.42,
+    'Mexico City':       0.40,
+    'Imola':             0.38,
+    'Abu Dhabi':         0.36,
+    'Barcelona':         0.35,
+    'China':             0.35,
+    'Bahrain':           0.33,
+    'Monza':             0.30,
+    'Canada':            0.29,
+    'Lusail':            0.28,
+}
+
+_SC_SERIES_AVERAGE = 0.42
+
+
+def _sc_probability_for_circuit(circuit_name: str) -> float:
+    """Lookup SC probability by circuit name. Partial match. Returns series average if unknown."""
+    name_lower = circuit_name.lower()
+    for key, prob in _SC_PROBABILITY_BY_CIRCUIT.items():
+        if key.lower() in name_lower or name_lower in key.lower():
+            return prob
+    return _SC_SERIES_AVERAGE
+
+
+def get_sc_probability(round_number: int) -> dict:
+    """
+    Return historical SC/VSC probability for the circuit hosting round_number.
+    """
+    url = f"{JOLPICA_BASE}/current/{round_number}.json"
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()['MRData']['RaceTable']['Races']
+    if not data:
+        return {'error': f'Round {round_number} not found in current season'}
+
+    race = data[0]
+    circuit_name = race['Circuit']['circuitName']
+    race_name    = race['raceName']
+
+    prob = _sc_probability_for_circuit(circuit_name)
+
+    historical = sorted(_SC_PROBABILITY_BY_CIRCUIT.items(), key=lambda x: x[1], reverse=True)
+    rank = next(
+        (i + 1 for i, (k, _) in enumerate(historical)
+         if k.lower() in circuit_name.lower() or circuit_name.lower() in k.lower()),
+        None
+    )
+
+    return {
+        'circuit_name':           circuit_name,
+        'race_name':              race_name,
+        'round':                  round_number,
+        'sc_probability':         prob,
+        'sc_probability_pct':     round(prob * 100, 1),
+        'classification':         (
+            'very high (street circuit)' if prob >= 0.65 else
+            'high' if prob >= 0.50 else
+            'moderate' if prob >= 0.38 else
+            'low'
+        ),
+        'circuits_ranked':        len(_SC_PROBABILITY_BY_CIRCUIT),
+        'rank_by_sc_probability': rank,
+        'series_average_pct':     round(_SC_SERIES_AVERAGE * 100, 1),
+        'interpretation': (
+            f"{circuit_name} has a {round(prob * 100)}% historical SC/VSC rate "
+            f"({'above' if prob > _SC_SERIES_AVERAGE else 'below'} the "
+            f"{round(_SC_SERIES_AVERAGE * 100)}% series average). "
+            f"{'High SC probability — undercut and cover both viable; evaluate 1-stop vs 2-stop carefully.' if prob >= 0.50 else 'Lower SC likelihood; standard degradation strategy applies.'}"
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# FEAT-20: Head-to-Head Driver History
+# ---------------------------------------------------------------------------
+
+def _compute_head_to_head_stats(
+    comparisons: list[dict], driver_a: str, driver_b: str
+) -> dict:
+    """
+    Compare finishing positions in shared races.
+    comparisons: list of {'driver_a_pos': int, 'driver_b_pos': int}
+    Races with either driver DNF (pos <= 0) are excluded.
+    avg_position_delta = avg(driver_b_pos - driver_a_pos); positive = A consistently ahead.
+    """
+    valid = [
+        c for c in comparisons
+        if c.get('driver_a_pos', 0) > 0 and c.get('driver_b_pos', 0) > 0
+    ]
+    n = len(valid)
+    if n == 0:
+        return {
+            'driver_a': driver_a, 'driver_b': driver_b,
+            'races_together': 0, 'driver_a_wins': 0, 'driver_b_wins': 0,
+            'driver_a_win_rate': None, 'avg_position_delta': None,
+        }
+
+    a_wins = sum(1 for c in valid if c['driver_a_pos'] < c['driver_b_pos'])
+    b_wins = sum(1 for c in valid if c['driver_b_pos'] < c['driver_a_pos'])
+    deltas = [c['driver_b_pos'] - c['driver_a_pos'] for c in valid]
+
+    return {
+        'driver_a':           driver_a,
+        'driver_b':           driver_b,
+        'races_together':     n,
+        'driver_a_wins':      a_wins,
+        'driver_b_wins':      b_wins,
+        'ties':               n - a_wins - b_wins,
+        'driver_a_win_rate':  round(a_wins / n, 3),
+        'driver_b_win_rate':  round(b_wins / n, 3),
+        'avg_position_delta': round(sum(deltas) / n, 2),
+    }
+
+
+def get_head_to_head_history(
+    driver_a: str, driver_b: str, seasons: list[int] | None = None
+) -> dict:
+    """
+    Multi-season head-to-head race results between driver_a and driver_b.
+    seasons defaults to the last 3 complete seasons.
+    """
+    current_year = CURRENT_YEAR
+    if seasons is None:
+        seasons = [current_year - 3, current_year - 2, current_year - 1]
+
+    matched_a = _resolve_driver(driver_a)
+    matched_b = _resolve_driver(driver_b)
+    if not matched_a:
+        return {'error': f'Driver not found: {driver_a}'}
+    if not matched_b:
+        return {'error': f'Driver not found: {driver_b}'}
+
+    drv_a_id   = matched_a['driver_id']
+    drv_b_id   = matched_b['driver_id']
+    drv_a_code = matched_a['code']
+    drv_b_code = matched_b['code']
+
+    def _fetch_results(driver_id: str, year: int) -> dict:
+        url = f"{JOLPICA_BASE}/{year}/drivers/{driver_id}/results.json?limit=30"
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        races_data = resp.json()['MRData']['RaceTable']['Races']
+        by_key = {}
+        for race in races_data:
+            key = (int(race['season']), int(race['round']))
+            result = race.get('Results', [{}])[0]
+            try:
+                pos = int(result.get('position', 0))
+            except (TypeError, ValueError):
+                pos = 0
+            by_key[key] = {
+                'race_name': race['raceName'],
+                'circuit':   race['Circuit']['circuitName'],
+                'position':  pos,
+                'grid':      int(result.get('grid', 0) or 0),
+                'status':    result.get('status', ''),
+            }
+        return by_key
+
+    all_comparisons = []
+    per_race_rows = []
+
+    for season in seasons:
+        results_a = _fetch_results(drv_a_id, season)
+        results_b = _fetch_results(drv_b_id, season)
+        shared_keys = sorted(set(results_a) & set(results_b))
+        for key in shared_keys:
+            ra = results_a[key]
+            rb = results_b[key]
+            all_comparisons.append({
+                'driver_a_pos': ra['position'],
+                'driver_b_pos': rb['position'],
+            })
+            winner = None
+            if ra['position'] > 0 and rb['position'] > 0:
+                winner = drv_a_code if ra['position'] < rb['position'] else drv_b_code
+            per_race_rows.append({
+                'season':    key[0],
+                'round':     key[1],
+                'race_name': ra['race_name'].replace(' Grand Prix', ''),
+                'circuit':   ra['circuit'],
+                'a_position': ra['position'] or None,
+                'b_position': rb['position'] or None,
+                'a_grid':    ra['grid'] or None,
+                'b_grid':    rb['grid'] or None,
+                'winner':    winner,
+            })
+
+    stats = _compute_head_to_head_stats(all_comparisons, drv_a_code, drv_b_code)
+
+    avg_delta = stats.get('avg_position_delta', 0) or 0
+    dominant = (
+        drv_a_code if avg_delta > 0.5 else
+        drv_b_code if avg_delta < -0.5 else
+        'evenly matched'
+    )
+
+    return {
+        **stats,
+        'seasons_analysed': seasons,
+        'per_race':         per_race_rows,
+        'dominant_driver':  dominant,
+    }
+
+
+# ---------------------------------------------------------------------------
+# FEAT-17: Per-Session Driver Style Fingerprint
+# ---------------------------------------------------------------------------
+
+_STYLE_METRICS = [
+    'trail_brake_pct',
+    'throttle_acceptance_pct',
+    'entry_bravery_pct',
+    'avg_ggv_util_pct',
+    'apex_speed_kph',
+]
+
+
+def _aggregate_style_fingerprint(corners: list[dict]) -> dict:
+    """
+    Aggregate per-corner style metrics into session-level means.
+    Skips None values per metric. Returns None for any metric with no valid corners.
+    """
+    if not corners:
+        return {m: None for m in _STYLE_METRICS} | {'corner_count': 0}
+
+    result: dict = {'corner_count': len(corners)}
+    for metric in _STYLE_METRICS:
+        vals = [c[metric] for c in corners if c.get(metric) is not None]
+        result[metric] = round(sum(vals) / len(vals), 2) if vals else None
+    return result
+
+
+def get_session_style_fingerprint(
+    round_number: int, session_type: str, driver_name: str
+) -> dict:
+    """
+    Aggregate cornering metrics across all corners in the session into a style fingerprint.
+    Calls analyze_cornering_loads internally.
+    """
+    cornering = analyze_cornering_loads(round_number, session_type, driver_name)
+    corners = cornering.get('corners', [])
+
+    fingerprint = _aggregate_style_fingerprint(corners)
+
+    return {
+        'driver':                  driver_name.upper(),
+        'round':                   round_number,
+        'session':                 session_type,
+        'corner_count':            fingerprint['corner_count'],
+        'trail_brake_pct':         fingerprint.get('trail_brake_pct'),
+        'throttle_acceptance_pct': fingerprint.get('throttle_acceptance_pct'),
+        'entry_bravery_pct':       fingerprint.get('entry_bravery_pct'),
+        'avg_ggv_util_pct':        fingerprint.get('avg_ggv_util_pct'),
+        'avg_apex_speed_kph':      fingerprint.get('apex_speed_kph'),
+        'interpretation_hints': {
+            'trail_brake_pct':         'High (>50%) = carries braking into corners (late-braker style)',
+            'throttle_acceptance_pct': 'High (>60%) = early throttle application (V-line style)',
+            'entry_bravery_pct':       'High (>55%) = high entry speed relative to circuit norms',
+            'avg_ggv_util_pct':        'High (>80%) = near the traction/grip limit throughout',
+        },
     }

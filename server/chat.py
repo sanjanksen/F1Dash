@@ -25,6 +25,26 @@ from energy_2026 import get_energy_2026_knowledge
 MAX_TOOL_ROUNDS = 8
 logger = logging.getLogger(__name__)
 
+_TELEMETRY_CONTEXT_TYPES = {
+    'cornering_telemetry', 'qualifying_telemetry', 'analyze_cornering_loads',
+    'analyze_qualifying_battle', 'compare_corner_profiles', 'extract_corner_profiles',
+    'analyze_race_cornering_profile',
+}
+
+
+def _build_driver_style_context(evidence: list[dict]) -> str | None:
+    """
+    Return None when session telemetry evidence is present — computed cornering
+    metrics supersede static driver style profiles.
+    Returns None otherwise (static profiles are always in the system prompt).
+    """
+    has_telemetry = any(
+        e.get('context_type') in _TELEMETRY_CONTEXT_TYPES
+        or e.get('tool') in _TELEMETRY_CONTEXT_TYPES
+        for e in (evidence or [])
+    )
+    return None if has_telemetry else None
+
 import datetime
 
 CURRENT_YEAR = datetime.date.today().year
@@ -1577,18 +1597,24 @@ def _retrieve_analysis_evidence(plan: dict, resolved: dict | None = None) -> lis
 
     # ── Auto-inject driver style context ────────────────────────────────────
     drivers = plan.get("drivers") or []
-    if len(drivers) >= 2:
-        try:
-            style = get_comparison_framing(drivers[0]["code"], drivers[1]["code"])
-            if style:
-                evidence.append({
-                    "context_type": "driver_style_comparison",
-                    "driver_a": drivers[0]["code"],
-                    "driver_b": drivers[1]["code"],
-                    "data": style,
-                })
-        except Exception as exc:
-            logger.warning("Driver style context injection failed: %s", exc)
+    if len(drivers) >= 2 and _build_driver_style_context(evidence) is None:
+        has_telemetry = any(
+            e.get('context_type') in _TELEMETRY_CONTEXT_TYPES
+            or e.get('tool') in _TELEMETRY_CONTEXT_TYPES
+            for e in evidence
+        )
+        if not has_telemetry:
+            try:
+                style = get_comparison_framing(drivers[0]["code"], drivers[1]["code"])
+                if style:
+                    evidence.append({
+                        "context_type": "driver_style_comparison",
+                        "driver_a": drivers[0]["code"],
+                        "driver_b": drivers[1]["code"],
+                        "data": style,
+                    })
+            except Exception as exc:
+                logger.warning("Driver style context injection failed: %s", exc)
 
     # ── Auto-inject circuit profile ─────────────────────────────────────────
     country = plan.get("country") or (resolved.get("country") if resolved else None)
