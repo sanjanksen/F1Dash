@@ -38,7 +38,27 @@
       "WebFetch(domain:www.motorsportmagazine.com)",
       "WebFetch(domain:tuprints.ulb.tu-darmstadt.de)",
       "WebFetch(domain:en.racelogic.support)",
-      "WebFetch(domain:vrperfdev.wordpress.com)"
+      "WebFetch(domain:vrperfdev.wordpress.com)",
+      "Skill(claude-hud:setup)",
+      "PowerShell([System.IO.Directory]::GetDirectories\\(\"C:\\\\Users\\\\sanja\\\\.claude\\\\plugins\\\\cache\"\\))",
+      "PowerShell(Get-Command *)",
+      "PowerShell(Join-Path *)",
+      "PowerShell(Get-Content *)",
+      "PowerShell(powershell -Command \"& {$env:COLUMNS=[Math]::Max\\(1,[Console]::WindowWidth-4\\); $cd=if\\($env:CLAUDE_CONFIG_DIR\\){$env:CLAUDE_CONFIG_DIR}else{Join-Path $HOME '.claude'}; $p=\\([System.IO.Directory]::GetDirectories\\(\\(Join-Path $cd 'plugins\\\\cache\\\\claude-hud\\\\claude-hud'\\)\\)|Where-Object{[System.IO.Path]::GetFileName\\($_\\)-match'^\\\\d+\\(\\\\.\\\\d+\\)+$'}|Sort-Object{[version][System.IO.Path]::GetFileName\\($_\\)}-Descending|Select-Object -First 1\\); & 'C:\\\\Program Files\\\\nodejs\\\\node' \\(Join-Path $p 'dist\\\\index.js'\\)}\" 2>&1)",
+      "Bash(git *)",
+      "Bash(python3 -m pytest tests/test_f1_data.py::test_session_cache_evicts_stale_entry -v)",
+      "PowerShell($env:PATH -split \";\")",
+      "PowerShell([System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\) -split \";\")",
+      "PowerShell([System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) -split \";\")",
+      "PowerShell(Select-String *)",
+      "PowerShell(npm root *)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Git\\\\bin\\\\bash.exe\" -c \"find /c -maxdepth 5 -name 'python.exe' 2>/dev/null | grep -v WindowsApps | head -10\")",
+      "Bash(py *)",
+      "mcp__plugin_context-mode_context-mode__ctx_batch_execute",
+      "mcp__plugin_context-mode_context-mode__ctx_search",
+      "Bash(echo \"\")",
+      "Bash(cat)",
+      "mcp__plugin_context-mode_context-mode__ctx_execute"
     ]
   }
 }
