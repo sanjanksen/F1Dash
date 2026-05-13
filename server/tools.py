@@ -676,13 +676,18 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
     _tool(
         "analyze_stint_degradation",
         "DEEP ANALYSIS PRIMITIVE. Compute tyre degradation model for a driver's race stints. "
-        "Fits linear regression on fuel-corrected lap times vs tyre age per stint compound. "
+        "Fits linear and polynomial regression on fuel-corrected lap times vs tyre age per stint compound. "
         "Returns deg_rate_s_per_lap, fuel_corrected_pace_at_age_1_s, r_squared, consistency_std_dev_s, "
-        "raw_pace_trend_s_per_lap, and a tyre_management summary. The raw trend is what the stopwatch did; "
-        "deg_rate_s_per_lap adds back expected fuel-burn gain to estimate tyre performance loss. "
-        "For tyre-management rankings, lower positive_deg_rate_s_per_lap is the primary signal; "
-        "consistency_std_dev_s is lap-to-lap noise and r_squared is confidence/trust in the trend, not pace. "
-        "Use for questions about tyre wear, degradation rate, tyre management, or how pace evolved over a stint.",
+        "raw_pace_trend_s_per_lap, cliff_lap_est (tyre age where degradation accelerates nonlinearly — "
+        "the polynomial breakpoint), quad_coeff (positive = accelerating deg curve), laps_past_cliff "
+        "(how many laps driven past the cliff before pitting — use this to explain forced or strategic pit stops), "
+        "and a tyre_management summary with per-compound cliff_lap_est and laps_past_cliff. "
+        "The raw trend is what the stopwatch did; deg_rate_s_per_lap adds back expected fuel-burn gain "
+        "to estimate tyre performance loss. For tyre-management rankings, lower positive_deg_rate_s_per_lap "
+        "is the primary signal; consistency_std_dev_s is lap-to-lap noise and r_squared is confidence/trust "
+        "in the trend, not pace. "
+        "Use for questions about tyre wear, degradation rate, tyre management, pit timing decisions, "
+        "or how pace evolved over a stint.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
             "driver_code": {"type": "string", "description": "3-letter driver code."},
@@ -695,9 +700,11 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
         "DEEP ANALYSIS PRIMITIVE. Compare race pace and tyre degradation between two drivers. "
         "Race equivalent of analyze_qualifying_battle. Returns fuel-corrected pace delta, "
         "per-compound degradation rate comparison, aligned stints, decisive_factor classification "
-        "(tyre_degradation/raw_pace_advantage/strategy_execution/mixed), tyre_management summaries with deg rate, "
-        "consistency, and R², and undercut analysis. "
-        "Use for questions like 'who had better race pace?' or 'why did Verstappen pull away from Hamilton in the race?'.",
+        "(tyre_degradation/raw_pace_advantage/strategy_execution/mixed), tyre_management summaries with "
+        "deg rate, consistency, R², and per-compound cliff_lap_est and laps_past_cliff, plus undercut "
+        "analysis with cliff_context showing whether each driver's tyres had hit the cliff when they pitted. "
+        "Use for questions like 'who had better race pace?', 'why did Verstappen pull away from Hamilton?', "
+        "or 'was the undercut forced by tyre degradation?'.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
             "driver_a": {"type": "string", "description": "First driver's 3-letter code."},

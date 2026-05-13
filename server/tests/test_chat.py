@@ -905,3 +905,13 @@ def test_agentic_loop_dispatches_tools_in_parallel():
     assert abs(call_times[0] - call_times[1]) < SLEEP * 0.8, (
         f"Tools started {abs(call_times[0]-call_times[1]):.2f}s apart — likely serial"
     )
+
+
+def test_system_prompt_contains_bayesian_skill_guidance():
+    """The system prompt must explain how to interpret SD-unit driver skills."""
+    import chat
+    prompt = chat.ANALYSIS_SYSTEM_PROMPT
+    assert 'SD units' in prompt or 'standard deviation' in prompt.lower(), \
+        "System prompt must explain driver skill SD units"
+    assert 'credible interval' in prompt.lower() or 'hdi' in prompt.lower(), \
+        "System prompt must mention credible intervals"

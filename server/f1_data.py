@@ -4482,6 +4482,7 @@ def _fit_stint_degradation(
             'cold_laps_excluded_from_reg':         cold_excluded,
             'quad_coeff':                          round(float(quad_coeff_raw), 6),
             'cliff_lap_est':                       cliff_lap_est,
+            'laps_past_cliff':                     max(0, len(all_laps) - cliff_lap_est) if cliff_lap_est is not None else None,
             'scatter_data':                        scatter_data,
             'regression_line':                     reg_line,
             'ranking_basis': (
@@ -4523,12 +4524,28 @@ def _summarize_tyre_management(stints: list[dict]) -> dict | None:
             s.get('total_deg_loss_s', 0) for s in comp_stints
             if isinstance(s.get('total_deg_loss_s'), (int, float))
         )
+
+        # Cliff summary per compound — weighted by lap count across stints
+        cliff_stints_c = [s for s in comp_stints if s.get('cliff_lap_est') is not None]
+        if cliff_stints_c:
+            cliff_lap_total = sum(s.get('lap_count', 1) for s in cliff_stints_c)
+            cliff_lap_est_avg = sum(
+                s['cliff_lap_est'] * s.get('lap_count', 1) for s in cliff_stints_c
+            ) / max(cliff_lap_total, 1)
+            laps_past_cliff_avg = sum(
+                (s.get('laps_past_cliff') or 0) * s.get('lap_count', 1) for s in cliff_stints_c
+            ) / max(cliff_lap_total, 1)
+        else:
+            cliff_lap_est_avg = laps_past_cliff_avg = None
+
         per_compound[comp] = {
             'lap_count': comp_laps,
             'deg_rate_s_per_lap': round(_wt('deg_rate_s_per_lap'), 4) if _wt('deg_rate_s_per_lap') is not None else None,
             'positive_deg_rate_s_per_lap': round(_wt('positive_deg_rate_s_per_lap'), 4) if _wt('positive_deg_rate_s_per_lap') is not None else None,
             'total_deg_loss_s': round(total_deg_loss, 2),
             'r_squared': round(_wt('r_squared'), 3) if _wt('r_squared') is not None else None,
+            'cliff_lap_est': round(cliff_lap_est_avg, 1) if cliff_lap_est_avg is not None else None,
+            'laps_past_cliff': round(laps_past_cliff_avg, 1) if laps_past_cliff_avg is not None else None,
         }
 
     # Consistency (lap-to-lap spread) is not compound-specific — aggregate across all stints
@@ -4552,6 +4569,8 @@ def _summarize_tyre_management(stints: list[dict]) -> dict | None:
     w_deg = _wt_all('positive_deg_rate_s_per_lap')
     w_r2 = _wt_all('r_squared')
 
+    stints_with_cliff = [s for s in stints if s.get('cliff_lap_est') is not None]
+
     return {
         'total_modelled_laps': total,
         'per_compound': per_compound,
@@ -4559,10 +4578,13 @@ def _summarize_tyre_management(stints: list[dict]) -> dict | None:
         'weighted_deg_rate_s_per_lap': round(w_deg, 4) if w_deg is not None else None,
         'weighted_consistency_std_dev_s': round(consistency, 3) if consistency is not None else None,
         'weighted_r_squared': round(w_r2, 3) if w_r2 is not None else None,
+        'stints_with_cliff_count': len(stints_with_cliff),
         'score_explanation': (
             "R² is the trust level for the deg rate fit — higher means the linear trend explains more of "
             "the lap-time variance. weighted_deg_rate_s_per_lap is lap-count-weighted across all compounds. "
-            "Deg rates are compound-specific — only compare stints on the same compound."
+            "Deg rates are compound-specific — only compare stints on the same compound. "
+            "per_compound[X].cliff_lap_est is the tyre age (laps into the stint) where degradation accelerated; "
+            "per_compound[X].laps_past_cliff is how many laps the driver ran past that cliff before pitting."
         ),
         'note': (
             "Deg rates are compound-specific — only compare stints on the same compound. "
@@ -4955,6 +4977,17 @@ def analyze_race_pace_battle(
 
     pit_lap_a = _first_pit_lap(laps_a)
     pit_lap_b = _first_pit_lap(laps_b)
+    def _cliff_per_compound(tyre_mgmt: dict | None) -> dict:
+        if not tyre_mgmt:
+            return {}
+        return {
+            comp: {
+                'cliff_lap_est': d.get('cliff_lap_est'),
+                'laps_past_cliff': d.get('laps_past_cliff'),
+            }
+            for comp, d in (tyre_mgmt.get('per_compound') or {}).items()
+        }
+
     undercut_opportunity = None
     if pit_lap_a is not None and pit_lap_b is not None:
         gap = pit_lap_b - pit_lap_a
@@ -4964,6 +4997,10 @@ def analyze_race_pace_battle(
                 'earlier_pitter': earlier,
                 'pit_lap_delta': gap,
                 'note': f"{earlier} pitted {abs(gap)} laps earlier - possible undercut attempt.",
+                'cliff_context': {
+                    driver_a.upper(): _cliff_per_compound(tyre_management_a),
+                    driver_b.upper(): _cliff_per_compound(tyre_management_b),
+                },
             }
 
     return {

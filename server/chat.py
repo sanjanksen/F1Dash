@@ -328,6 +328,9 @@ def _make_deg_trend_chart_widget(result: dict) -> dict:
                 "lap_count": s.get("lap_count"),
                 "deg_rate_s_per_lap": s.get("deg_rate_s_per_lap"),
                 "r_squared": s.get("r_squared"),
+                "cliff_lap_est": s.get("cliff_lap_est"),
+                "quad_coeff": s.get("quad_coeff"),
+                "laps_past_cliff": s.get("laps_past_cliff"),
                 "scatter_data": s.get("scatter_data") or [],
                 "regression_line": s.get("regression_line") or [],
             }
@@ -861,8 +864,8 @@ Guidelines:
 - For comparing two drivers corner-by-corner (where the faster driver gains, cause classification, setup direction, avg straight speeds): use compare_corner_profiles
 - For a team's setup direction or which teammate is stronger through the corners: use analyze_team_performance
 - For historical team/car-circuit fit questions like "what kind of tracks suit Mercedes?", "is McLaren better on high-speed circuits?", or "does Ferrari suit late braking tracks?": use analyze_team_circuit_fit. If a specific round/session is known, also use analyze_team_telemetry_traits. Use get_team_car_profile only as dated public-reporting context, not as proof.
-- For tyre degradation rate, stint deg model, or how a driver's pace degraded per lap on a compound: use analyze_stint_degradation
-- For race pace comparison between two drivers (fuel-corrected pace delta, degradation rates, undercut analysis, decisive factor): use analyze_race_pace_battle. Prefer this over manual lap time inspection for 'why did X pull away from Y in the race?' questions
+- For tyre degradation rate, stint deg model, or how a driver's pace degraded per lap on a compound: use analyze_stint_degradation. Each stint includes cliff_lap_est (tyre age where deg accelerated nonlinearly) and laps_past_cliff (laps driven past that cliff before pitting). Use laps_past_cliff > 0 to explain forced or late pit stops; cliff_lap_est None means the compound degraded linearly with no sudden cliff
+- For race pace comparison between two drivers (fuel-corrected pace delta, degradation rates, undercut analysis, decisive factor): use analyze_race_pace_battle. Prefer this over manual lap time inspection for 'why did X pull away from Y in the race?' questions. The result includes undercut_opportunity.cliff_context with per-compound cliff data for each driver — use this to explain whether a pit stop was triggered by tyre cliff, strategic timing, or external factors like a safety car
 - For 2026-style energy questions like lift-and-coast, clipping, super-clipping, deployment taper, or energy recovery behavior: use analyze_energy_management
 - For racing-line or on-track position comparisons, track maps, or where a gain happened physically on the lap: use get_track_position_comparison
 - For team radio or in-car context, use get_team_radio

@@ -77,17 +77,23 @@ export default function DegTrendChart({ widget }) {
             const color = COMPOUND_COLORS[stint.compound] ?? 'hsl(var(--muted-foreground))'
             const pts = stint.scatter_data ?? []
             const reg = stint.regression_line ?? []
+            const cliffX = stint.cliff_lap_est != null ? toX(stint.cliff_lap_est) : null
+            const regPoints = reg.length >= 2
+              ? reg.map((pt) => `${toX(pt.tyre_age)},${toY(pt.predicted_s)}`).join(' ')
+              : null
             return (
               <g key={stint.compound}>
                 {pts.map((pt, i) => (
                   <circle key={i} cx={toX(pt.tyre_age)} cy={toY(pt.lap_time_s)}
                     r={3} fill={color} fillOpacity={0.7} />
                 ))}
-                {reg.length === 2 && (
-                  <line
-                    x1={toX(reg[0].tyre_age)} y1={toY(reg[0].lap_time_s)}
-                    x2={toX(reg[1].tyre_age)} y2={toY(reg[1].lap_time_s)}
+                {regPoints && (
+                  <polyline points={regPoints} fill="none"
                     stroke={color} strokeWidth={1.5} strokeDasharray="4 2" strokeOpacity={0.9} />
+                )}
+                {cliffX != null && cliffX >= PAD.left && cliffX <= W - PAD.right && (
+                  <line x1={cliffX} x2={cliffX} y1={PAD.top} y2={H - PAD.bottom}
+                    stroke="hsl(var(--speed))" strokeWidth={1} strokeDasharray="3 3" strokeOpacity={0.6} />
                 )}
               </g>
             )
@@ -107,6 +113,14 @@ export default function DegTrendChart({ widget }) {
           </span>
           {' '}— {s.lap_count} laps · deg {s.deg_rate_s_per_lap >= 0 ? '+' : ''}{s.deg_rate_s_per_lap?.toFixed(3)}s/lap
           {s.r_squared != null ? ` · R²=${s.r_squared.toFixed(2)}` : ''}
+          {s.cliff_lap_est != null && (
+            <span style={{ color: 'hsl(var(--speed))' }}>
+              {' '}· cliff @age {s.cliff_lap_est}
+              {s.laps_past_cliff != null && s.laps_past_cliff > 0
+                ? ` (+${s.laps_past_cliff} laps past)`
+                : ' (pitted before cliff)'}
+            </span>
+          )}
         </div>
       ))}
     </div>
