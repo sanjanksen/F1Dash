@@ -637,6 +637,142 @@ def detect_override_mode(
     }
 
 
+def _resolve_circuit_slug_for_round(round_number: int) -> str | None:
+    """Best-effort mapping of round_number to a CIRCUIT_PROFILES / CIRCUIT_AERO_ZONES key.
+    Uses the session event's Country field via fastf1's schedule, falling back to None."""
+    try:
+        from circuit_profiles import get_circuit_profile
+        schedule = fastf1.get_event_schedule(CURRENT_YEAR, include_testing=False)
+        matching = schedule[schedule["RoundNumber"] == round_number]
+        if matching.empty:
+            return None
+        country = str(matching.iloc[0].get("Country", "") or "")
+        event_name = str(matching.iloc[0].get("EventName", "") or "")
+        profile = get_circuit_profile(country, event_name)
+        if profile:
+            return profile.get("circuit_key")
+    except Exception:
+        return None
+    return None
+
+
+def analyze_active_aero_usage(
+    driver_code: str, round_number: int, session_type: str, lap_number: int,
+) -> dict:
+    """Detect 2026 active-aero (X/Z) usage on a specific lap.
+
+    Path A (preferred): if FastF1 exposes an active-aero channel on Car_Data,
+    use it directly. As of 2026-05-20 the channel name is unconfirmed — this
+    function probes candidate fields (`AeroState`, `Aero`, `XZ`) and treats any
+    non-zero value as Z-mode active. When no candidate channel resolves, falls
+    back to Path B.
+
+    Path B (fallback): per-circuit aero-zone bands from active_aero.CIRCUIT_AERO_ZONES,
+    a 250 km/h minimum speed, and a 100 m transition lag at zone entry.
+    Path-B results are marked inferred=True.
+    """
+    from active_aero import is_z_mode, get_circuit_aero_zones, get_zone_label_at
+
+    circuit_slug = _resolve_circuit_slug_for_round(round_number)
+    if circuit_slug is None or get_circuit_aero_zones(circuit_slug) is None:
+        return {
+            "available": True,
+            "driver_code": driver_code.upper(),
+            "round_number": round_number,
+            "session_type": session_type,
+            "lap_number": lap_number,
+            "circuit_slug": circuit_slug,
+            "circuit_in_coverage": False,
+            "segments": [],
+            "total_z_mode_seconds": 0.0,
+            "estimated_lap_time_delta_s": 0.0,
+            "inferred": True,
+            "detector_version": "f31-v1",
+            "note": "Circuit not in active-aero zone coverage; defaulted to no Z-mode detected.",
+        }
+
+    tele = get_lap_telemetry(round_number, session_type, driver_code, lap_number)
+    samples = tele.get("telemetry") or []
+
+    # Path A probe: aero-state channel is currently unknown in 2026 FastF1.
+    # Look for one of several candidate keys per sample; if any is present and
+    # consistent across the lap, we treat it as the authoritative source.
+    AERO_CHANNEL_CANDIDATES = ("aero_state", "aero", "xz_mode", "z_mode")
+    aero_channel_key: str | None = None
+    for cand in AERO_CHANNEL_CANDIDATES:
+        if samples and cand in samples[0]:
+            aero_channel_key = cand
+            break
+
+    in_zone_flags: list[bool] = []
+    for s in samples:
+        speed = s.get("speed_kph")
+        dist = s.get("distance_m")
+        if speed is None or dist is None:
+            in_zone_flags.append(False)
+            continue
+        channel_val = s.get(aero_channel_key) if aero_channel_key else None
+        in_zone_flags.append(
+            is_z_mode(float(speed), float(dist), circuit_slug, aero_state_channel=channel_val)
+        )
+
+    inferred = aero_channel_key is None
+
+    segments: list[dict] = []
+    i = 0
+    n = len(samples)
+    while i < n:
+        if not in_zone_flags[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and in_zone_flags[j + 1]:
+            j += 1
+        seg_samples = samples[i:j + 1]
+        if len(seg_samples) >= 2:
+            start_d = float(seg_samples[0]["distance_m"])
+            end_d = float(seg_samples[-1]["distance_m"])
+            length_m = max(end_d - start_d, 1.0)
+            peak = max(float(s["speed_kph"]) for s in seg_samples)
+            avg_speed_kph = sum(float(s["speed_kph"]) for s in seg_samples) / len(seg_samples)
+            avg_speed_ms = avg_speed_kph / 3.6
+            duration_s = length_m / avg_speed_ms if avg_speed_ms > 0 else 0.0
+            # Conservative speed-gain heuristic: longer/faster zones see more gain.
+            # If end-of-zone speed > 320 km/h assume +8 km/h vs full-X-mode;
+            # otherwise +4 km/h. These figures are editorial estimates.
+            end_speed = float(seg_samples[-1]["speed_kph"])
+            est_gain = 8.0 if end_speed > 320 else 4.0
+            label = get_zone_label_at(circuit_slug, start_d) or None
+            segments.append({
+                "label": label,
+                "start_distance_m": round(start_d, 1),
+                "end_distance_m": round(end_d, 1),
+                "duration_s": round(duration_s, 3),
+                "peak_speed_kph": round(peak, 1),
+                "estimated_speed_gain_kph": est_gain,
+            })
+        i = j + 1
+
+    total_z = round(sum(s["duration_s"] for s in segments), 3)
+    # First-order lap-time delta: roughly 2% of Z-mode time saved vs X-only.
+    est_delta = round(total_z * 0.02, 3)
+
+    return {
+        "available": True,
+        "driver_code": driver_code.upper(),
+        "round_number": round_number,
+        "session_type": session_type,
+        "lap_number": lap_number,
+        "circuit_slug": circuit_slug,
+        "circuit_in_coverage": True,
+        "segments": segments,
+        "total_z_mode_seconds": total_z,
+        "estimated_lap_time_delta_s": est_delta,
+        "inferred": inferred,
+        "detector_version": "f31-v1",
+    }
+
+
 def analyze_override_usage(driver_code: str, round_number: int, session_type: str, lap_number: int) -> dict:
     """Detect 2026 override-mode boost on a specific lap. Loads telemetry for
     the lap, approximates gap-to-ahead from openf1 intervals (averaged across

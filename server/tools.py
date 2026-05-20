@@ -39,6 +39,7 @@ from f1_data import (
     get_drivers,
     get_head_to_head,
     get_historical_circuit_performance,
+    analyze_active_aero_usage,
     analyze_energy_management,
     analyze_override_usage,
     get_lap_telemetry,
@@ -508,6 +509,22 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
         ["round_number", "session_type", "driver_a"],
     ),
     _tool(
+        "analyze_active_aero_usage",
+        "DEEP ANALYSIS PRIMITIVE. Detect 2026 active-aero Z-mode (low-drag) usage on a specific lap. "
+        "Returns segments where Z-mode was active inside FIA-permitted aero zones, total Z-mode "
+        "seconds, and an estimated speed gain vs full-X-mode. May return inferred=True when FastF1 "
+        "doesn't expose the active-aero channel directly — in that case the result is derived from "
+        "per-circuit aero-zone definitions and speed-trace heuristics, and the chat layer should "
+        "hedge accordingly. Use for specific-lap questions like 'where did Norris run Z-mode on lap 12?'.",
+        {
+            "driver_code": {"type": "string", "description": "3-letter driver code."},
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
+            "lap_number": {"type": "integer", "description": "Specific lap number to analyse."},
+        },
+        ["driver_code", "round_number", "session_type", "lap_number"],
+    ),
+    _tool(
         "analyze_override_usage",
         "DEEP ANALYSIS PRIMITIVE. Detect 2026 override-mode boost segments for a specific lap. "
         "Identifies where a driver was within 1 second of the car ahead and used the extended 350 kW deployment "
@@ -868,6 +885,14 @@ def execute_tool(name: str, args: dict):
     if name == "analyze_override_usage":
         _require_args(args, ["driver_code", "round_number", "session_type", "lap_number"], name)
         return analyze_override_usage(
+            args["driver_code"],
+            args["round_number"],
+            args["session_type"],
+            args["lap_number"],
+        )
+    if name == "analyze_active_aero_usage":
+        _require_args(args, ["driver_code", "round_number", "session_type", "lap_number"], name)
+        return analyze_active_aero_usage(
             args["driver_code"],
             args["round_number"],
             args["session_type"],
