@@ -80,6 +80,8 @@ CURRENT_YEAR = datetime.date.today().year
 
 
 def _make_qualifying_battle_widget(result: dict) -> dict:
+    energy_analysis = result.get("energy_analysis") or {}
+    clipping_callout = energy_analysis.get("clipping_comparison")
     return {
         "type": "qualifying_battle",
         "title": f"{result.get('driver_a')} vs {result.get('driver_b')}",
@@ -106,6 +108,7 @@ def _make_qualifying_battle_widget(result: dict) -> dict:
         "track_map": result.get("track_map") or [],
         "focus_window_trace": result.get("focus_window_trace") or [],
         "grip_commitment": result.get("grip_commitment"),
+        "clipping_callout": clipping_callout,
     }
 
 
@@ -397,6 +400,12 @@ def _make_energy_management_widget(result: dict) -> dict:
         "straight_breakdown": result.get("straight_breakdown") or [],
         "confidence": result.get("confidence"),
         "inference_summary": result.get("inference_summary") or [],
+        "clipping_segments_a": (result.get("clipping_signature_a") or {}).get("segments") or [],
+        "clipping_segments_b": (result.get("clipping_signature_b") or {}).get("segments") or [],
+        "total_clipping_seconds_a": (result.get("clipping_signature_a") or {}).get("total_clipping_seconds"),
+        "total_clipping_seconds_b": (result.get("clipping_signature_b") or {}).get("total_clipping_seconds"),
+        "clipping_budget_status_a": (result.get("clipping_signature_a") or {}).get("budget_status"),
+        "clipping_budget_status_b": (result.get("clipping_signature_b") or {}).get("budget_status"),
     }
 
 

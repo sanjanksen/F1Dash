@@ -299,6 +299,233 @@ def _infer_clipping_windows(samples: list[dict], speed_key: str = "speed_kph") -
     return windows
 
 
+def _deployment_curve_anchors(curve_name: str = "standard") -> list[dict]:
+    knowledge = get_energy_2026_knowledge()
+    deployment_curve = knowledge.get("deployment_curve")
+    if not deployment_curve or curve_name not in deployment_curve:
+        raise RuntimeError(
+            f"energy_2026 knowledge missing 'deployment_curve.{curve_name}' — "
+            "required for clipping detection (F33 prereq)."
+        )
+    return deployment_curve[curve_name]
+
+
+def _reference_slope_kph_per_m(speed_kph: float, anchors: list[dict]) -> float:
+    """Approximate reference speed slope (km/h per meter) at a given speed
+    on the deployment curve. The slope is proportional to delivered power,
+    which drops linearly between anchors. We normalize so the slope at the
+    plateau (max power) is ~1.0 km/h per meter, then scale by power ratio.
+    Anchors are sorted by speed_kph; expects at least 2."""
+    if not anchors:
+        return 0.0
+    plateau_kw = max(a["power_kw"] for a in anchors)
+    if plateau_kw <= 0:
+        return 0.0
+    sorted_anchors = sorted(anchors, key=lambda a: a["speed_kph"])
+    if speed_kph <= sorted_anchors[0]["speed_kph"]:
+        power_kw = sorted_anchors[0]["power_kw"]
+    elif speed_kph >= sorted_anchors[-1]["speed_kph"]:
+        power_kw = sorted_anchors[-1]["power_kw"]
+    else:
+        for i in range(len(sorted_anchors) - 1):
+            lo = sorted_anchors[i]
+            hi = sorted_anchors[i + 1]
+            if lo["speed_kph"] <= speed_kph <= hi["speed_kph"]:
+                span = hi["speed_kph"] - lo["speed_kph"]
+                t = (speed_kph - lo["speed_kph"]) / span if span > 0 else 0.0
+                power_kw = lo["power_kw"] + t * (hi["power_kw"] - lo["power_kw"])
+                break
+        else:
+            power_kw = 0.0
+    return (power_kw / plateau_kw) * 1.0
+
+
+def detect_clipping_signature(
+    speed_trace: list[float],
+    throttle_trace: list[float],
+    distance_trace: list[float],
+    *,
+    drs_state: list[int] | None = None,
+    full_power_below_kmh: float | None = None,
+    ramp_zero_at_kmh: float | None = None,
+    min_segment_length_m: float = 80.0,
+    min_speed_flatten_kph: float = 8.0,
+) -> dict:
+    """Return clipping segments where speed flattens despite full throttle in
+    the deployment-taper window (290-355 km/h by default)."""
+    anchors = _deployment_curve_anchors("standard")
+    sorted_anchors = sorted(anchors, key=lambda a: a["speed_kph"])
+    if full_power_below_kmh is None:
+        full_power_below_kmh = float(sorted_anchors[0]["speed_kph"])
+    if ramp_zero_at_kmh is None:
+        ramp_zero_at_kmh = float(sorted_anchors[-1]["speed_kph"])
+
+    n = min(len(speed_trace), len(throttle_trace), len(distance_trace))
+    samples = [
+        {
+            "distance_m": distance_trace[i],
+            "speed_kph": speed_trace[i],
+            "throttle_pct": throttle_trace[i],
+            "brake": False,
+            "gear": 8,
+            "drs_open": drs_state[i] if drs_state and i < len(drs_state) else None,
+        }
+        for i in range(n)
+    ]
+
+    full_throttle_windows = _find_full_throttle_straight_windows(samples)
+
+    segments: list[dict] = []
+    for window in full_throttle_windows:
+        sub: list[dict] = []
+        for s in window:
+            sp = s.get("speed_kph")
+            th = s.get("throttle_pct")
+            if (
+                sp is not None and th is not None
+                and full_power_below_kmh <= sp <= ramp_zero_at_kmh
+                and th >= 95
+            ):
+                sub.append(s)
+            else:
+                if len(sub) >= 4:
+                    seg = _evaluate_clipping_sub_window(sub, sorted_anchors, min_segment_length_m, min_speed_flatten_kph)
+                    if seg:
+                        segments.append(seg)
+                sub = []
+        if len(sub) >= 4:
+            seg = _evaluate_clipping_sub_window(sub, sorted_anchors, min_segment_length_m, min_speed_flatten_kph)
+            if seg:
+                segments.append(seg)
+
+    total_clipping_seconds = round(sum(s["duration_s"] for s in segments), 3)
+    budget_status = "within" if total_clipping_seconds <= 4.0 else "above"
+
+    strong_segments = [s for s in segments if s["slope_deficit_pct"] >= 60 and (s["end_distance_m"] - s["start_distance_m"]) >= 50]
+    if len(strong_segments) >= 2:
+        confidence = "high"
+    elif len(strong_segments) == 1 or len(segments) >= 2:
+        confidence = "moderate"
+    elif segments:
+        confidence = "low"
+    else:
+        confidence = "low"
+
+    return {
+        "clipping_detected": bool(segments),
+        "segments": [
+            {
+                "start_distance_m": s["start_distance_m"],
+                "end_distance_m": s["end_distance_m"],
+                "start_speed_kph": s["start_speed_kph"],
+                "end_speed_kph": s["end_speed_kph"],
+                "observed_slope_kph_per_m": s["observed_slope_kph_per_m"],
+                "reference_slope_kph_per_m": s["reference_slope_kph_per_m"],
+                "duration_s": s["duration_s"],
+                "severity": s["severity"],
+            }
+            for s in segments
+        ],
+        "total_clipping_seconds": total_clipping_seconds,
+        "budget_status": budget_status,
+        "confidence": confidence,
+        "detector_version": "f33-v1",
+    }
+
+
+def _evaluate_clipping_sub_window(
+    sub: list[dict],
+    sorted_anchors: list[dict],
+    min_segment_length_m: float,
+    min_speed_flatten_kph: float,
+) -> dict | None:
+    start = sub[0]
+    end = sub[-1]
+    sd = start.get("distance_m")
+    ed = end.get("distance_m")
+    ss = start.get("speed_kph")
+    es = end.get("speed_kph")
+    if sd is None or ed is None or ss is None or es is None:
+        return None
+    length_m = ed - sd
+    if length_m < min_segment_length_m:
+        return None
+    observed_slope = (es - ss) / length_m if length_m > 0 else 0.0
+    mid_speed = (ss + es) / 2.0
+    reference_slope = _reference_slope_kph_per_m(mid_speed, sorted_anchors)
+    if reference_slope <= 0:
+        return None
+    deficit_pct = (1.0 - observed_slope / reference_slope) * 100.0
+    if deficit_pct < 50:
+        return None
+    speeds = [s.get("speed_kph") for s in sub if s.get("speed_kph") is not None]
+    if speeds and (max(speeds) - min(speeds)) < 0:
+        return None
+    avg_speed_ms = (ss + es) / 2.0 / 3.6
+    duration_s = length_m / avg_speed_ms if avg_speed_ms > 0 else 0.0
+    if deficit_pct >= 85:
+        severity = "severe"
+    elif deficit_pct >= 70:
+        severity = "moderate"
+    else:
+        severity = "mild"
+    return {
+        "start_distance_m": round(sd, 1),
+        "end_distance_m": round(ed, 1),
+        "start_speed_kph": round(ss, 1),
+        "end_speed_kph": round(es, 1),
+        "observed_slope_kph_per_m": round(observed_slope, 4),
+        "reference_slope_kph_per_m": round(reference_slope, 4),
+        "slope_deficit_pct": round(deficit_pct, 1),
+        "duration_s": round(duration_s, 3),
+        "severity": severity,
+    }
+
+
+def compare_drivers_clipping(
+    driver_a_signature: dict,
+    driver_b_signature: dict,
+    driver_a_code: str,
+    driver_b_code: str,
+) -> dict | None:
+    """Return chat-ready summary when one driver clips materially more.
+    Threshold: difference >= 0.2 s/lap to be worth surfacing. Else None."""
+    if not driver_a_signature or not driver_b_signature:
+        return None
+    a_total = driver_a_signature.get("total_clipping_seconds") or 0.0
+    b_total = driver_b_signature.get("total_clipping_seconds") or 0.0
+    delta = abs(a_total - b_total)
+    if delta < 0.2:
+        return None
+    if a_total > b_total:
+        clipping_driver = driver_a_code.upper()
+        faster_driver = driver_b_code.upper()
+        segments = driver_a_signature.get("segments") or []
+    else:
+        clipping_driver = driver_b_code.upper()
+        faster_driver = driver_a_code.upper()
+        segments = driver_b_signature.get("segments") or []
+    delta_rounded = round(delta, 1)
+    phrase = (
+        f"{clipping_driver} clipped roughly {delta_rounded} s/lap on the main straight; "
+        f"{faster_driver} did not."
+    )
+    segment_reference = None
+    if segments:
+        worst = max(segments, key=lambda s: s.get("duration_s") or 0.0)
+        segment_reference = {
+            "start_distance_m": worst.get("start_distance_m"),
+            "end_distance_m": worst.get("end_distance_m"),
+        }
+    return {
+        "faster_driver": faster_driver,
+        "clipping_driver": clipping_driver,
+        "delta_seconds": delta_rounded,
+        "phrase": phrase,
+        "segment_reference": segment_reference,
+    }
+
+
 def _in_late_clip_window(distance, windows: list[dict]) -> bool:
     if distance is None:
         return False
@@ -2252,6 +2479,19 @@ def analyze_energy_management(round_number: int, session_type: str,
         lico_b = _infer_lift_and_coast_samples(driver_b_samples)
         clip_a = _infer_clipping_windows(driver_a_samples)
         clip_b = _infer_clipping_windows(driver_b_samples)
+        clip_sig_a = detect_clipping_signature(
+            [s["speed_kph"] for s in driver_a_samples if s.get("speed_kph") is not None],
+            [s["throttle_pct"] for s in driver_a_samples if s.get("speed_kph") is not None],
+            [s["distance_m"] for s in driver_a_samples if s.get("speed_kph") is not None],
+            drs_state=[1 if s.get("drs_open") else 0 for s in driver_a_samples if s.get("speed_kph") is not None],
+        )
+        clip_sig_b = detect_clipping_signature(
+            [s["speed_kph"] for s in driver_b_samples if s.get("speed_kph") is not None],
+            [s["throttle_pct"] for s in driver_b_samples if s.get("speed_kph") is not None],
+            [s["distance_m"] for s in driver_b_samples if s.get("speed_kph") is not None],
+            drs_state=[1 if s.get("drs_open") else 0 for s in driver_b_samples if s.get("speed_kph") is not None],
+        )
+        clipping_comparison = compare_drivers_clipping(clip_sig_a, clip_sig_b, driver_a, driver_b)
 
         metrics_a = _compute_energy_metrics(driver_a_samples, lico_a, clip_a)
         metrics_b = _compute_energy_metrics(driver_b_samples, lico_b, clip_b)
@@ -2327,12 +2567,21 @@ def analyze_energy_management(round_number: int, session_type: str,
             "energy_metrics_a": metrics_a,
             "energy_metrics_b": metrics_b,
             "straight_breakdown": straight_breakdown,
+            "clipping_signature_a": clip_sig_a,
+            "clipping_signature_b": clip_sig_b,
+            "clipping_comparison": clipping_comparison,
         }
 
     telemetry = get_lap_telemetry(round_number, session_type, driver_a, lap_number_a)
     samples = telemetry["telemetry"]
     lico = _infer_lift_and_coast_samples(samples)
     clip = _infer_clipping_windows(samples)
+    clip_sig = detect_clipping_signature(
+        [s["speed_kph"] for s in samples if s.get("speed_kph") is not None],
+        [s["throttle_pct"] for s in samples if s.get("speed_kph") is not None],
+        [s["distance_m"] for s in samples if s.get("speed_kph") is not None],
+        drs_state=[1 if s.get("drs_open") else 0 for s in samples if s.get("speed_kph") is not None],
+    )
     metrics_a = _compute_energy_metrics(samples, lico, clip)
     straight_breakdown = _analyze_straights_energy(samples, None, clip, None, driver_a, None)
     trace_a = [
@@ -2381,6 +2630,9 @@ def analyze_energy_management(round_number: int, session_type: str,
         "energy_metrics_a": metrics_a,
         "energy_metrics_b": None,
         "straight_breakdown": straight_breakdown,
+        "clipping_signature_a": clip_sig,
+        "clipping_signature_b": None,
+        "clipping_comparison": None,
     }
 
 

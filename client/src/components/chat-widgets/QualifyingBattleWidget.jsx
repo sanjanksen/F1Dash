@@ -363,6 +363,9 @@ export default function QualifyingBattleWidget({ widget }) {
                         />
                       ) : null}
                     </div>
+                    {widget.clipping_callout?.phrase ? (
+                      <p className="mt-2 text-xs text-muted-foreground">{widget.clipping_callout.phrase}</p>
+                    ) : null}
                   </section>
                 ) : null}
 

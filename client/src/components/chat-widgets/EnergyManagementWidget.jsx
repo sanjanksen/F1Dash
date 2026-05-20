@@ -2,15 +2,17 @@ const COLOR_A = 'hsl(var(--primary))'
 const COLOR_B = 'hsl(var(--speed))'
 const ZONE_LICO = 'hsl(var(--time) / 0.3)'
 const ZONE_CLIP = 'hsl(var(--primary) / 0.22)'
+const ZONE_F33 = 'rgba(220, 38, 38, 0.22)'
 const BORDER_LICO = 'hsl(var(--time))'
 const BORDER_CLIP = 'hsl(var(--primary))'
+const BORDER_F33 = 'rgba(220, 38, 38, 0.7)'
 
 const W = 640, H = 140
 const PAD = { top: 10, right: 12, bottom: 28, left: 44 }
 const IW = W - PAD.left - PAD.right
 const IH = H - PAD.top - PAD.bottom
 
-function SpeedPanel({ traceA, traceB, licoA, clipA, driverA, driverB }) {
+function SpeedPanel({ traceA, traceB, licoA, clipA, driverA, driverB, f33Segments }) {
   if (!traceA?.length) return null
 
   const all = [...traceA, ...(traceB ?? [])]
@@ -44,6 +46,13 @@ function SpeedPanel({ traceA, traceB, licoA, clipA, driverA, driverB }) {
         const x2 = toX(c.end_distance_m ?? 0)
         return <rect key={i} x={x1} y={PAD.top} width={Math.max(x2 - x1, 4)} height={IH}
           fill={ZONE_CLIP} stroke={BORDER_CLIP} strokeWidth={0.5} strokeOpacity={0.4} />
+      })}
+      {/* F33 deployment-curve-aware clipping segments */}
+      {(f33Segments ?? []).map((seg, i) => {
+        const x1 = toX(seg.start_distance_m ?? 0)
+        const x2 = toX(seg.end_distance_m ?? 0)
+        return <rect key={`f33-${i}`} x={x1} y={PAD.top} width={Math.max(x2 - x1, 4)} height={IH}
+          fill={ZONE_F33} stroke={BORDER_F33} strokeWidth={0.6} strokeOpacity={0.7} />
       })}
       {/* Grid */}
       {ticks.map((s) => (
@@ -98,6 +107,9 @@ export default function EnergyManagementWidget({ widget }) {
   const driverB  = widget.driver_b
   const licoA    = (widget.drivers?.[0]?.likely_lift_and_coast_events ?? []).slice(0, 10)
   const clipA    = (widget.drivers?.[0]?.possible_clipping_windows   ?? []).slice(0, 8)
+  const f33SegA  = widget.clipping_segments_a ?? []
+  const totalClipA = widget.total_clipping_seconds_a
+  const budgetA = widget.clipping_budget_status_a
   const straights = widget.straight_breakdown ?? []
 
   if (!traceA.length) return null
@@ -118,6 +130,13 @@ export default function EnergyManagementWidget({ widget }) {
               style={{ background: ZONE_CLIP, border: `1px solid ${BORDER_CLIP}` }} />
             Clipping
           </span>
+          {f33SegA.length > 0 && (
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-2.5 w-4 rounded-sm opacity-80"
+                style={{ background: ZONE_F33, border: `1px solid ${BORDER_F33}` }} />
+              Clipping (deployment taper)
+            </span>
+          )}
         </div>
       </div>
       <p className="mb-2 text-xs text-muted-foreground">
@@ -131,8 +150,18 @@ export default function EnergyManagementWidget({ widget }) {
           traceA={traceA} traceB={traceB}
           licoA={licoA} clipA={clipA}
           driverA={driverA} driverB={driverB}
+          f33Segments={f33SegA}
         />
       </div>
+      {typeof totalClipA === 'number' && totalClipA > 0 && (
+        <p
+          className="mt-1 text-xs"
+          style={{ color: budgetA === 'above' ? 'rgb(217, 119, 6)' : 'hsl(var(--muted-foreground))' }}
+        >
+          Total clipping: {totalClipA.toFixed(2)} s vs 2-4 s super-clip budget
+          {budgetA === 'above' ? ' (above budget)' : ''}.
+        </p>
+      )}
 
       {/* Metrics comparison */}
       <div className="mt-1 grid gap-px bg-border/70 border-t border-border/70 sm:grid-cols-3">

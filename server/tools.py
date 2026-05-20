@@ -552,7 +552,8 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
     ),
     _tool(
         "get_telemetry_comparison",
-        "DEEP ANALYSIS PRIMITIVE. Overlay two drivers' telemetry traces aligned by distance.",
+        "DEEP ANALYSIS PRIMITIVE. Overlay two drivers' telemetry traces aligned by distance. "
+        "Deployment-curve-aware clipping segments are surfaced via analyze_energy_management (uses the 290/355 km/h MGU-K taper).",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
             "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},

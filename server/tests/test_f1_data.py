@@ -2227,8 +2227,17 @@ def test_analyze_energy_management_includes_speed_trace():
             for i in range(20)
         ]
     }
+    knowledge_stub = {
+        "deployment_curve": {
+            "standard": [
+                {"speed_kph": 290, "power_kw": 350},
+                {"speed_kph": 322, "power_kw": 175},
+                {"speed_kph": 355, "power_kw": 0},
+            ],
+        },
+    }
     with patch('f1_data.get_lap_telemetry', return_value=mock_telemetry), \
-         patch('f1_data.get_energy_2026_knowledge', return_value={}):
+         patch('f1_data.get_energy_2026_knowledge', return_value=knowledge_stub):
         result = f1_data.analyze_energy_management(4, "Q", "NOR")
     assert "speed_trace_a" in result
     assert isinstance(result["speed_trace_a"], list)
@@ -3282,3 +3291,111 @@ def test_telemetry_comparison_speed_units_are_kph():
     # delta_speed (kph - kph) stays small, NOT scaled to ~18 (5 kph * 3.6).
     deltas = [abs(s['delta_speed']) for s in result['comparison']]
     assert max(deltas) < 15
+
+
+class TestDetectClippingSignature:
+    def _build_trace(self, start_speed_kph, end_speed_kph, start_distance_m, end_distance_m, step_m=2.0, throttle=100):
+        speed_trace = []
+        throttle_trace = []
+        distance_trace = []
+        d = start_distance_m
+        if start_speed_kph == end_speed_kph or end_distance_m == start_distance_m:
+            slope = 0.0
+        else:
+            slope = (end_speed_kph - start_speed_kph) / (end_distance_m - start_distance_m)
+        while d <= end_distance_m:
+            speed = start_speed_kph + slope * (d - start_distance_m)
+            speed_trace.append(speed)
+            throttle_trace.append(throttle)
+            distance_trace.append(d)
+            d += step_m
+        return speed_trace, throttle_trace, distance_trace
+
+    def test_clean_trace_no_clipping(self):
+        # Smooth acceleration through 290-340 km/h with normal slope (~0.5 km/h per m near plateau).
+        # Reference slope at mid-speed (~315 km/h) is roughly half of max → ~0.5 km/h per m.
+        # We give an observed slope at ~0.55 km/h per m → no deficit.
+        speeds = []
+        throttles = []
+        distances = []
+        d = 0.0
+        speed = 290.0
+        while speed < 340.0:
+            speeds.append(speed)
+            throttles.append(100)
+            distances.append(d)
+            d += 2.0
+            ref = 1.0 - (speed - 290.0) / (355.0 - 290.0)
+            speed += ref * 2.0
+
+        result = f1_data.detect_clipping_signature(speeds, throttles, distances)
+        assert result["clipping_detected"] is False
+        assert result["segments"] == []
+        assert result["total_clipping_seconds"] == 0
+        assert result["detector_version"] == "f33-v1"
+
+    def test_clipped_trace_detected(self):
+        # Throttle pinned at 100% but speed flattens at 295 km/h for ~150 m.
+        speed_trace, throttle_trace, distance_trace = self._build_trace(
+            start_speed_kph=295.0, end_speed_kph=296.5,
+            start_distance_m=0.0, end_distance_m=200.0,
+            step_m=2.0, throttle=100,
+        )
+        result = f1_data.detect_clipping_signature(speed_trace, throttle_trace, distance_trace)
+        assert result["clipping_detected"] is True
+        assert len(result["segments"]) >= 1
+        assert any(seg["severity"] in {"moderate", "severe"} for seg in result["segments"])
+        assert result["total_clipping_seconds"] > 0.3
+
+    def test_thresholds_read_from_energy_2026(self):
+        from energy_2026 import get_energy_2026_knowledge
+        curve = get_energy_2026_knowledge()["deployment_curve"]["standard"]
+        sorted_anchors = sorted(curve, key=lambda a: a["speed_kph"])
+        expected_full = sorted_anchors[0]["speed_kph"]
+        expected_zero = sorted_anchors[-1]["speed_kph"]
+        # Build a trace just under expected_full → no taper-window samples → no detection
+        speed_trace, throttle_trace, distance_trace = self._build_trace(
+            start_speed_kph=expected_full - 20.0, end_speed_kph=expected_full - 10.0,
+            start_distance_m=0.0, end_distance_m=200.0, step_m=2.0, throttle=100,
+        )
+        result = f1_data.detect_clipping_signature(speed_trace, throttle_trace, distance_trace)
+        # Should NOT detect — outside taper window.
+        assert result["clipping_detected"] is False
+        # And verify by exposing the function-derived defaults: passing explicit thresholds matching
+        # energy_2026 should give same result as defaults.
+        result_explicit = f1_data.detect_clipping_signature(
+            speed_trace, throttle_trace, distance_trace,
+            full_power_below_kmh=expected_full, ramp_zero_at_kmh=expected_zero,
+        )
+        assert result_explicit["clipping_detected"] is False
+
+    def test_compare_drivers_clipping_matched_pair_returns_none(self):
+        sig = {"total_clipping_seconds": 0.5, "segments": [
+            {"start_distance_m": 100, "end_distance_m": 200, "duration_s": 0.5},
+        ]}
+        result = f1_data.compare_drivers_clipping(sig, sig, "NOR", "PIA")
+        assert result is None
+
+    def test_compare_drivers_clipping_asymmetric_pair(self):
+        sig_a = {"total_clipping_seconds": 0.6, "segments": [
+            {"start_distance_m": 1480, "end_distance_m": 1620, "duration_s": 0.6},
+        ]}
+        sig_b = {"total_clipping_seconds": 0.1, "segments": []}
+        result = f1_data.compare_drivers_clipping(sig_a, sig_b, "NOR", "PIA")
+        assert result is not None
+        assert result["clipping_driver"] == "NOR"
+        assert result["faster_driver"] == "PIA"
+        assert result["delta_seconds"] >= 0.2
+        assert "NOR" in result["phrase"]
+        assert result["segment_reference"]["start_distance_m"] == 1480
+
+    def test_short_segment_excluded(self):
+        # Flat clipping span ~30 m — below default 80 m minimum, should be excluded.
+        speed_trace, throttle_trace, distance_trace = self._build_trace(
+            start_speed_kph=295.0, end_speed_kph=295.2,
+            start_distance_m=0.0, end_distance_m=30.0,
+            step_m=2.0, throttle=100,
+        )
+        result = f1_data.detect_clipping_signature(speed_trace, throttle_trace, distance_trace)
+        assert result["clipping_detected"] is False
+        assert result["segments"] == []
