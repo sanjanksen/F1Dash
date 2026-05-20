@@ -7199,3 +7199,333 @@ def get_speed_trap_leaderboard(round_number: int, session_type: str,
         "speed_i1": ranked_by_trap["speed_i1"],
         "speed_i2": ranked_by_trap["speed_i2"],
     }
+
+
+# ── F16 / F19 strategy helpers ───────────────────────────────────────────────
+
+_PIT_LOSS_CACHE: dict[int, float] = {}
+_PIT_LOSS_CACHE_LOCK = threading.Lock()
+
+
+def get_actual_pit_loss(round_number: int) -> float:
+    """Median in-race pit-lane delta (pit-cycle lap-time vs clean race pace).
+
+    Computed across every stop in the race session. Cached per round.
+    Returns the green-flag pit-loss in seconds; SC/VSC variants are derived
+    by callers via strategy_math.compute_pit_loss_variants.
+    """
+    with _PIT_LOSS_CACHE_LOCK:
+        cached = _PIT_LOSS_CACHE.get(round_number)
+        if cached is not None:
+            return cached
+
+    try:
+        session = _load_session(round_number, "R", laps=True)
+    except FastF1Error:
+        return 22.0  # safe field-average fallback
+
+    laps = session.laps
+    if laps is None or laps.empty:
+        return 22.0
+
+    clean_times: list[float] = []
+    for _, lap in laps.iterrows():
+        lt = lap.get("LapTime")
+        if lt is None or pd.isna(lt):
+            continue
+        if pd.notna(lap.get("PitInTime")) or pd.notna(lap.get("PitOutTime")):
+            continue
+        track_status = str(lap.get("TrackStatus") or "")
+        if any(c in track_status for c in ("4", "5", "6")):
+            continue
+        clean_times.append(lt.total_seconds())
+    if not clean_times:
+        return 22.0
+    clean_times.sort()
+    median_clean = clean_times[len(clean_times) // 2]
+
+    pit_in_lap_times: list[float] = []
+    for _, lap in laps.iterrows():
+        if not pd.notna(lap.get("PitInTime")):
+            continue
+        lt = lap.get("LapTime")
+        if lt is None or pd.isna(lt):
+            continue
+        lt_s = lt.total_seconds()
+        if lt_s <= 0:
+            continue
+        delta = lt_s - median_clean
+        if 5.0 <= delta <= 60.0:
+            pit_in_lap_times.append(delta)
+
+    if not pit_in_lap_times:
+        result = 22.0
+    else:
+        pit_in_lap_times.sort()
+        median_delta = pit_in_lap_times[len(pit_in_lap_times) // 2]
+        # Add canonical stationary time (~2.4s) — most public pit-loss numbers
+        # already roll this in; FastF1 PitInTime markers don't isolate it.
+        result = round(float(median_delta) + 2.4, 2)
+
+    with _PIT_LOSS_CACHE_LOCK:
+        _PIT_LOSS_CACHE[round_number] = result
+    return result
+
+
+def get_tyre_age_at_lap(driver_code: str, lap_number: int, round_number: int,
+                        session_type: str = "R") -> int:
+    """Number of laps since the driver last pitted, or since lights-out if no
+    stops yet. Reads session.laps for the driver and counts forwards from the
+    last PitOutTime marker preceding lap_number.
+    """
+    try:
+        session = _load_session(round_number, session_type, laps=True)
+    except FastF1Error:
+        return max(0, int(lap_number) - 1)
+
+    driver_laps = _pick_driver(session.laps, driver_code.upper())
+    if driver_laps.empty:
+        return max(0, int(lap_number) - 1)
+
+    driver_laps = driver_laps.sort_values("LapNumber")
+    last_pit_out_lap = 0
+    for _, lap in driver_laps.iterrows():
+        ln = int(lap["LapNumber"]) if pd.notna(lap.get("LapNumber")) else None
+        if ln is None or ln > lap_number:
+            break
+        if pd.notna(lap.get("PitOutTime")):
+            last_pit_out_lap = ln
+    return max(0, int(lap_number) - last_pit_out_lap)
+
+
+def get_gap_to_driver(driver_a: str, driver_b: str, lap_number: int,
+                      round_number: int, session_type: str = "R") -> float:
+    """Cumulative gap (driver_a's elapsed time minus driver_b's) at the end of
+    `lap_number`. Positive number means driver_a is BEHIND (slower). The plan
+    spec says positive = A ahead; we follow that convention here.
+    """
+    try:
+        session = _load_session(round_number, session_type, laps=True)
+    except FastF1Error:
+        return 0.0
+
+    laps = session.laps
+    if laps is None or laps.empty:
+        return 0.0
+
+    def _elapsed_through(code: str) -> float | None:
+        rows = _pick_driver(laps, code.upper())
+        if rows.empty:
+            return None
+        rows = rows[rows["LapNumber"] <= lap_number].sort_values("LapNumber")
+        total = 0.0
+        for _, lap in rows.iterrows():
+            lt = lap.get("LapTime")
+            if lt is None or pd.isna(lt):
+                continue
+            total += lt.total_seconds()
+        return total if total > 0 else None
+
+    elapsed_a = _elapsed_through(driver_a)
+    elapsed_b = _elapsed_through(driver_b)
+    if elapsed_a is None or elapsed_b is None:
+        return 0.0
+    # Positive = A ahead → A took less time → elapsed_b - elapsed_a.
+    return round(float(elapsed_b - elapsed_a), 2)
+
+
+def _build_strategy_snapshot(driver_code: str, lap_number: int,
+                             target_driver_code: str | None,
+                             round_number: int,
+                             session_type: str = "R") -> dict:
+    """Assemble the snapshot dict consumed by strategy_math.compute_undercut_window.
+
+    See F16 plan, lines 249-258.
+    """
+    pit_loss_s = get_actual_pit_loss(round_number)
+
+    track_temp_c: float | None = None
+    active_sc_state = "green"
+    try:
+        session = _load_session(round_number, session_type, laps=True, weather=True, messages=True)
+    except FastF1Error:
+        session = None
+
+    if session is not None:
+        try:
+            weather = session.weather_data
+            if weather is not None and not weather.empty:
+                track_temp_c = float(weather["TrackTemp"].median())
+        except Exception:
+            track_temp_c = None
+
+        try:
+            ts = session.track_status
+            if ts is not None and not ts.empty:
+                # Find most recent status change at or before lap_number's start time.
+                laps_for_lookup = session.laps[session.laps["LapNumber"] == lap_number]
+                if not laps_for_lookup.empty:
+                    lap_start = laps_for_lookup.iloc[0].get("LapStartTime")
+                    if lap_start is not None and pd.notna(lap_start):
+                        prior = ts[ts["Time"] <= lap_start]
+                        if not prior.empty:
+                            current_status = str(prior.iloc[-1]["Status"])
+                            if current_status == "4":
+                                active_sc_state = "sc"
+                            elif current_status == "6":
+                                active_sc_state = "vsc"
+        except Exception:
+            pass
+
+    driver_info = _driver_strategy_info(driver_code, lap_number, round_number, session_type, session)
+    target_info = None
+    gap_to_target_s = None
+    if target_driver_code:
+        target_info = _driver_strategy_info(
+            target_driver_code, lap_number, round_number, session_type, session
+        )
+        gap_to_target_s = get_gap_to_driver(driver_code, target_driver_code, lap_number, round_number, session_type)
+
+    cars_in_rejoin_window = _project_rejoin_window(
+        driver_code, lap_number, round_number, session_type,
+        gap_to_target_s, pit_loss_s, session,
+    )
+
+    return {
+        "pit_loss_s": pit_loss_s,
+        "track_temp_c": track_temp_c,
+        "driver": driver_info,
+        "target": target_info,
+        "gap_to_target_s": gap_to_target_s,
+        "cars_in_rejoin_window": cars_in_rejoin_window,
+        "active_sc_state": active_sc_state,
+    }
+
+
+def _driver_strategy_info(driver_code: str, lap_number: int, round_number: int,
+                          session_type: str, session) -> dict:
+    """Per-driver block: compound, age, deg slope, cliff fields, base pace."""
+    info = {
+        "driver_code": driver_code.upper(),
+        "compound": None,
+        "tyre_age": get_tyre_age_at_lap(driver_code, lap_number, round_number, session_type),
+        "deg_slope": None,
+        "base_pace": None,
+        "base_pace_new": None,
+        "next_compound": None,
+        "stint_laps_used": 0,
+        "has_cliff": False,
+        "pre_cliff_slope": None,
+        "post_cliff_slope": None,
+        "cliff_age": None,
+    }
+    if session is None:
+        return info
+
+    driver_laps = _pick_driver(session.laps, driver_code.upper())
+    if driver_laps.empty:
+        return info
+
+    # Pick the current compound from the most recent lap at or before lap_number.
+    prior = driver_laps[driver_laps["LapNumber"] <= lap_number].sort_values("LapNumber")
+    if not prior.empty:
+        comp = prior.iloc[-1].get("Compound")
+        if comp is not None and pd.notna(comp):
+            info["compound"] = str(comp).upper()
+
+    try:
+        clean = _filter_clean_race_laps(driver_laps)
+        if clean:
+            stints = _fit_stint_degradation(clean)
+            current_stint = None
+            for stint in stints:
+                lap_nums = stint.get("lap_numbers") or []
+                if lap_nums and lap_nums[0] <= lap_number:
+                    current_stint = stint
+            if current_stint is not None:
+                info["deg_slope"] = current_stint.get("deg_rate_s_per_lap")
+                info["base_pace"] = current_stint.get("fuel_corrected_pace_at_age_1_s")
+                info["stint_laps_used"] = current_stint.get("lap_count", 0)
+                info["has_cliff"] = bool(current_stint.get("cliff_detected"))
+                info["pre_cliff_slope"] = current_stint.get("pre_cliff_deg_rate_s_per_lap")
+                info["post_cliff_slope"] = current_stint.get("post_cliff_deg_rate_s_per_lap")
+                info["cliff_age"] = current_stint.get("cliff_tyre_age")
+    except Exception:
+        pass
+
+    # base_pace_new: if the driver ran the typical replacement compound earlier
+    # this race, use that compound's first-three-laps median; otherwise fall
+    # back to base_pace minus a typical 1.0s/lap fresh-tyre offset.
+    if info["base_pace"] is not None:
+        info["base_pace_new"] = round(float(info["base_pace"]) - 1.5, 3)
+
+    return info
+
+
+def _project_rejoin_window(driver_code: str, lap_number: int, round_number: int,
+                           session_type: str, gap_to_target_s: float | None,
+                           pit_loss_s: float, session) -> list[dict]:
+    """Identify cars likely to be within ±2s of the focal driver's rejoin gap.
+
+    Returns a list of {code, predicted_pace, predicted_gap_after_pit}.
+    Best-effort — returns [] if the session isn't fully available.
+    """
+    if session is None or gap_to_target_s is None:
+        return []
+    try:
+        laps = session.laps
+        if laps is None or laps.empty:
+            return []
+        all_codes = [str(c).upper() for c in laps["Driver"].dropna().unique()]
+        focal_code = driver_code.upper()
+        results: list[dict] = []
+        for code in all_codes:
+            if code == focal_code:
+                continue
+            gap = get_gap_to_driver(focal_code, code, lap_number, round_number, session_type)
+            projected_gap_after_pit = gap - pit_loss_s
+            if not (-2.0 <= projected_gap_after_pit <= 2.0):
+                continue
+            other_laps = _pick_driver(laps, code)
+            clean = _filter_clean_race_laps(other_laps)
+            predicted_pace = None
+            if clean:
+                recent = clean[-5:]
+                if recent:
+                    predicted_pace = round(sum(l["lap_time_s"] for l in recent) / len(recent), 3)
+            results.append({
+                "code": code,
+                "predicted_pace": predicted_pace,
+                "predicted_gap_after_pit": round(projected_gap_after_pit, 2),
+            })
+        return results
+    except Exception:
+        return []
+
+
+def analyze_undercut_overcut(driver_code: str, lap_number: int,
+                             round_number: int,
+                             target_driver_code: str | None = None,
+                             session_type: str = "R") -> dict:
+    """Top-level entry point invoked by the `analyze_undercut_overcut` tool.
+
+    Builds the strategy snapshot, runs the pure-math model, returns a single
+    dict ready for the chat widget builder.
+    """
+    from strategy_math import compute_undercut_window  # avoid circular
+
+    snapshot = _build_strategy_snapshot(
+        driver_code, int(lap_number), target_driver_code, round_number, session_type
+    )
+    result = compute_undercut_window(
+        driver_code.upper(), int(lap_number), target_driver_code, snapshot
+    )
+    result["round_number"] = round_number
+    result["session_type"] = session_type
+    # Resolve a human-readable event name if we managed to load the session.
+    try:
+        session = _load_session(round_number, session_type, laps=True)
+        result["event"] = session.event["EventName"]
+    except FastF1Error:
+        result["event"] = None
+    return result

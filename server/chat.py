@@ -435,6 +435,32 @@ def _make_active_aero_widget(result: dict) -> dict:
     }
 
 
+def _make_undercut_overcut_widget(result: dict) -> dict:
+    """Map an analyze_undercut_overcut tool result to a UI widget dict."""
+    return {
+        "type": "undercut_overcut",
+        "driver_code": result.get("driver_code"),
+        "target_driver_code": result.get("target_driver_code"),
+        "current_lap": result.get("current_lap"),
+        "event": result.get("event"),
+        "round_number": result.get("round_number"),
+        "session_type": result.get("session_type"),
+        "advantage_s": result.get("advantage_s"),
+        "crossover_lap": result.get("crossover_lap"),
+        "recommendation": result.get("recommendation"),
+        "confidence": result.get("confidence"),
+        "active_sc_state": result.get("active_sc_state"),
+        "pit_loss_s": result.get("pit_loss_s"),
+        "pit_loss_green_s": result.get("pit_loss_green_s"),
+        "delta_fresh_pace_s_per_lap": result.get("delta_fresh_pace_s_per_lap"),
+        "out_lap_warmup_s": result.get("out_lap_warmup_s"),
+        "traffic_cost_s": result.get("traffic_cost_s"),
+        "advantage_by_rejoin_lap": result.get("advantage_by_rejoin_lap") or [],
+        "rationale": result.get("rationale") or [],
+        "inputs_summary": result.get("inputs_summary") or {},
+    }
+
+
 def _widgets_from_preloaded(preloaded: dict | None) -> list[dict]:
     if not preloaded or "result" not in preloaded:
         return []
@@ -508,6 +534,8 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
                 widgets.append(w)
         elif tool == "analyze_active_aero_usage":
             widgets.append(_make_active_aero_widget(item["result"]))
+        elif tool == "analyze_undercut_overcut":
+            widgets.append(_make_undercut_overcut_widget(item["result"]))
 
     # Standalone corner_analysis widget: when cornering loads were run but there's no
     # qualifying_battle widget to embed grip_commitment into (pure grip comparison query).
@@ -883,6 +911,7 @@ Guidelines:
 - When `clipping_segments_a` or `clipping_segments_b` are non-empty on an energy_management or race_pace_battle result, mention the affected driver and the `total_clipping_seconds_*` value in one sentence (e.g., "Norris spent 0.6 s/lap clipping on the main straight"). Do not enumerate every segment — the widget already shows them.
 - When narrating 2026-season overtakes, only claim override-mode use when `total_override_seconds > 0.5` for the lap, as returned by `analyze_override_usage` or surfaced via a race-story event. Do not claim override use without that evidence — the 1-second-gap trigger is required, and a coarse speed-trace inspection alone can be misleading.
 - When summarising active-aero (Z-mode) usage from `analyze_active_aero_usage` results, always state whether `inferred=True`. If inferred, prefix with "Estimated from speed-trace shape" or "Likely" rather than asserting Z-mode use. Only quote `total_z_mode_seconds` when `circuit_in_coverage=True`. If `circuit_in_coverage=False`, say the circuit isn't yet in the aero-zone coverage.
+- When the user asks whether a driver should have pitted, or whether the undercut/overcut was available, invoke `analyze_undercut_overcut` before answering. Never estimate undercut viability from race-pace data alone. If the tool reports `recommendation == "marginal"` or `confidence == "low"`, explicitly say so in the answer. If `active_sc_state` is `vsc` or `sc`, mention that pit-loss is reduced. Forbidden: invoking this tool for general pace comparisons or for races where the user has not raised a strategy decision — use `analyze_race_pace_battle` instead.
 
 Answer quality rules:
 - Lead with the number or the fact. "Russell finished P3, 8 seconds off the lead" beats "Russell had a solid race finishing in the top 3".

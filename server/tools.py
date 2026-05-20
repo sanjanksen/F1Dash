@@ -23,6 +23,7 @@ from f1_data import (
     analyze_team_circuit_fit,
     analyze_team_performance,
     analyze_team_telemetry_traits,
+    analyze_undercut_overcut,
     compare_corner_profiles,
     extract_corner_profiles,
     get_circuit_corners,
@@ -420,6 +421,24 @@ PRIMITIVE_TOOL_DEFINITIONS = [
             "fp_number": {"type": "integer", "description": "Free practice number: 1, 2, or 3."},
         },
         ["round_number", "fp_number"],
+    ),
+    _tool(
+        "analyze_undercut_overcut",
+        (
+            "PRIMITIVE TOOL. Quantitative undercut/overcut calculator. Use whenever the user "
+            "asks 'should X have pitted', 'was the undercut on', 'would the overcut have worked', "
+            "or any variant of 'should they pit now'. Returns advantage in seconds, crossover lap, "
+            "and a pit_now/stay_out/marginal recommendation. "
+            "Do NOT use this for general race-pace questions — use analyze_race_pace_battle."
+        ),
+        {
+            "driver_code": {"type": "string", "description": "3-letter driver code making the strategic decision."},
+            "lap_number": {"type": "integer", "description": "Lap of the strategic decision."},
+            "target_driver_code": {"type": "string", "description": "Optional. The car the undercut is being attempted on. Omit for general 'should they pit' analysis."},
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "session_type": {"type": "string", "description": "Defaults to R."},
+        },
+        ["driver_code", "lap_number"],
     ),
     _tool(
         "get_speed_trap_leaderboard",
@@ -1059,6 +1078,23 @@ def execute_tool(name: str, args: dict):
     if name == "get_fp_summary":
         _require_args(args, ["round_number", "fp_number"], name)
         return get_fp_summary(args["round_number"], args["fp_number"])
+    if name == "analyze_undercut_overcut":
+        _require_args(args, ["driver_code", "lap_number"], name)
+        round_number = args.get("round_number")
+        if round_number is None:
+            from f1_data import CURRENT_YEAR  # noqa: F401  (use as fallback)
+            circuits = get_circuits()
+            if circuits:
+                round_number = circuits[-1].get("round")
+        if round_number is None:
+            raise ValueError("analyze_undercut_overcut requires round_number when no schedule is available.")
+        return analyze_undercut_overcut(
+            args["driver_code"],
+            args["lap_number"],
+            int(round_number),
+            args.get("target_driver_code"),
+            args.get("session_type", "R"),
+        )
     if name == "get_speed_trap_leaderboard":
         _require_args(args, ["round_number", "session_type"], name)
         return get_speed_trap_leaderboard(

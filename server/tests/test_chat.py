@@ -1077,3 +1077,52 @@ def test_system_prompt_mentions_clipping_callout_handling():
 
     assert "clipping_callout" in chat.SYSTEM_PROMPT
     assert "clipping_callout" in chat.ANALYSIS_SYSTEM_PROMPT
+
+
+def test_make_undercut_overcut_widget_maps_all_fields():
+    """_make_undercut_overcut_widget passes strategy_math output to a typed widget dict."""
+    import chat as chat_module
+    result = {
+        "driver_code": "NOR",
+        "current_lap": 25,
+        "target_driver_code": "VER",
+        "advantage_s": -32.7,
+        "crossover_lap": None,
+        "recommendation": "stay_out",
+        "confidence": "high",
+        "active_sc_state": "green",
+        "pit_loss_s": 28.0,
+        "pit_loss_green_s": 28.0,
+        "delta_fresh_pace_s_per_lap": 1.02,
+        "out_lap_warmup_s": 1.2,
+        "traffic_cost_s": 4.5,
+        "advantage_by_rejoin_lap": [{"n": 1, "advantage_s": -32.7, "traffic_cost_s": 4.5}],
+        "rationale": ["Pit-loss too large to recover."],
+        "inputs_summary": {"track_temp_c": 31.0, "current_compound": "MEDIUM"},
+        "round_number": 17,
+        "session_type": "R",
+        "event": "Singapore Grand Prix",
+    }
+    widget = chat_module._make_undercut_overcut_widget(result)
+    assert widget["type"] == "undercut_overcut"
+    assert widget["driver_code"] == "NOR"
+    assert widget["target_driver_code"] == "VER"
+    assert widget["current_lap"] == 25
+    assert widget["recommendation"] == "stay_out"
+    assert widget["confidence"] == "high"
+    assert widget["advantage_s"] == -32.7
+    assert widget["pit_loss_s"] == 28.0
+    assert widget["delta_fresh_pace_s_per_lap"] == 1.02
+    assert widget["out_lap_warmup_s"] == 1.2
+    assert widget["traffic_cost_s"] == 4.5
+    assert widget["rationale"] == ["Pit-loss too large to recover."]
+    assert widget["inputs_summary"]["current_compound"] == "MEDIUM"
+    assert widget["event"] == "Singapore Grand Prix"
+    assert widget["advantage_by_rejoin_lap"][0]["n"] == 1
+
+
+def test_system_prompt_mentions_analyze_undercut_overcut():
+    """SYSTEM_PROMPT must instruct the LLM to invoke analyze_undercut_overcut for pit decisions."""
+    import chat
+
+    assert "analyze_undercut_overcut" in chat.SYSTEM_PROMPT
