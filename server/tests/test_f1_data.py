@@ -3187,3 +3187,98 @@ def test_get_lap_telemetry_returns_unavailable_on_fastf1_error(monkeypatch):
         "round_number": 2,
         "session_type": "Q",
     }
+
+
+def _make_high_speed_telemetry(n_points=50, circuit_length_m=5000, peak_kph=340.0):
+    """Telemetry where Speed channel ranges up into realistic F1 kph (300-340)."""
+    distances = [i * circuit_length_m / n_points for i in range(n_points)]
+    # Speed sweeps 150 -> peak -> 150 (kph; FastF1 native unit).
+    speeds = [150.0 + (peak_kph - 150.0) * (1 - abs(i / (n_points - 1) - 0.5) * 2) for i in range(n_points)]
+    return pd.DataFrame({
+        'Distance': distances,
+        'Speed': speeds,
+        'Throttle': [100.0 if i > 10 else 0.0 for i in range(n_points)],
+        'Brake': [i <= 10 for i in range(n_points)],
+        'nGear': [8 if i > 10 else 4 for i in range(n_points)],
+        'DRS': [12 if i > 30 else 0 for i in range(n_points)],
+    })
+
+
+def test_get_lap_telemetry_emits_kph_not_ms():
+    nor_lap = _make_mock_fastest_lap("NOR")
+    mock_session = _make_mock_session({"NOR": nor_lap})
+    mock_tel = _make_high_speed_telemetry(n_points=50, circuit_length_m=3300, peak_kph=340.0)
+
+    mock_lap_obj = MagicMock()
+    mock_lap_obj.__getitem__.side_effect = lambda k: nor_lap[k]
+    mock_lap_obj.get.side_effect = lambda k, d=None: nor_lap.get(k, d)
+    mock_lap_obj.get_telemetry.return_value.add_distance.return_value = mock_tel
+
+    def pick_driver_tel(codes):
+        m = MagicMock()
+        m.empty = False
+        m.pick_fastest.return_value = mock_lap_obj
+        return m
+
+    mock_session.laps.pick_drivers.side_effect = pick_driver_tel
+
+    with patch('f1_data.fastf1.get_session', return_value=mock_session):
+        result = f1_data.get_lap_telemetry(8, 'Q', 'NOR')
+
+    # FastF1 Speed is already kph: passing 340 kph through should NOT come out as ~94 (m/s) or ~1224 (double-converted).
+    assert 300 <= result['max_speed_kph'] <= 360
+    sample_max = max(s['speed_kph'] for s in result['telemetry'])
+    assert 300 <= sample_max <= 360
+
+
+def test_telemetry_comparison_speed_units_are_kph():
+    nor_lap_series = _make_mock_fastest_lap("NOR")
+    lec_lap_series = _make_mock_fastest_lap("LEC", "Ferrari")
+
+    # Both drivers at high realistic F1 speeds.
+    def _hi_tel(boost):
+        n = 6
+        distances = [i * 500 / (n - 1) for i in range(n)]
+        return pd.DataFrame({
+            'Distance': distances,
+            'Speed': [300.0 + boost + i * 5 for i in range(n)],
+            'Throttle': [50.0 + i * 5 for i in range(n)],
+            'Brake': [i == 0 for i in range(n)],
+            'nGear': [4 + min(i, 4) for i in range(n)],
+            'DRS': [12 if i > 3 else 0 for i in range(n)],
+            'X': [float(i * 10) for i in range(n)],
+            'Y': [float((i % 3) * 8) for i in range(n)],
+        })
+
+    tel_nor = _hi_tel(boost=5.0)
+    tel_lec = _hi_tel(boost=0.0)
+
+    mock_lap_nor = MagicMock()
+    mock_lap_nor.__getitem__.side_effect = lambda k: nor_lap_series[k]
+    mock_lap_nor.get.side_effect = lambda k, d=None: nor_lap_series.get(k, d)
+    mock_lap_nor.get_telemetry.return_value.add_distance.return_value = tel_nor
+
+    mock_lap_lec = MagicMock()
+    mock_lap_lec.__getitem__.side_effect = lambda k: lec_lap_series[k]
+    mock_lap_lec.get.side_effect = lambda k, d=None: lec_lap_series.get(k, d)
+    mock_lap_lec.get_telemetry.return_value.add_distance.return_value = tel_lec
+
+    def pick_driver_tel(codes):
+        code = codes[0] if isinstance(codes, list) else codes
+        m = MagicMock()
+        m.empty = False
+        m.pick_fastest.return_value = mock_lap_nor if code.upper() == "NOR" else mock_lap_lec
+        return m
+
+    mock_session = MagicMock()
+    mock_session.event = {'EventName': 'Monaco Grand Prix'}
+    mock_session.laps.pick_drivers.side_effect = pick_driver_tel
+
+    with patch('f1_data.fastf1.get_session', return_value=mock_session):
+        result = f1_data.get_telemetry_comparison(8, 'Q', 'NOR', 'LEC')
+
+    speeds = [s['speed_a'] for s in result['comparison']] + [s['speed_b'] for s in result['comparison']]
+    assert all(280 <= v <= 360 for v in speeds), f"Speeds not in kph range: {speeds}"
+    # delta_speed (kph - kph) stays small, NOT scaled to ~18 (5 kph * 3.6).
+    deltas = [abs(s['delta_speed']) for s in result['comparison']]
+    assert max(deltas) < 15

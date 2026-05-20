@@ -13,6 +13,7 @@ from scipy.signal import savgol_filter
 from energy_2026 import get_energy_2026_knowledge
 from driver_styles import get_comparison_framing
 from circuit_profiles import get_circuit_profile
+from units import kph_to_ms
 
 # Enable FastF1 disk cache
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), 'cache')
@@ -2107,8 +2108,8 @@ def _compute_energy_metrics(
             continue
         half_window_m = ((c.get("end_distance_m") or 0) - (c.get("start_distance_m") or 0)) / 2
         avg_speed_kph = c.get("mid_speed_kph") or 300
-        avg_speed_ms = max(avg_speed_kph / 3.6, 1.0)
-        drop_ms = abs(drop_kph) / 3.6
+        avg_speed_ms = max(kph_to_ms(avg_speed_kph), 1.0)
+        drop_ms = kph_to_ms(abs(drop_kph))
         est_time_lost += (drop_ms * half_window_m) / (avg_speed_ms ** 2)
 
     lico_count = len(lico_events)
@@ -5293,7 +5294,7 @@ def _compute_lateral_g(tel: pd.DataFrame) -> np.ndarray:
     # Interpolate kappa back to the full telemetry grid
     kappa_full = np.interp(s_full, s_u, kappa)
 
-    v_mps = v_full / 3.6
+    v_mps = kph_to_ms(v_full)
     lat_g_raw = (v_mps**2) * kappa_full / 9.81
     lat_g_raw = np.clip(lat_g_raw, 0.0, 6.0)
 
@@ -5317,7 +5318,7 @@ def _compute_longitudinal_g(tel: pd.DataFrame) -> np.ndarray:
     if 'Time' not in tel.columns or 'Speed' not in tel.columns or n < 3:
         return np.zeros(n)
 
-    v_mps = tel['Speed'].to_numpy(dtype=float) / 3.6
+    v_mps = kph_to_ms(tel['Speed'].to_numpy(dtype=float))
     t_s = tel['Time'].dt.total_seconds().to_numpy(dtype=float)
 
     if not np.all(np.diff(t_s) >= 0):
