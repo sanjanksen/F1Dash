@@ -3612,6 +3612,88 @@ class TestDetectClippingSignature:
         assert result["segments"] == []
 
 
+class TestDetectOverrideMode:
+    def _build_trace(self, start_speed, end_speed, start_distance=0.0, end_distance=200.0, step_m=2.0, throttle=100, brake=False):
+        samples = []
+        d = start_distance
+        if end_distance == start_distance:
+            slope = 0.0
+        else:
+            slope = (end_speed - start_speed) / (end_distance - start_distance)
+        while d <= end_distance:
+            samples.append({
+                "distance_m": d,
+                "speed_kph": start_speed + slope * (d - start_distance),
+                "throttle_pct": throttle,
+                "brake": brake,
+            })
+            d += step_m
+        return samples
+
+    def test_no_override_when_gap_too_large(self):
+        samples = self._build_trace(start_speed=295.0, end_speed=325.0, end_distance=200.0)
+        gap_trace = [3.0] * len(samples)
+        result = f1_data.detect_override_mode(samples, gap_trace)
+        assert result["override_detected"] is False
+        assert result["segments"] == []
+        assert result["detector_version"] == "f32-v1"
+
+    def test_override_detected_when_gap_under_1s(self):
+        # Linear acceleration 290.5 → 336 km/h over 45.5m at 1.0 km/h per m.
+        # Mid-speed ≈ 313 km/h, reference (normalized) ≈ 0.65, so ratio ≈ 1.54 — clears threshold.
+        samples = []
+        d = 0.0
+        speed = 290.5
+        step = 1.0
+        while speed <= 336.0:
+            samples.append({"distance_m": d, "speed_kph": speed, "throttle_pct": 100, "brake": False})
+            speed += 1.0
+            d += step
+        gap_trace = [0.6] * len(samples)
+        result = f1_data.detect_override_mode(samples, gap_trace)
+        assert result["override_detected"] is True
+        assert len(result["segments"]) >= 1
+        peak = max(seg["peak_speed_kph"] for seg in result["segments"])
+        assert peak > 310
+        assert result["total_override_seconds"] > 0
+
+    def test_thresholds_read_from_energy_2026(self):
+        from energy_2026 import get_energy_2026_knowledge
+        knowledge = get_energy_2026_knowledge()
+        standard_curve = sorted(knowledge["deployment_curve"]["standard"], key=lambda a: a["speed_kph"])
+        override_curve = sorted(knowledge["override_mode"]["curve"], key=lambda a: a["speed_kph"])
+        expected_full = float(standard_curve[0]["speed_kph"])
+        expected_override = float(override_curve[0]["speed_kph"])
+
+        full_default, override_default = f1_data._override_curve_thresholds()
+        assert full_default == expected_full
+        assert override_default == expected_override
+
+    def test_short_segment_excluded(self):
+        samples = self._build_trace(start_speed=295.0, end_speed=305.0, end_distance=30.0)
+        gap_trace = [0.5] * len(samples)
+        result = f1_data.detect_override_mode(samples, gap_trace)
+        assert result["override_detected"] is False
+        assert result["segments"] == []
+
+    def test_brake_application_breaks_segment(self):
+        first = self._build_trace(start_speed=295.0, end_speed=315.0, start_distance=0.0, end_distance=100.0)
+        brake_block = self._build_trace(start_speed=315.0, end_speed=300.0, start_distance=102.0, end_distance=140.0, brake=True)
+        second = self._build_trace(start_speed=300.0, end_speed=320.0, start_distance=142.0, end_distance=260.0)
+        samples = first + brake_block + second
+        gap_trace = [0.5] * len(samples)
+        result = f1_data.detect_override_mode(samples, gap_trace)
+        for seg in result["segments"]:
+            assert not (seg["start_distance_m"] < 100 and seg["end_distance_m"] > 142)
+
+    def test_segment_below_290_excluded(self):
+        samples = self._build_trace(start_speed=240.0, end_speed=280.0, end_distance=200.0)
+        gap_trace = [0.5] * len(samples)
+        result = f1_data.detect_override_mode(samples, gap_trace)
+        assert result["override_detected"] is False
+        assert result["segments"] == []
+
+
 def test_analyze_race_pace_battle_includes_clipping_signature():
     """analyze_race_pace_battle must surface clipping signatures and comparison."""
     mock_session = MagicMock()
