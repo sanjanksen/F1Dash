@@ -180,3 +180,92 @@ def test_get_pit_stops_skips_rows_without_lap_number():
          patch.object(openf1, '_openf1_get', return_value=rows):
         result = openf1.get_pit_stops(1)
     assert result == []
+
+
+class _FakeHTTPError(Exception):
+    def __init__(self, msg, response=None):
+        super().__init__(msg)
+        self.response = response
+
+
+class _FakeTimeout(Exception):
+    pass
+
+
+class _FakeConnectionError(Exception):
+    pass
+
+
+def _install_fake_requests():
+    """Replace openf1.requests with a fake module exposing real exception classes."""
+    fake = MagicMock()
+    fake.HTTPError = _FakeHTTPError
+    fake.Timeout = _FakeTimeout
+    fake.ConnectionError = _FakeConnectionError
+    return fake
+
+
+def _make_response(status_code: int, payload=None):
+    resp = MagicMock()
+    resp.status_code = status_code
+    if status_code >= 400:
+        def _raise():
+            raise _FakeHTTPError(f"{status_code} error", response=resp)
+        resp.raise_for_status.side_effect = _raise
+    else:
+        resp.raise_for_status.return_value = None
+    resp.json.return_value = payload if payload is not None else []
+    return resp
+
+
+def test_get_retries_on_502():
+    fake_requests = _install_fake_requests()
+    fake_requests.get.side_effect = [_make_response(502), _make_response(502), _make_response(200, [{"ok": True}])]
+    with patch.object(openf1, "requests", fake_requests), \
+         patch.object(openf1.time, "sleep") as mock_sleep:
+        result = openf1._openf1_get("sessions", year=2026)
+    assert result == [{"ok": True}]
+    assert fake_requests.get.call_count == 3
+    assert mock_sleep.call_count == 2
+
+
+def test_get_does_not_retry_404():
+    fake_requests = _install_fake_requests()
+    fake_requests.get.side_effect = [_make_response(404)]
+    with patch.object(openf1, "requests", fake_requests), \
+         patch.object(openf1.time, "sleep"):
+        try:
+            openf1._openf1_get("team_radio")
+        except _FakeHTTPError:
+            pass
+        else:
+            raise AssertionError("Expected HTTPError")
+    assert fake_requests.get.call_count == 1
+
+
+def test_get_does_not_retry_401():
+    fake_requests = _install_fake_requests()
+    fake_requests.get.side_effect = [_make_response(401)]
+    with patch.object(openf1, "requests", fake_requests), \
+         patch.object(openf1.time, "sleep"):
+        try:
+            openf1._openf1_get("sessions")
+        except _FakeHTTPError:
+            pass
+        else:
+            raise AssertionError("Expected HTTPError")
+    assert fake_requests.get.call_count == 1
+
+
+def test_get_propagates_after_three_failures():
+    fake_requests = _install_fake_requests()
+    fake_requests.get.side_effect = [_make_response(503), _make_response(503), _make_response(503)]
+    with patch.object(openf1, "requests", fake_requests), \
+         patch.object(openf1.time, "sleep"):
+        try:
+            openf1._openf1_get("sessions")
+        except _FakeHTTPError as exc:
+            assert "503" in str(exc)
+        else:
+            raise AssertionError("Expected HTTPError")
+    assert fake_requests.get.call_count == 3
