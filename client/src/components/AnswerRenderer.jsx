@@ -10,6 +10,7 @@ import PitStopStrategyWidget from './chat-widgets/PitStopStrategyWidget.jsx'
 import DegTrendChart from './chat-widgets/DegTrendChart.jsx'
 import EnergyManagementWidget from './chat-widgets/EnergyManagementWidget.jsx'
 import ActiveAeroWidget from './chat-widgets/ActiveAeroWidget.jsx'
+import UndercutOvercutWidget from './chat-widgets/UndercutOvercutWidget.jsx'
 
 function splitBlocks(text) {
   return text
@@ -167,6 +168,9 @@ function WidgetRenderer({ widget }) {
   }
   if (widget.type === 'active_aero') {
     return <ActiveAeroWidget widget={widget} />
+  }
+  if (widget.type === 'undercut_overcut') {
+    return <UndercutOvercutWidget widget={widget} />
   }
   return null
 }

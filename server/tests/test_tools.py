@@ -547,3 +547,44 @@ def test_analyze_active_aero_usage_validates_args():
     msg = str(exc_info.value)
     assert "session_type" in msg
     assert "lap_number" in msg
+
+
+def test_execute_tool_analyze_undercut_overcut():
+    mock = {
+        "driver_code": "NOR",
+        "current_lap": 25,
+        "target_driver_code": "VER",
+        "undercut_available": False,
+        "overcut_available": False,
+        "advantage_s": -32.7,
+        "crossover_lap": None,
+        "pit_loss_s": 28.0,
+        "pit_loss_green_s": 28.0,
+        "delta_fresh_pace_s_per_lap": 1.02,
+        "out_lap_warmup_s": 1.2,
+        "traffic_cost_s": 4.5,
+        "advantage_by_rejoin_lap": [{"n": 1, "advantage_s": -32.7, "traffic_cost_s": 4.5}],
+        "recommendation": "stay_out",
+        "confidence": "high",
+        "active_sc_state": "green",
+        "rationale": ["Pit-loss too large to recover."],
+        "inputs_summary": {"track_temp_c": 31.0},
+        "round_number": 17,
+        "session_type": "R",
+        "event": "Singapore Grand Prix",
+    }
+    with patch("tools.analyze_undercut_overcut", return_value=mock):
+        result = tools.execute_tool("analyze_undercut_overcut", {
+            "driver_code": "NOR", "lap_number": 25, "target_driver_code": "VER",
+            "round_number": 17,
+        })
+    assert result["recommendation"] == "stay_out"
+    assert result["advantage_s"] == -32.7
+    assert result["pit_loss_s"] == 28.0
+
+
+def test_analyze_undercut_overcut_validates_args():
+    with pytest.raises(ValueError) as exc_info:
+        tools.execute_tool("analyze_undercut_overcut", {"driver_code": "NOR"})
+    msg = str(exc_info.value)
+    assert "lap_number" in msg
