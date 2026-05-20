@@ -22,10 +22,13 @@ if 'requests' not in sys.modules:
 def reset_resolver_caches():
     """Reset resolver module-level caches before each test to prevent leakage."""
     import resolver
-    resolver._circuits_cache = []
+    import circuits_cache
+    circuits_cache._circuits_cache = []
+    circuits_cache._circuits_cache_time = 0.0
     resolver._drivers_cache = []
     resolver._drivers_cache_time = 0.0
     yield
-    resolver._circuits_cache = []
+    circuits_cache._circuits_cache = []
+    circuits_cache._circuits_cache_time = 0.0
     resolver._drivers_cache = []
     resolver._drivers_cache_time = 0.0

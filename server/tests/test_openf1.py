@@ -2,15 +2,18 @@ from unittest.mock import patch
 from unittest.mock import MagicMock
 
 import openf1
+import circuits_cache
 
 
 class FakeHTTPError(Exception):
     pass
 
 
-@patch("openf1.get_circuits")
+@patch("circuits_cache.get_circuits")
 @patch("openf1._openf1_get")
 def test_resolve_openf1_session(mock_openf1_get, mock_get_circuits):
+    circuits_cache._circuits_cache = []
+    circuits_cache._circuits_cache_time = 0.0
     mock_get_circuits.return_value = [
         {"round": 3, "event_name": "Japanese Grand Prix", "country": "Japan"},
     ]
@@ -104,10 +107,10 @@ def test_get_intervals(mock_resolve_session, mock_openf1_get):
 
 
 @patch('openf1._openf1_get')
-@patch('openf1.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_openf1_session_caches_schedule(mock_get_circuits, mock_openf1_get):
-    import openf1
-    openf1._circuits_cache = []
+    circuits_cache._circuits_cache = []
+    circuits_cache._circuits_cache_time = 0.0
     mock_get_circuits.return_value = [{"round": 3, "event_name": "Japanese Grand Prix", "country": "Japan"}]
     mock_openf1_get.return_value = [{"session_key": 321, "date_start": "2026-04-05T00:00:00"}]
 
@@ -115,6 +118,27 @@ def test_resolve_openf1_session_caches_schedule(mock_get_circuits, mock_openf1_g
     openf1._resolve_openf1_session(3, "SQ")
 
     mock_get_circuits.assert_called_once()
+
+
+def test_uses_shared_circuit_cache():
+    """openf1._resolve_openf1_session pulls from the shared circuits_cache module,
+    so patching the shared cache flows through to OpenF1 helpers."""
+    sentinel_circuits = [
+        {"round": 7, "event_name": "Sentinel GP", "country": "Sentinelland"},
+    ]
+    with patch("circuits_cache._cached_circuits", return_value=sentinel_circuits), \
+         patch("openf1._openf1_get") as mock_openf1_get:
+        mock_openf1_get.return_value = [
+            {"session_key": 9999, "session_name": "Race", "country_name": "Sentinelland", "circuit_short_name": "Sentinel"}
+        ]
+        # openf1 imported _cached_circuits at module load — patching the module
+        # attribute on circuits_cache is not enough; patch openf1's binding too.
+        with patch("openf1._cached_circuits", return_value=sentinel_circuits):
+            result = openf1._resolve_openf1_session(7, "R")
+        assert result["session_key"] == 9999
+        # Verify the call used country from the shared cache
+        kwargs = mock_openf1_get.call_args.kwargs
+        assert kwargs.get("country_name") == "Sentinelland"
 
 
 @patch('openf1._driver_number_for_session', return_value=4)

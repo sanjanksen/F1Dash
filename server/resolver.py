@@ -6,17 +6,15 @@ import time
 
 import anthropic
 
-from f1_data import get_circuits, get_drivers
+from f1_data import get_drivers
+from circuits_cache import _cached_circuits
 
 logger = logging.getLogger(__name__)
 
 # ── Canonical data cache ──────────────────────────────────────────────────────
 _drivers_cache: list[dict] = []
 _drivers_cache_time: float = 0.0
-_circuits_cache: list[dict] = []
-_circuits_cache_time: float = 0.0
 _DRIVER_CACHE_TTL = 300  # 5 minutes
-_CIRCUITS_CACHE_TTL = 3600  # 1 hour
 
 
 def _cached_drivers() -> list[dict]:
@@ -28,17 +26,6 @@ def _cached_drivers() -> list[dict]:
         except Exception:
             pass
     return _drivers_cache
-
-
-def _cached_circuits() -> list[dict]:
-    global _circuits_cache, _circuits_cache_time
-    if not _circuits_cache or time.time() - _circuits_cache_time > _CIRCUITS_CACHE_TTL:
-        try:
-            _circuits_cache = get_circuits()
-            _circuits_cache_time = time.time()
-        except Exception:
-            pass
-    return _circuits_cache
 
 
 # ── Haiku entity extractor ────────────────────────────────────────────────────

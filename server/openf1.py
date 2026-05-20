@@ -2,10 +2,10 @@ import time
 
 import requests
 
-from f1_data import CURRENT_YEAR, _resolve_driver, get_circuits, get_session_results
+from f1_data import CURRENT_YEAR, _resolve_driver, get_session_results
+from circuits_cache import _cached_circuits
 
 OPENF1_BASE = "https://api.openf1.org/v1"
-_circuits_cache: list[dict] = []
 
 
 def _session_name_for_openf1(session_type: str) -> str:
@@ -51,13 +51,6 @@ def _openf1_get(endpoint: str, **params):
             last_exc = exc
             continue
     raise last_exc if last_exc else RuntimeError("OpenF1 retry exhausted with no exception")
-
-
-def _cached_circuits() -> list[dict]:
-    global _circuits_cache
-    if not _circuits_cache:
-        _circuits_cache = get_circuits()
-    return _circuits_cache
 
 
 def _resolve_openf1_session(round_number: int, session_type: str) -> dict:
