@@ -3114,3 +3114,76 @@ def test_aggregate_lap_cornering_stats_ggv_fields_with_envelope():
     assert 'avg_envelope_time_pct' in result
     assert 'avg_throttle_acceptance_pct' in result
     assert 'avg_entry_bravery_pct' in result
+
+
+def test_load_session_wraps_get_session_failure(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise RuntimeError("fastf1 outage")
+
+    monkeypatch.setattr(f1_data.fastf1, "get_session", _boom)
+
+    with pytest.raises(f1_data.FastF1Error) as excinfo:
+        f1_data._load_session(5, "R", laps=False, telemetry=False, weather=False, messages=False)
+
+    assert excinfo.value.round_number == 5
+    assert excinfo.value.session_type == "R"
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+
+
+def test_load_session_wraps_load_failure_clears_cache_entry(monkeypatch):
+    mock_session = MagicMock()
+    mock_session.load.side_effect = RuntimeError("load failed mid-flight")
+    monkeypatch.setattr(f1_data.fastf1, "get_session", lambda *a, **k: mock_session)
+
+    with pytest.raises(f1_data.FastF1Error) as excinfo:
+        f1_data._load_session(7, "Q", laps=True, telemetry=False, weather=False, messages=False)
+
+    assert excinfo.value.round_number == 7
+    assert excinfo.value.session_type == "Q"
+    cache_key = (f1_data.CURRENT_YEAR, 7, "Q")
+    assert cache_key not in f1_data._SESSION_CACHE
+
+
+def test_get_race_results_returns_unavailable_on_fastf1_error(monkeypatch):
+    def _raise(*args, **kwargs):
+        raise f1_data.FastF1Error("nope", round_number=3, session_type="R")
+
+    monkeypatch.setattr(f1_data, "_load_session", _raise)
+
+    result = f1_data.get_session_results(3, "R")
+    assert result == {
+        "available": False,
+        "reason": "fastf1_unavailable",
+        "round_number": 3,
+        "session_type": "R",
+    }
+
+
+def test_analyze_stint_degradation_returns_unavailable_on_fastf1_error(monkeypatch):
+    def _raise(*args, **kwargs):
+        raise f1_data.FastF1Error("nope", round_number=4, session_type="R")
+
+    monkeypatch.setattr(f1_data, "_load_session", _raise)
+
+    result = f1_data.analyze_stint_degradation(4, "VER", session_type="R")
+    assert result == {
+        "available": False,
+        "reason": "fastf1_unavailable",
+        "round_number": 4,
+        "session_type": "R",
+    }
+
+
+def test_get_lap_telemetry_returns_unavailable_on_fastf1_error(monkeypatch):
+    def _raise(*args, **kwargs):
+        raise f1_data.FastF1Error("nope", round_number=2, session_type="Q")
+
+    monkeypatch.setattr(f1_data, "_load_session", _raise)
+
+    result = f1_data.get_lap_telemetry(2, "Q", "NOR")
+    assert result == {
+        "available": False,
+        "reason": "fastf1_unavailable",
+        "round_number": 2,
+        "session_type": "Q",
+    }
