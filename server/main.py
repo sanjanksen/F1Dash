@@ -43,8 +43,15 @@ async def drivers_endpoint():
     try:
         return get_drivers()
     except Exception as e:
-        logger.exception("Error in GET /api/drivers")
-        raise HTTPException(status_code=500, detail="Failed to fetch drivers.")
+        logger.warning(
+            "Error in GET /api/drivers: %s",
+            type(e).__name__,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch drivers ({type(e).__name__}).",
+        )
 
 
 @app.get("/api/driver/{name}/stats")
@@ -59,8 +66,16 @@ async def driver_stats_endpoint(name: str):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.exception("Error in GET /api/driver/%s/stats", name)
-        raise HTTPException(status_code=500, detail="Failed to fetch driver stats.")
+        logger.warning(
+            "Error in GET /api/driver/%s/stats: %s",
+            name,
+            type(e).__name__,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch driver stats ({type(e).__name__}).",
+        )
 
 
 @app.get("/api/circuits")
@@ -68,8 +83,15 @@ async def circuits_endpoint():
     try:
         return get_circuits()
     except Exception as e:
-        logger.exception("Error in GET /api/circuits")
-        raise HTTPException(status_code=500, detail="Failed to fetch circuit schedule.")
+        logger.warning(
+            "Error in GET /api/circuits: %s",
+            type(e).__name__,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch circuit schedule ({type(e).__name__}).",
+        )
 
 
 @app.post("/api/chat")
@@ -81,5 +103,12 @@ async def chat_endpoint(request: ChatRequest):
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        logger.exception("Error in POST /api/chat")
-        raise HTTPException(status_code=500, detail="Something went wrong processing your request.")
+        logger.warning(
+            "Error in POST /api/chat: %s",
+            type(e).__name__,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process chat request ({type(e).__name__}).",
+        )
