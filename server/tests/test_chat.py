@@ -983,3 +983,47 @@ def test_answer_f1_payload_reuses_resolved_context_on_fallback():
     assert payload["response"] == "Answer."
     history_mock.assert_called_once()
     resolve_mock.assert_called_once_with("How did Norris do?", prior_context)
+
+
+def test_agentic_loop_strips_per_corner_from_cornering_tool_result():
+    """In the agentic loop, per_corner must be stripped before the tool_result message is sent."""
+    mock_client = MagicMock()
+    mock_client.messages.create.side_effect = [
+        _tool_use_response("analyze_cornering_loads", tool_input={"round_number": 3}),
+        _end_turn_response("Norris was more committed."),
+    ]
+
+    chat = _load_chat_with_client(mock_client)
+    heavy_payload = {
+        "summary": {"NOR": {"avg_ggv_util_pct": 84.0}},
+        "per_corner": [{"corner": 1, "g_lat": 4.2}, {"corner": 2, "g_lat": 3.9}],
+        "narrative": "NOR committed harder.",
+    }
+    with patch.object(chat, 'execute_tool', return_value=heavy_payload):
+        chat.answer_f1_question("Who was more committed in the corners?")
+
+    second_call_messages = mock_client.messages.create.call_args_list[1][1]["messages"]
+    tool_result_content = second_call_messages[-1]["content"][0]["content"]
+    assert "per_corner" not in tool_result_content
+    assert "narrative" in tool_result_content
+
+
+def test_widget_builder_suppresses_data_table_for_cornering_tool():
+    """A data_table emitted inline alongside cornering evidence must be suppressed."""
+    import chat
+    importlib.reload(chat)
+
+    text = (
+        "Norris pushed harder.\n\n"
+        "```f1-widget\n"
+        '{"type":"data_table","title":"Grip util","columns":[{"key":"d","label":"D"}],"rows":[{"d":"NOR"}]}\n'
+        "```"
+    )
+    cornering_evidence = [{"tool": "analyze_cornering_loads", "args": {}, "result": {"summary": {}}}]
+
+    payload = chat._payload_with_inline_widgets(text, None, executed_evidence=cornering_evidence)
+    assert all(w.get("type") != "data_table" for w in payload["widgets"])
+
+    non_cornering_evidence = [{"tool": "get_driver_race_story", "args": {}, "result": {}}]
+    payload2 = chat._payload_with_inline_widgets(text, None, executed_evidence=non_cornering_evidence)
+    assert any(w.get("type") == "data_table" for w in payload2["widgets"])

@@ -25,6 +25,11 @@ from resolver import resolve_query_context, resolve_context_from_history
 from driver_styles import get_comparison_framing
 from circuit_profiles import get_circuit_profile
 from energy_2026 import get_energy_2026_knowledge
+from evidence_shaping import (
+    CORNERING_TOOL_NAMES,
+    reject_data_table_for_cornering,
+    strip_heavy_payload_fields,
+)
 
 MAX_TOOL_ROUNDS = 8
 MAX_DETERMINISTIC_TOOL_WORKERS = 4
@@ -603,12 +608,39 @@ def _extract_inline_widgets(text: str | None) -> tuple[str, list[dict]]:
     return cleaned.strip(), widgets
 
 
-def _payload_with_inline_widgets(response: str | None, base_widgets: list[dict] | None = None) -> dict:
+def _payload_with_inline_widgets(
+    response: str | None,
+    base_widgets: list[dict] | None = None,
+    *,
+    executed_evidence: list[dict] | None = None,
+) -> dict:
     clean_response, inline_widgets = _extract_inline_widgets(response)
+    if executed_evidence and any(
+        item.get("tool") in CORNERING_TOOL_NAMES for item in executed_evidence
+    ):
+        inline_widgets = [
+            w for w in inline_widgets
+            if not reject_data_table_for_cornering(w.get("type"), _infer_widget_source_tool(w, executed_evidence))
+        ]
     return {
         "response": clean_response,
         "widgets": _merge_widgets(base_widgets or [], inline_widgets),
     }
+
+
+def _infer_widget_source_tool(widget: dict, executed_evidence: list[dict]) -> str | None:
+    """Heuristic: if a cornering tool ran this turn, assume data_table widgets came from it.
+
+    The LLM emits data_table widgets inline via prose; no explicit tool linkage exists.
+    When cornering evidence is present we treat the data_table as cornering-sourced so
+    it gets suppressed per system policy.
+    """
+    if widget.get("type") != "data_table":
+        return None
+    for item in executed_evidence:
+        if item.get("tool") in CORNERING_TOOL_NAMES:
+            return item.get("tool")
+    return None
 
 
 def _find_evidence_result(evidence: list[dict], tool_name: str) -> dict | None:
@@ -821,7 +853,7 @@ Answer quality rules:
 - Use the conversation history for follow-up questions.
 - 3-5 sentences for most answers. Use bullets only when listing genuinely separate items.
 - When ranking, comparing many entities, or presenting 3+ rows of structured data, do not use a Markdown table. Add a hidden data table widget at the end of your answer using a fenced `f1-widget` JSON block. The JSON shape is: {{"type":"data_table","title":"Short title","subtitle":"Optional scope","columns":[{{"key":"rank","label":"Rank","align":"right"}},{{"key":"driver","label":"Driver"}}],"rows":[{{"rank":"1","driver":"PIA"}}],"note":"Optional caveat"}}. Keep the prose short and let the widget carry the rows.
-- **Exception — cornering data: NEVER generate a data_table for `analyze_cornering_loads` or `analyze_race_cornering_profile` results.** Cornering metrics are rendered in a dedicated two-panel widget (Commitment / Technique). Write prose only. A data_table duplicates the panel and confuses the layout.
+- Cornering data has its own dedicated widget; data_tables sourced from cornering tools are suppressed in code, so write prose only.
 - If you cannot determine which specific race or round the question refers to, ask ONE short clarifying question before calling any data tools. Do not guess a round number and do not call tools with a missing or uncertain race context.
 - If a tool result contains `"available": false` and a `guidance_for_model` field, follow that guidance verbatim. Never paper over the gap with invented characteristics."""
 
@@ -1095,7 +1127,7 @@ top speed trap, slipstream, tow, drag penalty, sacrificing downforce, high-drag 
 - For tyre-management rankings, always show the actual deg rate if it is available. Rank primarily by lower positive deg rate, then use consistency as the noise check and R² as the trust check. Do not rank by R² alone. If raw pace trend is negative, explain that the car got faster on the stopwatch, but the fuel-corrected deg estimate adds back expected fuel burn to estimate tyre loss. Explain `±0.58s` as lap-to-lap spread around the trend, not time lost per lap.
 - For team/car characterization, rank evidence in this order: current telemetry traits first, historical circuit-fit trends second, sourced public-reporting profiles third. Never turn any one layer into a definitive private setup claim.
 - When the answer ranks drivers, teams, tyres, stints, circuits, or any list with 3+ comparable rows, do not write a Markdown table. Add a hidden `f1-widget` JSON block after the prose with `type: "data_table"`, `title`, optional `subtitle`, `columns`, `rows`, and optional `note`. Use concise strings only; the system will render the widget and remove the JSON from the visible answer.
-- **Exception — cornering data: NEVER generate a data_table when the analysis contains cornering loads results.** The Commitment / Technique panels are already rendered as a server-side widget. Write prose — describe the character (committed, smooth, fighting the balance) using the F1 vocabulary. No table. A data_table creates a confusing duplicate.
+- Cornering data has its own dedicated Commitment/Technique widget; data_tables sourced from cornering tools are suppressed in code, so write prose only.
 - When cornering data is present, your prose MUST cover BOTH dimensions: (1) Commitment — how much of the car's grip ceiling was used, who was more aggressive at entries and exits; (2) Technique — who had the steadier G trace through the corners (load wobble), what that means physically (settled arc vs fighting the car mid-corner). Skipping either dimension is an incomplete answer.
 - For tyre-management data_table widgets, the table shape is EXACTLY: one deg-rate column per compound used (e.g. "Medium /lap", "Hard /lap"), followed by ONE "Total lost (s)" column taken from `total_deg_loss_all_stints_s` — the total time lost to tyre wear across all stints combined. Example: `columns: ["Driver","Medium /lap","Hard /lap","Total lost (s)"]`. NEVER include finishing position, race position, "Fin", points, or any race-result field in a tyre-management table. The total-loss column must always be present.
 
@@ -1526,8 +1558,7 @@ def _execute_analysis_tool_call(tool_name: str, args: dict) -> dict:
     try:
         logger.info("Deterministic analysis tool call: %s args=%s", tool_name, args)
         result = execute_tool(tool_name, args)
-        if tool_name in ("analyze_cornering_loads", "analyze_race_cornering_profile"):
-            result = {k: v for k, v in result.items() if k != "per_corner"}
+        result = strip_heavy_payload_fields(tool_name, result)
         return {
             "tool": tool_name,
             "args": args,
@@ -1727,6 +1758,7 @@ def _try_deterministic_analysis(question: str, history: list[dict], *, provider:
             return _payload_with_inline_widgets(
                 _run_openai_answer_writer(question, analysis),
                 _widgets_from_analysis_evidence(plan, evidence),
+                executed_evidence=evidence,
             )
 
         analysis = _run_anthropic_analysis(question, resolved, plan, evidence)
@@ -1737,6 +1769,7 @@ def _try_deterministic_analysis(question: str, history: list[dict], *, provider:
         return _payload_with_inline_widgets(
             _run_anthropic_answer_writer(question, analysis),
             _widgets_from_analysis_evidence(plan, evidence),
+            executed_evidence=evidence,
         )
     except Exception as exc:
         logger.warning("Deterministic analysis failed; falling back to normal tool loop. error=%s", exc)
@@ -1813,6 +1846,7 @@ def _answer_anthropic(message: str, history: list[dict], resolved_context: dict 
                             _widgets_from_preloaded(preloaded),
                             _widgets_from_analysis_evidence({}, executed_evidence),
                         ),
+                        executed_evidence=executed_evidence,
                     )
             raise ValueError("Claude returned end_turn but no text content block")
 
@@ -1824,6 +1858,7 @@ def _answer_anthropic(message: str, history: list[dict], resolved_context: dict 
                 try:
                     logger.info("Anthropic tool call: %s args=%s", block.name, block.input)
                     result = execute_tool(block.name, block.input)
+                    result = strip_heavy_payload_fields(block.name, result)
                     executed_evidence.append({
                         "tool": block.name,
                         "args": block.input,
@@ -1923,6 +1958,7 @@ def _answer_openai(message: str, history: list[dict], resolved_context: dict | N
                     _widgets_from_preloaded(preloaded),
                     _widgets_from_analysis_evidence({}, executed_evidence),
                 ),
+                executed_evidence=executed_evidence,
             )
 
         if choice.finish_reason == "tool_calls":
@@ -1935,6 +1971,7 @@ def _answer_openai(message: str, history: list[dict], resolved_context: dict | N
                     args = json.loads(tool_call.function.arguments)
                     logger.info("OpenAI tool call: %s args=%s", tool_call.function.name, args)
                     result = execute_tool(tool_call.function.name, args)
+                    result = strip_heavy_payload_fields(tool_call.function.name, result)
                     executed_evidence.append({
                         "tool": tool_call.function.name,
                         "args": args,
