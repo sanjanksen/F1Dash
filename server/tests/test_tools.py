@@ -507,3 +507,43 @@ def test_analyze_override_usage_validates_args():
     msg = str(exc_info.value)
     assert "session_type" in msg
     assert "lap_number" in msg
+
+
+def test_execute_tool_analyze_active_aero_usage():
+    mock = {
+        "available": True,
+        "driver_code": "VER",
+        "round_number": 13,
+        "session_type": "Q",
+        "lap_number": 18,
+        "circuit_slug": "belgium",
+        "circuit_in_coverage": True,
+        "segments": [{
+            "label": "kemmel",
+            "start_distance_m": 2000.0,
+            "end_distance_m": 3000.0,
+            "duration_s": 4.2,
+            "peak_speed_kph": 332.0,
+            "estimated_speed_gain_kph": 8.0,
+        }],
+        "total_z_mode_seconds": 4.2,
+        "estimated_lap_time_delta_s": 0.084,
+        "inferred": True,
+        "detector_version": "f31-v1",
+    }
+    with patch('tools.analyze_active_aero_usage', return_value=mock):
+        result = tools.execute_tool("analyze_active_aero_usage", {
+            "driver_code": "VER", "round_number": 13, "session_type": "Q", "lap_number": 18,
+        })
+    assert result["circuit_in_coverage"] is True
+    assert result["total_z_mode_seconds"] == 4.2
+    assert len(result["segments"]) == 1
+    assert result["inferred"] is True
+
+
+def test_analyze_active_aero_usage_validates_args():
+    with pytest.raises(ValueError) as exc_info:
+        tools.execute_tool("analyze_active_aero_usage", {"driver_code": "VER", "round_number": 13})
+    msg = str(exc_info.value)
+    assert "session_type" in msg
+    assert "lap_number" in msg
