@@ -219,8 +219,17 @@ export default function QualifyingBattleWidget({ widget }) {
   const [activeMechIndex, setActiveMechIndex] = useState(null)
   const [detailsExpanded, setDetailsExpanded] = useState(true)
 
-  const driverA = widget.driver_a ?? widget.title?.split(' vs ')[0]
-  const driverB = widget.driver_b ?? widget.title?.split(' vs ')[1]
+  const driverA = widget.driver_a
+  const driverB = widget.driver_b
+
+  if (!driverA || !driverB) {
+    return (
+      <section className="rounded-lg border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+        Driver information for this qualifying battle is missing. Please try again or rephrase the question.
+      </section>
+    )
+  }
+
   const fasterIsA = widget.faster_driver === driverA
 
   const lapA = widget.sector_comparison?.lap_time_a

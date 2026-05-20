@@ -486,6 +486,14 @@ def test_make_qualifying_battle_widget_preserves_location_context():
     assert widget["cause_explanations"][0]["location_context"]["label"] == "Exit of Turn 1"
 
 
+def test_make_qualifying_battle_widget_includes_driver_a_b_fields():
+    import chat
+
+    widget = chat._make_qualifying_battle_widget({"driver_a": "NOR", "driver_b": "PIA"})
+    assert widget.get("driver_a")
+    assert widget.get("driver_b")
+
+
 def test_canonicalize_qualifying_analysis_aligns_answer_with_widget_source():
     import chat
 
