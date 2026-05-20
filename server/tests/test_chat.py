@@ -1035,3 +1035,45 @@ def test_widget_builder_suppresses_data_table_for_cornering_tool():
     non_cornering_evidence = [{"tool": "get_driver_race_story", "args": {}, "result": {}}]
     payload2 = chat._payload_with_inline_widgets(text, None, executed_evidence=non_cornering_evidence)
     assert any(w.get("type") == "data_table" for w in payload2["widgets"])
+
+
+def test_make_race_pace_battle_widget_passes_clipping_fields():
+    """Race pace battle widget must surface clipping_callout, segments, and totals."""
+    import chat
+
+    clipping_comparison = {
+        "clipping_driver": "NOR",
+        "faster_driver": "PIA",
+        "delta_seconds": 0.4,
+        "phrase": "NOR clipped 0.4 s/lap more than PIA on the main straight.",
+    }
+    sig_a = {
+        "segments": [{"start_distance_m": 1300, "duration_seconds": 0.4}],
+        "total_clipping_seconds": 0.4,
+    }
+    sig_b = {
+        "segments": [],
+        "total_clipping_seconds": 0.0,
+    }
+
+    widget = chat._make_race_pace_battle_widget({
+        "driver_a": "NOR",
+        "driver_b": "PIA",
+        "clipping_comparison": clipping_comparison,
+        "clipping_signature_a": sig_a,
+        "clipping_signature_b": sig_b,
+    })
+
+    assert widget["clipping_callout"] == clipping_comparison
+    assert widget["clipping_segments_a"] == sig_a["segments"]
+    assert widget["clipping_segments_b"] == []
+    assert widget["total_clipping_seconds_a"] == 0.4
+    assert widget["total_clipping_seconds_b"] == 0.0
+
+
+def test_system_prompt_mentions_clipping_callout_handling():
+    """Both system prompts must explicitly tell the LLM how to handle clipping_callout."""
+    import chat
+
+    assert "clipping_callout" in chat.SYSTEM_PROMPT
+    assert "clipping_callout" in chat.ANALYSIS_SYSTEM_PROMPT

@@ -3610,3 +3610,63 @@ class TestDetectClippingSignature:
         result = f1_data.detect_clipping_signature(speed_trace, throttle_trace, distance_trace)
         assert result["clipping_detected"] is False
         assert result["segments"] == []
+
+
+def test_analyze_race_pace_battle_includes_clipping_signature():
+    """analyze_race_pace_battle must surface clipping signatures and comparison."""
+    mock_session = MagicMock()
+    mock_session.event = {'EventName': 'Japanese Grand Prix'}
+
+    stint = {
+        'compound': 'MEDIUM',
+        'lap_count': 10,
+        'fuel_corrected_pace_at_age_1_s': 90.0,
+        'positive_deg_rate_s_per_lap': 0.05,
+    }
+    clean_laps = [{'lap_number': i, 'lap_time_s': 90.0 + 0.03 * i} for i in range(1, 11)]
+
+    sig_a = {
+        "clipping_detected": True,
+        "segments": [{"start_distance_m": 1300, "duration_seconds": 0.4}],
+        "total_clipping_seconds": 0.4,
+        "budget_status": "over_budget",
+    }
+    sig_b = {
+        "clipping_detected": False,
+        "segments": [],
+        "total_clipping_seconds": 0.0,
+        "budget_status": "within_budget",
+    }
+    comparison = {
+        "clipping_driver": "NOR",
+        "faster_driver": "PIA",
+        "delta_seconds": 0.4,
+        "phrase": "NOR clipped 0.4 s/lap more than PIA on the main straight.",
+    }
+
+    fake_telemetry = {
+        "telemetry": [
+            {"distance_m": 0, "speed_kph": 100.0, "throttle_pct": 100.0, "drs_open": False},
+            {"distance_m": 100, "speed_kph": 200.0, "throttle_pct": 100.0, "drs_open": False},
+        ],
+    }
+
+    with patch('f1_data._validate_session_availability'), \
+         patch('f1_data._load_session', return_value=mock_session), \
+         patch('f1_data._pick_driver', return_value=pd.DataFrame([{'LapNumber': 1, 'PitInTime': None}])), \
+         patch('f1_data._filter_clean_race_laps', return_value=clean_laps), \
+         patch('f1_data._fit_stint_degradation', return_value=[stint]), \
+         patch('f1_data._find_representative_lap', return_value=5), \
+         patch('f1_data._align_stints_by_compound', return_value=[]), \
+         patch('f1_data._summarize_tyre_management', return_value={}), \
+         patch('f1_data.get_lap_telemetry', return_value=fake_telemetry), \
+         patch('f1_data.detect_clipping_signature', side_effect=[sig_a, sig_b]), \
+         patch('f1_data.compare_drivers_clipping', return_value=comparison):
+        result = f1_data.analyze_race_pace_battle(3, 'NOR', 'PIA')
+
+    assert 'clipping_signature_a' in result
+    assert 'clipping_signature_b' in result
+    assert 'clipping_comparison' in result
+    assert result['clipping_signature_a'] == sig_a
+    assert result['clipping_signature_b'] == sig_b
+    assert result['clipping_comparison'] == comparison
