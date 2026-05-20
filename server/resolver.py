@@ -91,6 +91,8 @@ Common aliases to resolve:
 - Max / Mad Max → VER  |  Lando → NOR  |  Checo / Sergio → PER
 - Carlos → SAI  |  George → RUS  |  Lewis → HAM  |  Charles → LEC
 - Oscar → PIA  |  Fernando / Alonso → ALO  |  Lance → STR
+- Kimi / Antonelli → ANT | Ollie / Oliver / Bearman → BEA | Liam / Lawson → LAW | Isack / Hadjar → HAD
+- Gabriel / Bortoleto → BOR | Jack / Doohan → DOO | Yuki / Tsunoda → TSU | Franco / Colapinto → COL
 
 Return JSON only: {{"drivers": [], "team": null, "event_country": null, "round": null}}"""
 

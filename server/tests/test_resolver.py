@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import resolver
 
@@ -526,6 +526,42 @@ def test_speed_trap_scope_straight_line_language(mock_circuits, mock_drivers):
     result = resolver.resolve_query_context("who was fastest down the straight in the race at Suzuka?")
     assert result["scope"] == "speed_trap"
     assert result["suggested_tool"] == "get_speed_trap_leaderboard"
+
+
+def _capture_llm_system_prompt(message: str = "What did Lando do?") -> str:
+    """Invoke _extract_entities_llm with a mocked Haiku client and return the system prompt argument."""
+    resolver._drivers_cache = []
+    resolver._drivers_cache_time = 0.0
+    resolver._circuits_cache = []
+    captured = {}
+
+    def _capture(**kwargs):
+        captured["system"] = kwargs.get("system", "")
+        response = MagicMock()
+        response.content = []
+        return response
+
+    mock_client = MagicMock()
+    mock_client.messages.create.side_effect = _capture
+
+    with patch('resolver.get_drivers', return_value=[]), \
+         patch('resolver.get_circuits', return_value=[]), \
+         patch('resolver._get_haiku_client', return_value=mock_client):
+        resolver._extract_entities_llm(message)
+
+    return captured.get("system", "")
+
+
+def test_prompt_includes_2026_aliases():
+    system = _capture_llm_system_prompt()
+    for code in ("ANT", "BEA", "LAW", "HAD", "BOR", "DOO", "TSU", "COL"):
+        assert code in system, f"expected 2026 alias {code} in system prompt"
+
+
+def test_prompt_preserves_legacy_aliases():
+    system = _capture_llm_system_prompt()
+    for alias in ("Mad Max", "Lando", "Checo", "Carlos", "George", "Lewis", "Charles", "Oscar", "Fernando", "Lance"):
+        assert alias in system, f"expected legacy alias {alias!r} in system prompt"
 
 
 def test_suggest_tool_sprint_race_driver_entity():
