@@ -5410,6 +5410,33 @@ def analyze_race_pace_battle(
                 'note': f"{earlier} pitted {abs(gap)} laps earlier - possible undercut attempt.",
             }
 
+    clip_sig_a = None
+    clip_sig_b = None
+    clipping_comparison = None
+
+    def _clipping_signature_for(code: str, lap_num: int | None) -> dict | None:
+        try:
+            tel = get_lap_telemetry(round_number, session_type, code, lap_num)
+        except Exception:
+            return None
+        samples = tel.get("telemetry") or []
+        if not samples:
+            return None
+        speeds = [s["speed_kph"] for s in samples if s.get("speed_kph") is not None]
+        throttles = [s["throttle_pct"] for s in samples if s.get("speed_kph") is not None]
+        distances = [s["distance_m"] for s in samples if s.get("speed_kph") is not None]
+        drs_state = [1 if s.get("drs_open") else 0 for s in samples if s.get("speed_kph") is not None]
+        if not speeds:
+            return None
+        return detect_clipping_signature(speeds, throttles, distances, drs_state=drs_state)
+
+    clip_sig_a = _clipping_signature_for(driver_a, rep_lap_a)
+    clip_sig_b = _clipping_signature_for(driver_b, rep_lap_b)
+    if clip_sig_a and clip_sig_b:
+        clipping_comparison = compare_drivers_clipping(
+            clip_sig_a, clip_sig_b, driver_a.upper(), driver_b.upper()
+        )
+
     return {
         'event': session.event['EventName'],
         'session': session_type.upper(),
@@ -5434,6 +5461,9 @@ def analyze_race_pace_battle(
         'undercut_opportunity': undercut_opportunity,
         'representative_lap_a': rep_lap_a,
         'representative_lap_b': rep_lap_b,
+        'clipping_signature_a': clip_sig_a,
+        'clipping_signature_b': clip_sig_b,
+        'clipping_comparison': clipping_comparison,
         'how_to_read_degradation': (
             "deg_rate_s_per_lap adds back the expected fuel-burn gain so the remaining slope estimates tyre "
             "performance loss per lap. Only compare deg rates between stints on the same compound — different "

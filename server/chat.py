@@ -300,6 +300,11 @@ def _make_race_pace_battle_widget(result: dict) -> dict:
         "decisive_factor": result.get("decisive_factor"),
         "aligned_stints": aligned_stints,
         "undercut_opportunity": result.get("undercut_opportunity"),
+        "clipping_callout": result.get("clipping_comparison"),
+        "clipping_segments_a": (result.get("clipping_signature_a") or {}).get("segments") or [],
+        "clipping_segments_b": (result.get("clipping_signature_b") or {}).get("segments") or [],
+        "total_clipping_seconds_a": (result.get("clipping_signature_a") or {}).get("total_clipping_seconds"),
+        "total_clipping_seconds_b": (result.get("clipping_signature_b") or {}).get("total_clipping_seconds"),
     }
 
 
@@ -855,6 +860,8 @@ Guidelines:
 - For deleted laps, race control decisions, incidents, or steward-style explanations: use get_race_control_messages
 - For weather conditions, rain timing, temperature impact on tyres/pace: use get_session_weather
 - FastF1 does not provide direct ERS state of charge, harvest maps, or deployment maps. For energy questions, clearly distinguish measured telemetry from inference.
+- When a qualifying_battle, energy_management, or race_pace_battle tool result contains a non-null `clipping_callout` (a dict with `phrase`, `delta_seconds`, `clipping_driver`), quote the `phrase` verbatim as one sentence in your answer — it already names the driver, segment, and magnitude. Do not paraphrase it.
+- When `clipping_segments_a` or `clipping_segments_b` are non-empty on an energy_management or race_pace_battle result, mention the affected driver and the `total_clipping_seconds_*` value in one sentence (e.g., "Norris spent 0.6 s/lap clipping on the main straight"). Do not enumerate every segment — the widget already shows them.
 
 Answer quality rules:
 - Lead with the number or the fact. "Russell finished P3, 8 seconds off the lead" beats "Russell had a solid race finishing in the top 3".
@@ -1077,6 +1084,14 @@ If two teammates (same team) pit within 1–2 consecutive laps, the second car l
 
 **Always embed the session_notes** caveats naturally in your analysis — never skip the fuel-load and programme-type disclaimers.
 
+## Clipping Observations (F33 / F21 integration)
+
+When evidence from `analyze_qualifying_battle`, `analyze_energy_management`, or `analyze_race_pace_battle` contains a non-null `clipping_callout` (a dict with `phrase`, `delta_seconds`, `clipping_driver`), surface it in your JSON output as a `clipping_observation` string field. Quote `clipping_callout.phrase` verbatim — it already names the driver, segment, and magnitude. Do not paraphrase or recompute it.
+
+When `clipping_segments_a` or `clipping_segments_b` are non-empty (or appear inside the qualifying battle's `energy_analysis`) and `total_clipping_seconds_*` is present, the `clipping_observation` field should mention the affected driver and the total in one sentence — e.g., "Norris spent 0.6 s/lap clipping on the main straight." Do not enumerate every segment — downstream rendering already shows them.
+
+If neither a `clipping_callout` nor non-empty `clipping_segments_*` are present, omit `clipping_observation` entirely (do not emit an empty string or null).
+
 ## Required JSON Output
 - direct_answer: string — must include WHERE and HOW MUCH
 - primary_reason: string
@@ -1084,6 +1099,7 @@ If two teammates (same team) pit within 1–2 consecutive laps, the second car l
 - strongest_evidence: array of strings
 - caveats: array of strings
 - confidence: one of high, medium, low
+- clipping_observation: string (optional — present only when clipping_callout or clipping_segments_* evidence exists)
 """
 
 ANALYSIS_SYSTEM_PROMPT = _build_analysis_system_prompt()
@@ -1194,6 +1210,12 @@ Write 2–3 sentences:
 3. Embed the confidence caveat naturally ("this is inferred from speed/throttle patterns — ERS state isn't directly measured").
 
 Never say "lift_and_coast_events" or "clipping_windows". Use natural language: "runs out of deployment on the main straight", "lifts early before the chicane to harvest", "costs him roughly X seconds across the lap".
+
+## Clipping callouts (qualifying_battle, energy_management, race_pace_battle)
+
+When a `qualifying_battle`, `energy_management`, or `race_pace_battle` tool result contains a non-null `clipping_callout` (a dict with `phrase`, `delta_seconds`, `clipping_driver`), quote the `phrase` verbatim as ONE sentence in your answer — it already names the driver, segment, and magnitude. Do not paraphrase it and do not append your own clipping description on top.
+
+When `clipping_segments_a` or `clipping_segments_b` are non-empty on an `energy_management` or `race_pace_battle` result (or via the qualifying battle's bundled energy analysis), mention the affected driver and the `total_clipping_seconds_*` value in ONE sentence — e.g., "Norris spent 0.6 s/lap clipping on the main straight." Do not enumerate every segment — the widget already shows them.
 
 ## Free practice responses
 
