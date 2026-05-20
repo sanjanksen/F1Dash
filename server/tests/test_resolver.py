@@ -653,3 +653,38 @@ def test_sprint_quali_comparison_uses_sq_analysis(mock_circuits, mock_drivers, m
     assert result["session_type"] == "SQ"
     assert result["analysis_mode"] == "driver_comparison"
     assert result["analysis_focus"] == "qualifying"
+
+
+def test_circuits_cache_ttl(monkeypatch):
+    resolver._circuits_cache = []
+    resolver._circuits_cache_time = 0.0
+
+    call_count = {"n": 0}
+
+    def fake_get_circuits():
+        call_count["n"] += 1
+        return [{"round": call_count["n"], "event_name": f"Event {call_count['n']}", "country": "Test"}]
+
+    monkeypatch.setattr(resolver, "get_circuits", fake_get_circuits)
+
+    fake_time = {"now": 1000.0}
+    monkeypatch.setattr(resolver.time, "time", lambda: fake_time["now"])
+
+    first = resolver._cached_circuits()
+    assert call_count["n"] == 1
+    assert first[0]["round"] == 1
+
+    # Within TTL — should not refresh
+    fake_time["now"] = 1000.0 + resolver._CIRCUITS_CACHE_TTL - 1
+    second = resolver._cached_circuits()
+    assert call_count["n"] == 1
+    assert second[0]["round"] == 1
+
+    # Past TTL — should refresh
+    fake_time["now"] = 1000.0 + resolver._CIRCUITS_CACHE_TTL + 1
+    third = resolver._cached_circuits()
+    assert call_count["n"] == 2
+    assert third[0]["round"] == 2
+
+    resolver._circuits_cache = []
+    resolver._circuits_cache_time = 0.0
