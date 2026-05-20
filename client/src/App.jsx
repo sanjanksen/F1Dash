@@ -78,9 +78,13 @@ export default function App() {
       }
 
       const { response, widgets } = validated
+      const stampedWidgets = (widgets ?? []).map((w) => ({
+        ...w,
+        _id: w?._id ?? (typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`),
+      }))
       updateMessages(sessionId, [
         ...withUser,
-        { id: crypto.randomUUID(), role: 'assistant', text: response, widgets },
+        { id: crypto.randomUUID(), role: 'assistant', text: response, widgets: stampedWidgets },
       ])
     } catch (error) {
       updateMessages(sessionId, [

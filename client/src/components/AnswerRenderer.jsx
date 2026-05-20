@@ -193,7 +193,7 @@ export default function AnswerRenderer({ text, widgets = [] }) {
 
       {widgets.map((widget, index) => (
         <div
-          key={`${widget.type}-${index}`}
+          key={widget._id ?? `${widget.type}-${index}`}
           className={index === 0 ? 'widget-enter' : index === 1 ? 'widget-enter-1' : 'widget-enter-2'}
         >
           <WidgetRenderer widget={widget} />
