@@ -1785,6 +1785,193 @@ def test_fit_stint_degradation_adds_back_fuel_burn_for_improving_raw_pace():
     assert stints[0]["positive_deg_rate_s_per_lap"] == pytest.approx(0.02)
 
 
+class TestDetectCliff:
+    def test_returns_no_cliff_when_too_few_laps(self):
+        ages = list(range(1, 10))
+        times = [90.0 + 0.05 * (age - 1) for age in ages]
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is False
+
+    def test_returns_no_cliff_for_linear_series(self):
+        ages = list(range(1, 21))
+        times = [90.0 + 0.05 * (age - 1) for age in ages]
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is False
+
+    def test_returns_no_cliff_for_noisy_linear_series(self):
+        ages = list(range(1, 25))
+        noise = [0.02, -0.03, 0.01, -0.01, 0.03, -0.02] * 4
+        times = [90.0 + 0.055 * (age - 1) + noise[i] for i, age in enumerate(ages)]
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is False
+
+    def test_returns_no_cliff_for_single_bad_outlier(self):
+        ages = list(range(1, 25))
+        times = [90.0 + 0.05 * (age - 1) for age in ages]
+        times[12] += 1.2
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is False
+
+    def test_detects_sustained_slope_change(self):
+        ages = list(range(1, 25))
+        times = []
+        for age in ages[:11]:
+            times.append(90.0 + 0.04 * (age - 1))
+        cliff_base = times[-1]
+        for i, _age in enumerate(ages[11:]):
+            times.append(cliff_base + 0.27 * (i + 1))
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is True
+        assert result["cliff_tyre_age"] == 11
+        assert result["cliff_slope_increase_s_per_lap"] >= 0.06
+        assert result["cliff_severity_ratio"] >= 2.5
+        assert result["pre_cliff_deg_rate_s_per_lap"] < result["post_cliff_deg_rate_s_per_lap"]
+        assert result["cliff_confidence"] in ("moderate", "high")
+
+    def test_no_cliff_when_slope_change_is_too_small(self):
+        ages = list(range(1, 25))
+        times = []
+        for age in ages[:12]:
+            times.append(90.0 + 0.05 * (age - 1))
+        cliff_base = times[-1]
+        for i in range(12):
+            times.append(cliff_base + 0.095 * (i + 1))
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is False
+
+    def test_detects_cliff_from_flat_pre_cliff_slope_without_ratio(self):
+        ages = list(range(1, 25))
+        times = []
+        for age in ages[:12]:
+            times.append(90.0 + 0.005 * (age - 1))
+        cliff_base = times[-1]
+        for i in range(12):
+            times.append(cliff_base + 0.18 * (i + 1))
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is True
+        assert result["cliff_severity_ratio"] is None
+        assert result["cliff_slope_increase_s_per_lap"] >= 0.06
+
+    def test_detected_cliff_output_has_required_keys(self):
+        ages = list(range(1, 25))
+        times = []
+        for age in ages[:12]:
+            times.append(90.0 + 0.04 * (age - 1))
+        cliff_base = times[-1]
+        for i in range(12):
+            times.append(cliff_base + 0.30 * (i + 1))
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is True
+        for key in (
+            "cliff_tyre_age",
+            "cliff_slope_increase_s_per_lap",
+            "cliff_severity_ratio",
+            "pre_cliff_deg_rate_s_per_lap",
+            "post_cliff_deg_rate_s_per_lap",
+            "pre_cliff_lap_count",
+            "post_cliff_lap_count",
+            "pre_cliff_regression_line",
+            "post_cliff_regression_line",
+            "bic_improvement",
+            "cliff_confidence",
+        ):
+            assert key in result
+        assert len(result["pre_cliff_regression_line"]) == 2
+        assert len(result["post_cliff_regression_line"]) == 2
+
+
+class TestFitStintDegradationStintSplitting:
+    def test_same_compound_tyre_age_reset_splits_physical_stints(self):
+        clean_laps = [
+            {"lap_number": 1, "lap_time_s": 90.1, "compound": "MEDIUM", "tyre_age": 1},
+            {"lap_number": 2, "lap_time_s": 90.2, "compound": "MEDIUM", "tyre_age": 2},
+            {"lap_number": 3, "lap_time_s": 90.3, "compound": "MEDIUM", "tyre_age": 3},
+            {"lap_number": 4, "lap_time_s": 89.8, "compound": "MEDIUM", "tyre_age": 1},
+            {"lap_number": 5, "lap_time_s": 89.9, "compound": "MEDIUM", "tyre_age": 2},
+            {"lap_number": 6, "lap_time_s": 90.0, "compound": "MEDIUM", "tyre_age": 3},
+        ]
+
+        stints = f1_data._fit_stint_degradation(clean_laps, fuel_correction_s_per_lap=0.0)
+
+        assert len(stints) == 2
+        assert stints[0]["lap_numbers"] == [1, 2, 3]
+        assert stints[1]["lap_numbers"] == [4, 5, 6]
+        assert all(stint["cliff_detected"] is False for stint in stints)
+
+    def test_same_compound_increasing_tyre_age_remains_one_stint(self):
+        clean_laps = [
+            {"lap_number": i, "lap_time_s": 90.0 + i * 0.05, "compound": "HARD", "tyre_age": i}
+            for i in range(1, 7)
+        ]
+
+        stints = f1_data._fit_stint_degradation(clean_laps, fuel_correction_s_per_lap=0.0)
+
+        assert len(stints) == 1
+        assert stints[0]["lap_numbers"] == [1, 2, 3, 4, 5, 6]
+
+
+class TestFitStintDegradationCliffFields:
+    def _make_laps(self, lap_times_and_ages):
+        return [
+            {
+                "lap_number": lap_number,
+                "tyre_age": tyre_age,
+                "lap_time_s": lap_time_s,
+                "compound": "SOFT",
+                "driver_code": "VER",
+            }
+            for lap_number, tyre_age, lap_time_s in lap_times_and_ages
+        ]
+
+    def test_cliff_fields_present_in_output(self):
+        laps = []
+        for i in range(11):
+            laps.append((i + 1, i + 1, 90.0 + 0.04 * i))
+        cliff_base = laps[-1][2]
+        for i in range(13):
+            laps.append((i + 12, i + 12, cliff_base + 0.28 * (i + 1)))
+
+        result = f1_data._fit_stint_degradation(self._make_laps(laps), fuel_correction_s_per_lap=0.0)
+
+        assert len(result) == 1
+        stint = result[0]
+        assert stint["cliff_detected"] is True
+        assert stint["cliff_tyre_age"] == 11
+        assert stint["cliff_slope_increase_s_per_lap"] is not None
+        assert stint["cliff_severity_ratio"] is not None
+        assert stint["pre_cliff_deg_rate_s_per_lap"] is not None
+        assert stint["post_cliff_deg_rate_s_per_lap"] is not None
+        assert len(stint["pre_cliff_regression_line"]) == 2
+        assert len(stint["post_cliff_regression_line"]) == 2
+        assert len(stint["regression_line"]) == 2
+
+    def test_no_cliff_on_linear_stint_still_includes_field(self):
+        laps = [(i + 1, i + 1, 90.0 + 0.05 * i) for i in range(15)]
+
+        result = f1_data._fit_stint_degradation(self._make_laps(laps), fuel_correction_s_per_lap=0.0)
+
+        assert len(result) == 1
+        assert result[0]["cliff_detected"] is False
+        assert result[0]["pre_cliff_regression_line"] == []
+        assert result[0]["post_cliff_regression_line"] == []
+
+
 def test_summarize_tyre_management_weights_deg_consistency_and_r2():
     stints = [
         {

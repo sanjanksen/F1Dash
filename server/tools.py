@@ -624,6 +624,11 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
         "deg_rate_s_per_lap adds back expected fuel-burn gain to estimate tyre performance loss. "
         "For tyre-management rankings, lower positive_deg_rate_s_per_lap is the primary signal; "
         "consistency_std_dev_s is lap-to-lap noise and r_squared is confidence/trust in the trend, not pace. "
+        "Each stint also includes cliff_detected (bool), and when True: cliff_tyre_age, "
+        "cliff_slope_increase_s_per_lap, cliff_severity_ratio, pre_cliff_deg_rate_s_per_lap, "
+        "post_cliff_deg_rate_s_per_lap, and cliff_confidence. Use cliff_detected to flag stints where "
+        "the tyre appears to have fallen out of the optimal window, producing a materially steeper degradation "
+        "phase rather than staying linear. Do not infer graining, blistering, or thermal deg from this flag alone. "
         "Use for questions about tyre wear, degradation rate, tyre management, or how pace evolved over a stint.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},

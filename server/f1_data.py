@@ -4329,6 +4329,130 @@ def _linear_regression(x_vals: list[float], y_vals: list[float]) -> tuple[float,
     return (round(slope, 4), round(intercept, 3), round(r_squared, 3))
 
 
+def _linear_regression_raw(x_vals: list[float], y_vals: list[float]) -> tuple[float, float, float]:
+    """
+    Pure Python simple linear regression without rounding.
+    Used for model selection where rounded parameters can distort SSE/BIC.
+    """
+    n = len(x_vals)
+    if n < 2:
+        return (0.0, y_vals[0] if y_vals else 0.0, 0.0)
+
+    sum_x = sum(x_vals)
+    sum_y = sum(y_vals)
+    sum_xy = sum(x * y for x, y in zip(x_vals, y_vals))
+    sum_xx = sum(x * x for x in x_vals)
+
+    denom = n * sum_xx - sum_x ** 2
+    if abs(denom) < 1e-10:
+        return (0.0, sum_y / n, 0.0)
+
+    slope = (n * sum_xy - sum_x * sum_y) / denom
+    intercept = (sum_y - slope * sum_x) / n
+
+    y_mean = sum_y / n
+    ss_tot = sum((y - y_mean) ** 2 for y in y_vals)
+    ss_res = sum((y - (slope * x + intercept)) ** 2 for x, y in zip(x_vals, y_vals))
+    r_squared = 1.0 - ss_res / ss_tot if ss_tot > 1e-10 else 0.0
+
+    return (slope, intercept, r_squared)
+
+
+def _regression_sse(x_vals: list[float], y_vals: list[float], slope: float, intercept: float) -> float:
+    return sum((y - (slope * x + intercept)) ** 2 for x, y in zip(x_vals, y_vals))
+
+
+def _detect_cliff(
+    tyre_ages: list[float],
+    lap_times: list[float],
+    min_segment_laps: int = 5,
+    bic_threshold: float = 6.0,
+    slope_ratio_threshold: float = 2.5,
+    slope_abs_increase_threshold: float = 0.06,
+    sse_epsilon: float = 1e-9,
+) -> dict:
+    """
+    Detect a sustained tyre performance cliff with two-segment linear regression.
+
+    The model compares a one-line fit with all valid two-line breakpoints using
+    BIC, then requires the post-break slope to be materially worse.
+    """
+    n = len(tyre_ages)
+    if n != len(lap_times) or n < min_segment_laps * 2:
+        return {"cliff_detected": False}
+
+    s0, i0, _ = _linear_regression_raw(tyre_ages, lap_times)
+    sse0 = _regression_sse(tyre_ages, lap_times, s0, i0)
+    bic1 = n * math.log(max(sse0, sse_epsilon) / n) + 2 * math.log(n)
+
+    best_bic2 = float("inf")
+    best_k = None
+    best_fit = None
+
+    for k in range(min_segment_laps, n - min_segment_laps + 1):
+        ages_pre = tyre_ages[:k]
+        times_pre = lap_times[:k]
+        ages_post = tyre_ages[k:]
+        times_post = lap_times[k:]
+
+        s1, i1, _ = _linear_regression_raw(ages_pre, times_pre)
+        s2, i2, _ = _linear_regression_raw(ages_post, times_post)
+
+        sse_pre = _regression_sse(ages_pre, times_pre, s1, i1)
+        sse_post = _regression_sse(ages_post, times_post, s2, i2)
+        sse2 = sse_pre + sse_post
+        bic2 = n * math.log(max(sse2, sse_epsilon) / n) + 4 * math.log(n)
+
+        if bic2 < best_bic2:
+            best_bic2 = bic2
+            best_k = k
+            best_fit = (s1, i1, s2, i2)
+
+    if best_k is None or best_fit is None:
+        return {"cliff_detected": False}
+
+    delta_bic = bic1 - best_bic2
+    if delta_bic <= bic_threshold:
+        return {"cliff_detected": False}
+
+    s1, i1, s2, i2 = best_fit
+    if s2 <= s1:
+        return {"cliff_detected": False}
+
+    slope_increase = s2 - s1
+    ratio_is_meaningful = s1 > 0.01
+    ratio = s2 / s1 if ratio_is_meaningful else None
+    ratio_passes = ratio is not None and ratio >= slope_ratio_threshold
+    if not ratio_passes and slope_increase < slope_abs_increase_threshold:
+        return {"cliff_detected": False}
+
+    ages_pre = tyre_ages[:best_k]
+    ages_post = tyre_ages[best_k:]
+    cliff_tyre_age = ages_post[0]
+    confidence = "high" if delta_bic > 10 else "moderate"
+
+    return {
+        "cliff_detected": True,
+        "cliff_tyre_age": cliff_tyre_age,
+        "cliff_slope_increase_s_per_lap": round(slope_increase, 4),
+        "cliff_severity_ratio": round(ratio, 2) if ratio is not None else None,
+        "pre_cliff_deg_rate_s_per_lap": round(s1, 4),
+        "post_cliff_deg_rate_s_per_lap": round(s2, 4),
+        "pre_cliff_lap_count": len(ages_pre),
+        "post_cliff_lap_count": len(ages_post),
+        "pre_cliff_regression_line": [
+            {"tyre_age": ages_pre[0], "lap_time_s": round(s1 * ages_pre[0] + i1, 3)},
+            {"tyre_age": ages_pre[-1], "lap_time_s": round(s1 * ages_pre[-1] + i1, 3)},
+        ],
+        "post_cliff_regression_line": [
+            {"tyre_age": cliff_tyre_age, "lap_time_s": round(s2 * cliff_tyre_age + i2, 3)},
+            {"tyre_age": ages_post[-1], "lap_time_s": round(s2 * ages_post[-1] + i2, 3)},
+        ],
+        "bic_improvement": round(delta_bic, 2),
+        "cliff_confidence": confidence,
+    }
+
+
 def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: float = 0.04) -> list[dict]:
     """
     Group clean laps by compound block, fit linear regression per stint.
@@ -4341,15 +4465,24 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
     current_compound: str | None = None
     current_laps: list[dict] = []
 
+    previous_tyre_age = None
     for lap in sorted(clean_laps, key=lambda x: x['lap_number']):
         comp = lap['compound']
-        if comp != current_compound:
+        tyre_age = lap.get('tyre_age')
+        tyre_age_reset = (
+            current_laps
+            and tyre_age is not None
+            and previous_tyre_age is not None
+            and tyre_age < previous_tyre_age
+        )
+        if comp != current_compound or tyre_age_reset:
             if current_laps:
                 stints.append({'compound': current_compound, 'laps': current_laps})
             current_compound = comp
             current_laps = [lap]
         else:
             current_laps.append(lap)
+        previous_tyre_age = tyre_age
     if current_laps:
         stints.append({'compound': current_compound, 'laps': current_laps})
 
@@ -4386,6 +4519,7 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
 
         positive_deg = max(0.0, slope)
         total_deg_loss = round(positive_deg * len(laps), 3)
+        cliff = _detect_cliff(tyre_ages, fuel_corrected)
 
         results.append({
             'compound': stint['compound'],
@@ -4415,6 +4549,18 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
                 {'tyre_age': tyre_ages[0],  'lap_time_s': round(slope * tyre_ages[0]  + intercept, 3)},
                 {'tyre_age': tyre_ages[-1], 'lap_time_s': round(slope * tyre_ages[-1] + intercept, 3)},
             ],
+            'cliff_detected': cliff.get('cliff_detected', False),
+            'cliff_tyre_age': cliff.get('cliff_tyre_age'),
+            'cliff_slope_increase_s_per_lap': cliff.get('cliff_slope_increase_s_per_lap'),
+            'cliff_severity_ratio': cliff.get('cliff_severity_ratio'),
+            'pre_cliff_deg_rate_s_per_lap': cliff.get('pre_cliff_deg_rate_s_per_lap'),
+            'post_cliff_deg_rate_s_per_lap': cliff.get('post_cliff_deg_rate_s_per_lap'),
+            'pre_cliff_lap_count': cliff.get('pre_cliff_lap_count'),
+            'post_cliff_lap_count': cliff.get('post_cliff_lap_count'),
+            'pre_cliff_regression_line': cliff.get('pre_cliff_regression_line') or [],
+            'post_cliff_regression_line': cliff.get('post_cliff_regression_line') or [],
+            'bic_improvement': cliff.get('bic_improvement'),
+            'cliff_confidence': cliff.get('cliff_confidence'),
         })
 
     return results
