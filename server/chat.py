@@ -105,6 +105,10 @@ def _make_qualifying_battle_widget(result: dict) -> dict:
         "sector_comparison": result.get("sector_comparison"),
         "style_comparison": result.get("style_comparison"),
         "speed_trace": result.get("speed_trace") or [],
+        "drs_states": [
+            bool(p.get("drs_a_active") or p.get("drs_b_active"))
+            for p in (result.get("speed_trace") or [])
+        ],
         "track_map": result.get("track_map") or [],
         "focus_window_trace": result.get("focus_window_trace") or [],
         "grip_commitment": result.get("grip_commitment"),
@@ -841,6 +845,7 @@ Guidelines:
 - When doing a race recap (get_driver_race_story, get_race_report), the result already includes field_strategy (all drivers' stints) and safety_car_full (SC periods with strategic_crossings). Use these to proactively surface undercut/overcut narrative and SC strategy impact even if the user didn't specifically ask about strategy — it is part of the race story
 - For ANY free practice question (who was fastest, what programmes did drivers run, what was the race pace, FP1/FP2/FP3 recap): use get_fp_summary with fp_number=1/2/3. The result classifies every stint as long_run/quali_sim/short_run/installation. Long runs (8+ laps) approximate race pace; quali_sim (1-2 fresh soft laps) approximate single-lap pace. Always embed the fuel-load caveat: FP lap times cannot be directly compared to race or qualifying times.
 - For top speed, speed trap, straight-line speed, or drag questions (any session): use get_speed_trap_leaderboard. It returns four ranked lists (speed_st, speed_fl, speed_i1, speed_i2) scanning ALL laps to find each driver's peak at each trap independently. A driver's peak ST speed may be on a different lap than their peak FL speed.
+- When summarising speed-trap differences, always state whether the compared laps had DRS open. If they didn't, the gap is not a clean engine/aero comparison. If get_speed_trap_leaderboard returns a refusal payload, surface the refusal reason verbatim; only call again with allow_mixed_drs=true if the user explicitly asks for the raw figures despite the DRS mix.
 - For sprint race questions ('how did X do in the sprint?', 'recap the sprint race'): use get_driver_race_story or get_race_report with session_type='S'. Do NOT call these with the default session_type for sprint questions.
 - For sprint qualifying/shootout questions ('who was fastest in sprint qualifying?', 'sprint shootout recap'): use get_sprint_qualifying_results for raw classification. For causal 'why was X faster than Y in sprint qualifying?' questions, use analyze_qualifying_battle with session_type='SQ'.
 - For a driver's sprint weekend story: use get_driver_race_story with session_type='S'

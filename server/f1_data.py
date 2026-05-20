@@ -46,6 +46,14 @@ def _unavailable_payload(round_number: int, session_type: str) -> dict:
     }
 
 
+def drs_active(drs_value) -> bool:
+    """FastF1 DRS channel: 10/12/14 = open and active, else closed."""
+    try:
+        return int(drs_value) in (10, 12, 14)
+    except (TypeError, ValueError):
+        return False
+
+
 def _fmt_td(td) -> str | None:
     """Format a pd.Timedelta to a lap-time string like '1:26.456' or '0:28.123'."""
     if td is None or pd.isna(td):
@@ -2125,6 +2133,7 @@ def get_lap_telemetry(round_number: int, session_type: str,
         rpm = row.get('RPM')
         gear = row.get('nGear')
         drs = row.get('DRS')
+        is_drs_active = drs_active(drs) if pd.notna(drs) else False
         samples.append({
             "distance_m": int(dist),
             "speed_kph": round(float(row['Speed']), 1),
@@ -2132,7 +2141,8 @@ def get_lap_telemetry(round_number: int, session_type: str,
             "brake": bool(row['Brake']),
             "gear": int(gear) if pd.notna(gear) else None,
             "rpm": int(rpm) if pd.notna(rpm) else None,
-            "drs_open": int(drs) >= 10 if pd.notna(drs) else False,
+            "drs_open": is_drs_active,
+            "drs_active": is_drs_active,
         })
         dist += INTERVAL_M
 
@@ -2222,6 +2232,10 @@ def get_telemetry_comparison(round_number: int, session_type: str,
         x_b = _normalize_float(row_b.get('X'))
         y_b = _normalize_float(row_b.get('Y'))
 
+        drs_a_int = int(drs_a_raw) if pd.notna(drs_a_raw) else None
+        drs_b_int = int(drs_b_raw) if pd.notna(drs_b_raw) else None
+        drs_a_active = drs_active(drs_a_raw) if pd.notna(drs_a_raw) else False
+        drs_b_active = drs_active(drs_b_raw) if pd.notna(drs_b_raw) else False
         samples.append({
             "distance_m": int(dist),
             "x": x_a if x_a is not None else x_b,
@@ -2240,8 +2254,12 @@ def get_telemetry_comparison(round_number: int, session_type: str,
             "rpm_a": rpm_a,
             "rpm_b": rpm_b,
             "delta_rpm": (rpm_a - rpm_b) if rpm_a is not None and rpm_b is not None else None,
-            "drs_a": int(drs_a_raw) >= 10 if pd.notna(drs_a_raw) else False,
-            "drs_b": int(drs_b_raw) >= 10 if pd.notna(drs_b_raw) else False,
+            "drs_a": drs_a_active,
+            "drs_b": drs_b_active,
+            "drs_a_active": drs_a_active,
+            "drs_b_active": drs_b_active,
+            "drs_a_raw": drs_a_int,
+            "drs_b_raw": drs_b_int,
         })
         dist += INTERVAL_M
 
@@ -2935,6 +2953,8 @@ def _downsample_speed_trace(samples: list[dict], *, step: int = 200) -> list[dic
                 "speed_a": sample.get("speed_a"),
                 "speed_b": sample.get("speed_b"),
                 "delta_speed": sample.get("delta_speed"),
+                "drs_a_active": bool(sample.get("drs_a_active") or sample.get("drs_a")),
+                "drs_b_active": bool(sample.get("drs_b_active") or sample.get("drs_b")),
             })
             last_distance = distance
     if reduced and reduced[-1]["distance_m"] != samples[-1].get("distance_m"):
@@ -2944,6 +2964,8 @@ def _downsample_speed_trace(samples: list[dict], *, step: int = 200) -> list[dic
             "speed_a": final.get("speed_a"),
             "speed_b": final.get("speed_b"),
             "delta_speed": final.get("delta_speed"),
+            "drs_a_active": bool(final.get("drs_a_active") or final.get("drs_a")),
+            "drs_b_active": bool(final.get("drs_b_active") or final.get("drs_b")),
         })
     return reduced
 
@@ -6721,10 +6743,16 @@ def get_fp_summary(round_number: int, fp_number: int) -> dict:
     }
 
 
-def get_speed_trap_leaderboard(round_number: int, session_type: str) -> dict:
-    """Scan all laps and return peak speed at each trap (ST, FL, I1, I2) per driver."""
+def get_speed_trap_leaderboard(round_number: int, session_type: str,
+                                allow_mixed_drs: bool = False) -> dict:
+    """Scan all laps and return peak speed at each trap (ST, FL, I1, I2) per driver.
+
+    Each row carries a `drs_open` flag derived from telemetry at the moment of the
+    peak reading. When some drivers' peak came with DRS open and others with DRS
+    closed, the call returns a refusal payload unless `allow_mixed_drs=True`.
+    """
     try:
-        session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+        session = _load_session(round_number, session_type, laps=True, telemetry=True, weather=False, messages=False)
     except FastF1Error:
         return _unavailable_payload(round_number, session_type)
     driver_info = _driver_lookup(session)
@@ -6736,7 +6764,7 @@ def get_speed_trap_leaderboard(round_number: int, session_type: str) -> dict:
         "speed_i2": "SpeedI2",
     }
 
-    # For each trap, build {driver_code: {speed, lap_number, compound}}
+    # For each trap, build {driver_code: {speed, lap_number, compound, drs_open}}
     trap_bests: dict[str, dict[str, dict]] = {t: {} for t in traps}
 
     for code in session.drivers:
@@ -6751,10 +6779,20 @@ def get_speed_trap_leaderboard(round_number: int, session_type: str) -> dict:
             if valid.empty:
                 continue
             best_row = valid.loc[valid[col].idxmax()]
+            drs_open_at_trap = False
+            try:
+                tel = best_row.get_telemetry() if hasattr(best_row, "get_telemetry") else None
+                if tel is not None and not getattr(tel, "empty", True) and 'Speed' in tel.columns and 'DRS' in tel.columns:
+                    peak_speed = float(best_row[col])
+                    idx = (tel['Speed'] - peak_speed).abs().idxmin()
+                    drs_open_at_trap = drs_active(tel.loc[idx, 'DRS'])
+            except Exception:
+                drs_open_at_trap = False
             trap_bests[trap_key][code_upper] = {
                 "speed_kph": round(float(best_row[col]), 1),
                 "lap_number": int(best_row["LapNumber"]) if pd.notna(best_row.get("LapNumber")) else None,
                 "compound": str(best_row["Compound"]) if pd.notna(best_row.get("Compound")) else None,
+                "drs_open": bool(drs_open_at_trap),
             }
 
     def _ranked(trap_key: str) -> list[dict]:
@@ -6767,11 +6805,33 @@ def get_speed_trap_leaderboard(round_number: int, session_type: str) -> dict:
                 "speed_kph": data["speed_kph"],
                 "lap_number": data["lap_number"],
                 "compound": data["compound"],
+                "drs_open": data["drs_open"],
             })
         entries.sort(key=lambda e: e["speed_kph"], reverse=True)
         for i, e in enumerate(entries):
             e["rank"] = i + 1
         return entries
+
+    ranked_by_trap = {trap_key: _ranked(trap_key) for trap_key in traps}
+
+    # Refusal logic: if rows mix DRS-open and DRS-closed peaks, comparison is misleading.
+    if not allow_mixed_drs:
+        for trap_key, rows in ranked_by_trap.items():
+            has_drs_open = any(row["drs_open"] for row in rows)
+            has_drs_closed = any(not row["drs_open"] for row in rows)
+            if has_drs_open and has_drs_closed:
+                return {
+                    "available": True,
+                    "refusal": (
+                        "Comparing DRS-open and DRS-closed top-speeds is misleading; "
+                        "the gap could be 6+ km/h purely from DRS state. "
+                        "Re-ask with allow_mixed_drs=True if you want the raw figures anyway."
+                    ),
+                    "event": session.event["EventName"],
+                    "session": session_type,
+                    "trap_with_mixed_drs": trap_key,
+                    "rows": rows,
+                }
 
     return {
         "event": session.event["EventName"],
@@ -6782,8 +6842,8 @@ def get_speed_trap_leaderboard(round_number: int, session_type: str) -> dict:
             "speed_i1": "Intermediate 1",
             "speed_i2": "Intermediate 2",
         },
-        "speed_st": _ranked("speed_st"),
-        "speed_fl": _ranked("speed_fl"),
-        "speed_i1": _ranked("speed_i1"),
-        "speed_i2": _ranked("speed_i2"),
+        "speed_st": ranked_by_trap["speed_st"],
+        "speed_fl": ranked_by_trap["speed_fl"],
+        "speed_i1": ranked_by_trap["speed_i1"],
+        "speed_i2": ranked_by_trap["speed_i2"],
     }

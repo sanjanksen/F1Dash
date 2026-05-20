@@ -2876,6 +2876,217 @@ def test_build_ggv_envelope_returns_correct_shape():
     assert np.all(result['lat_max'] > 0)
 
 
+# ─── DRS-state awareness (F21) ───────────────────────────────
+
+
+class TestDrsAwareness:
+    def test_drs_active_true_for_10_12_14(self):
+        for v in (10, 12, 14):
+            assert f1_data.drs_active(v) is True
+
+    def test_drs_active_false_for_other(self):
+        for v in (0, 8, 9, 11, 13, 15, None, "x", float("nan")):
+            assert f1_data.drs_active(v) is False
+
+    def _make_speed_trap_mock_session(self, *, drs_open_for):
+        """Build a mock session for speed-trap tests.
+
+        drs_open_for: dict {driver_code: bool} — whether telemetry shows DRS open at peak ST.
+        """
+        import pandas as pd
+
+        mock_session = MagicMock()
+        mock_session.event = {'EventName': 'Monaco Grand Prix'}
+        mock_session.drivers = list(drs_open_for.keys())
+
+        def pick_drivers(codes):
+            code = codes[0] if isinstance(codes, list) else codes
+            if code not in drs_open_for:
+                m = MagicMock()
+                m.empty = True
+                return m
+
+            # Build a lap-like object with get_telemetry()
+            drs_value = 12 if drs_open_for[code] else 0
+            peak_speed = 320.0 if code == 'NOR' else 310.0
+            tel_df = pd.DataFrame({
+                'Speed': [200.0, 280.0, peak_speed, 305.0],
+                'DRS': [0, drs_value, drs_value, drs_value],
+            })
+
+            class LapRow:
+                """Acts like a pd.Series row but also exposes get_telemetry."""
+                def __init__(self, code, peak_speed, tel_df):
+                    self._data = {
+                        'LapNumber': 5,
+                        'Compound': 'SOFT',
+                        'SpeedST': peak_speed,
+                        'SpeedFL': peak_speed - 10,
+                        'SpeedI1': peak_speed - 30,
+                        'SpeedI2': peak_speed - 50,
+                        'Driver': code,
+                    }
+                    self._tel = tel_df
+
+                def __getitem__(self, key):
+                    return self._data[key]
+
+                def get(self, key, default=None):
+                    return self._data.get(key, default)
+
+                def get_telemetry(self):
+                    return self._tel
+
+            best_row = LapRow(code, peak_speed, tel_df)
+
+            # The valid DataFrame has notna/idxmax flow. We need pick_drivers to return
+            # an object where pick_driver(...) ends up calling .loc[.idxmax()] on a DataFrame.
+            # Build a single-row DataFrame whose .loc lookup returns the LapRow object.
+            class FakeLaps:
+                def __init__(self, row):
+                    self._row = row
+                    self.empty = False
+                    self.columns = ['SpeedST', 'SpeedFL', 'SpeedI1', 'SpeedI2']
+
+                def __getitem__(self, key):
+                    # mimic boolean indexing for the valid filter
+                    if isinstance(key, str):
+                        # column access returning a "Series-like" with .notna()/ > 0/.idxmax()
+                        speed = self._row[key]
+                        class FakeCol:
+                            def __init__(self, v):
+                                self.v = v
+                            def notna(self):
+                                return FakeCol(True)
+                            def __gt__(self, other):
+                                return FakeCol(self.v if isinstance(self.v, bool) else self.v > other)
+                            def __and__(self, other):
+                                return FakeCol(True)
+                            def idxmax(self_inner):
+                                return 0
+                        return FakeCol(speed)
+                    # boolean mask: return self (single row passes)
+                    return self
+
+                @property
+                def loc(self):
+                    row = self._row
+                    class Loc:
+                        def __getitem__(self, key):
+                            return row
+                    return Loc()
+
+            return FakeLaps(best_row)
+
+        mock_session.laps.pick_drivers.side_effect = pick_drivers
+        return mock_session
+
+    def test_speed_trap_refuses_mixed_drs_by_default(self):
+        # NOR peak with DRS open, LEC peak with DRS closed
+        mock_session = self._make_speed_trap_mock_session(drs_open_for={'NOR': True, 'LEC': False})
+
+        # _driver_lookup also calls session.drivers and driver lookup; patch lightly
+        with patch('f1_data.fastf1.get_session', return_value=mock_session), \
+             patch('f1_data._driver_lookup', return_value={'NOR': {'TeamName': 'McLaren'}, 'LEC': {'TeamName': 'Ferrari'}}):
+            result = f1_data.get_speed_trap_leaderboard(8, 'R')
+
+        assert 'refusal' in result
+        assert 'DRS' in result['refusal']
+        assert 'rows' in result
+        drs_flags = sorted(row['drs_open'] for row in result['rows'])
+        assert drs_flags == [False, True]
+
+    def test_speed_trap_allows_mixed_drs_with_opt_in(self):
+        mock_session = self._make_speed_trap_mock_session(drs_open_for={'NOR': True, 'LEC': False})
+
+        with patch('f1_data.fastf1.get_session', return_value=mock_session), \
+             patch('f1_data._driver_lookup', return_value={'NOR': {'TeamName': 'McLaren'}, 'LEC': {'TeamName': 'Ferrari'}}):
+            result = f1_data.get_speed_trap_leaderboard(8, 'R', allow_mixed_drs=True)
+
+        assert 'refusal' not in result
+        assert isinstance(result.get('speed_st'), list)
+        assert len(result['speed_st']) == 2
+        for row in result['speed_st']:
+            assert 'drs_open' in row
+        # ranked descending by speed
+        assert result['speed_st'][0]['speed_kph'] >= result['speed_st'][1]['speed_kph']
+
+    def test_get_lap_telemetry_samples_have_drs_active(self):
+        nor_lap = _make_mock_fastest_lap("NOR")
+        mock_session = _make_mock_session({"NOR": nor_lap})
+        mock_tel = _make_mock_telemetry(n_points=30, circuit_length_m=2000)
+        # Force some DRS-open samples
+        mock_tel['DRS'] = [12 if i > 15 else 0 for i in range(len(mock_tel))]
+
+        mock_lap_obj = MagicMock()
+        mock_lap_obj.__getitem__.side_effect = lambda k: nor_lap[k]
+        mock_lap_obj.get.side_effect = lambda k, d=None: nor_lap.get(k, d)
+        mock_lap_obj.get_telemetry.return_value.add_distance.return_value = mock_tel
+
+        def pick_driver_tel(codes):
+            mock_laps = MagicMock()
+            mock_laps.empty = False
+            mock_laps.pick_fastest.return_value = mock_lap_obj
+            return mock_laps
+
+        mock_session.laps.pick_drivers.side_effect = pick_driver_tel
+
+        with patch('f1_data.fastf1.get_session', return_value=mock_session):
+            result = f1_data.get_lap_telemetry(8, 'Q', 'NOR')
+
+        assert result['telemetry']
+        for sample in result['telemetry']:
+            assert 'drs_active' in sample
+            assert isinstance(sample['drs_active'], bool)
+        # At least one DRS-active sample expected from our forced fixture
+        assert any(s['drs_active'] for s in result['telemetry'])
+
+    def test_get_sector_comparison_rows_have_drs_per_driver(self):
+        """Per-sample comparison rows (get_telemetry_comparison) carry per-driver DRS active state."""
+        import pandas as pd
+        nor_lap_series = _make_mock_fastest_lap("NOR")
+        lec_lap_series = _make_mock_fastest_lap("LEC", "Ferrari")
+
+        tel_nor = _make_tel_df()
+        tel_lec = _make_tel_df()
+        # DRS pattern: NOR opens late, LEC stays closed
+        tel_nor['DRS'] = [0, 0, 0, 0, 12, 12]
+        tel_lec['DRS'] = [0, 0, 0, 0, 0, 0]
+
+        mock_lap_nor = MagicMock()
+        mock_lap_nor.__getitem__.side_effect = lambda k: nor_lap_series[k]
+        mock_lap_nor.get.side_effect = lambda k, d=None: nor_lap_series.get(k, d)
+        mock_lap_nor.get_telemetry.return_value.add_distance.return_value = tel_nor
+
+        mock_lap_lec = MagicMock()
+        mock_lap_lec.__getitem__.side_effect = lambda k: lec_lap_series[k]
+        mock_lap_lec.get.side_effect = lambda k, d=None: lec_lap_series.get(k, d)
+        mock_lap_lec.get_telemetry.return_value.add_distance.return_value = tel_lec
+
+        def pick_driver_tel(codes):
+            code = codes[0] if isinstance(codes, list) else codes
+            mock_laps = MagicMock()
+            mock_laps.empty = False
+            mock_laps.pick_fastest.return_value = mock_lap_nor if code.upper() == "NOR" else mock_lap_lec
+            return mock_laps
+
+        mock_session = MagicMock()
+        mock_session.event = {'EventName': 'Monaco Grand Prix'}
+        mock_session.laps.pick_drivers.side_effect = pick_driver_tel
+
+        with patch('f1_data.fastf1.get_session', return_value=mock_session):
+            result = f1_data.get_telemetry_comparison(8, 'Q', 'NOR', 'LEC')
+
+        assert result['comparison']
+        for row in result['comparison']:
+            assert 'drs_a_active' in row
+            assert 'drs_b_active' in row
+            assert isinstance(row['drs_a_active'], bool)
+            assert isinstance(row['drs_b_active'], bool)
+        # At least one row should show NOR DRS active, LEC DRS closed
+        assert any(r['drs_a_active'] and not r['drs_b_active'] for r in result['comparison'])
+
+
 def test_build_ggv_envelope_falls_back_when_empty():
     import numpy as np
     result = f1_data._build_ggv_envelope([])
