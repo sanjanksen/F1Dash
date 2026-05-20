@@ -3144,7 +3144,7 @@ def test_load_session_wraps_load_failure_clears_cache_entry(monkeypatch):
     assert cache_key not in f1_data._SESSION_CACHE
 
 
-def test_get_race_results_returns_unavailable_on_fastf1_error(monkeypatch):
+def test_get_session_results_returns_unavailable_on_fastf1_error(monkeypatch):
     def _raise(*args, **kwargs):
         raise f1_data.FastF1Error("nope", round_number=3, session_type="R")
 
