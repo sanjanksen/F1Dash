@@ -2,7 +2,7 @@ ENERGY_2026_KNOWLEDGE = {
     "known_facts": [
         "The 2026 power-unit rules materially increase electrical contribution relative to the previous generation.",
         "The MGU-K output rises to roughly 350 kW, up from the previous 120 kW era.",
-        "The 2026 rules target about 8.5 MJ per lap of energy recuperation under braking.",
+        "The 2026 rules target about 7 MJ per lap of energy recuperation under braking (refined late-2024).",
         "The 2026 rules remove the MGU-H, so the core visible recovery story is much more braking-centric than heat-energy-centric.",
         "At high speed, deployment can taper away, so a car can stay at full throttle while no longer gaining speed at the same rate late on a straight.",
         "FastF1 does not expose direct ERS state of charge, deployment maps, or harvest mode selectors.",
@@ -44,6 +44,46 @@ ENERGY_2026_KNOWLEDGE = {
         "If energy is relevant, explain why clipping matters in 2026: higher electrical reliance means a car that runs out of deployment earlier will stop accelerating as hard late on the straight.",
         "Do not claim setup, battery state, or exact harvest type unless the evidence clearly supports that narrower claim.",
     ],
+    "deployment_curve": {
+        "standard": [
+            {"speed_kph": 290, "power_kw": 350},
+            {"speed_kph": 322, "power_kw": 175},
+            {"speed_kph": 355, "power_kw": 0},
+        ],
+        "note": (
+            "Standard MGU-K deployment ramps linearly from 350 kW (max) at 290 km/h "
+            "down to 0 kW at 355 km/h. Interpolate between anchors."
+        ),
+    },
+    "override_mode": {
+        "curve": [
+            {"speed_kph": 337, "power_kw": 350},
+            {"speed_kph": 355, "power_kw": 0},
+        ],
+        "trigger": "Within a 1-second gap to the car ahead.",
+        "replaces": "DRS as the primary on-track overtaking aid.",
+        "note": (
+            "Override mode extends the 350 kW plateau from 290 km/h up to 337 km/h "
+            "before ramping to 0 at 355 km/h. Available only when within 1s of the car ahead."
+        ),
+    },
+    "zone_caps": {
+        "key_acceleration_zones_kw": 350,
+        "other_zones_kw": 250,
+        "note": (
+            "MGU-K peak power is capped at 350 kW only in key acceleration zones "
+            "(corner exit and overtake zones) and 250 kW elsewhere. Zones are "
+            "circuit-specific and FIA-published per round."
+        ),
+    },
+    "battery_storage": {
+        "per_lap_recovery_mj": 7,
+        "stored_energy_cap_mj": 4,
+        "note": (
+            "Battery stored-energy cap is 4 MJ at any instant. Per-lap recovery "
+            "target is 7 MJ (refined from the initial 8 MJ draft late in 2024)."
+        ),
+    },
 }
 
 
