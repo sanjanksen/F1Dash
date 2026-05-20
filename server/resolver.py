@@ -318,83 +318,8 @@ def _match_team(normalized: str) -> str | None:
 
 
 def _match_event(normalized: str) -> dict | None:
-    alias_map = {
-        "suzuka": "japan",
-        "japanese gp": "japan",
-        "japanese grand prix": "japan",
-        "monza": "italy",
-        "spa": "belgium",
-        "silverstone": "britain",
-        "interlagos": "brazil",
-        "yas marina": "abu dhabi",
-        "cota": "united states",
-        "imola": "emilia romagna",
-        "montreal": "canada",
-        "villeneuve": "canada",
-        "sakhir": "bahrain",
-        "albert park": "australia",
-        "budapest": "hungary",
-        "spielberg": "austria",
-        "red bull ring": "austria",
-        "marina bay": "singapore",
-        "lusail": "qatar",
-        "baku": "azerbaijan",
-        "jeddah": "saudi arabia",
-        "las vegas": "las vegas",
-        "mexico city": "mexico",
-        "autodromo hermanos rodriguez": "mexico",
-        "circuit de barcelona": "spain",
-        "barcelona": "spain",
-        "catalunya": "spain",
-        "zandvoort": "netherlands",
-    }
-    search_terms = set()
-    for alias, mapped in alias_map.items():
-        if alias in normalized:
-            search_terms.add(alias)
-            search_terms.add(mapped)
-
-    token_terms = set()
-    for token in normalized.split():
-        if len(token) >= 4:
-            token_terms.add(token)
-    search_terms.update(token_terms)
-
-    circuits = _cached_circuits()
-    best_match = None
-    best_score = 0
-    for circuit in circuits:
-        haystacks = [
-            _normalize(circuit.get("event_name", "")),
-            _normalize(circuit.get("circuit_name", "")),
-            _normalize(circuit.get("country", "")),
-        ]
-        gpless = haystacks[0].replace("grand prix", "").strip()
-        if gpless:
-            haystacks.append(gpless)
-        country = haystacks[2]
-        if country:
-            haystacks.append(f"{country} grand prix")
-            if country.endswith("n"):
-                haystacks.append(country[:-1])
-        score = 0
-        for hay in [hay for hay in haystacks if hay]:
-            if hay and re.search(rf"\b{re.escape(hay)}\b", normalized):
-                score = max(score, len(hay) + 10)
-
-        for term in list(search_terms):
-            normalized_term = term.replace("gp", "grand prix").strip()
-            if not normalized_term:
-                continue
-            for hay in [hay for hay in haystacks if hay]:
-                if re.search(rf"\b{re.escape(normalized_term)}\b", hay):
-                    score = max(score, len(normalized_term))
-
-        if score > best_score:
-            best_score = score
-            best_match = circuit
-
-    return best_match if best_score > 0 else None
+    from circuit_profiles import match_circuit_from_text
+    return match_circuit_from_text(normalized, _cached_circuits())
 
 
 def _suggest_tool(entity_type: str | None, scope: str | None, session_type: str | None = None) -> str | None:

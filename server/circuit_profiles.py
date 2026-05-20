@@ -13,6 +13,8 @@ Used by the deterministic analysis pipeline and the agentic tool loop to
 give the LLM contextual grounding before it interprets telemetry evidence.
 """
 
+import re
+
 CALENDAR_YEAR = 2026
 
 
@@ -1011,3 +1013,106 @@ def get_circuit_profile(country: str, event_name: str = "") -> dict | None:
     if profile is None:
         return None
     return {"circuit_key": best_key, **profile}
+
+
+# ── Free-text circuit matching (used by resolver) ────────────────────────────
+
+# Editorial alias map: free-text fragments → canonical country name used in
+# circuits-list `country` field. Single source of truth — resolver delegates
+# here instead of maintaining a parallel map.
+CIRCUIT_TEXT_ALIASES: dict[str, str] = {
+    "suzuka": "japan",
+    "japanese gp": "japan",
+    "japanese grand prix": "japan",
+    "monza": "italy",
+    "spa": "belgium",
+    "silverstone": "britain",
+    "interlagos": "brazil",
+    "yas marina": "abu dhabi",
+    "cota": "united states",
+    "imola": "emilia romagna",
+    "montreal": "canada",
+    "villeneuve": "canada",
+    "sakhir": "bahrain",
+    "albert park": "australia",
+    "budapest": "hungary",
+    "spielberg": "austria",
+    "red bull ring": "austria",
+    "marina bay": "singapore",
+    "lusail": "qatar",
+    "baku": "azerbaijan",
+    "jeddah": "saudi arabia",
+    "las vegas": "las vegas",
+    "mexico city": "mexico",
+    "autodromo hermanos rodriguez": "mexico",
+    "circuit de barcelona": "spain",
+    "barcelona": "spain",
+    "catalunya": "spain",
+    "zandvoort": "netherlands",
+}
+
+
+def _normalize_text(text: str) -> str:
+    return re.sub(r"[^a-z0-9\s]", " ", (text or "").lower()).strip()
+
+
+def match_circuit_from_text(normalized: str, circuits: list[dict]) -> dict | None:
+    """
+    Match free-text input against a list of circuit dicts (event_name,
+    circuit_name, country). Tries the canonical text-alias map first, then
+    canonical country aliases, then a token/substring scan. Returns the
+    matching circuit dict or None.
+    """
+    if not normalized or not circuits:
+        return None
+
+    search_terms: set[str] = set()
+    for alias, mapped in CIRCUIT_TEXT_ALIASES.items():
+        if alias in normalized:
+            search_terms.add(alias)
+            search_terms.add(mapped)
+
+    for alias, mapped_key in _COUNTRY_ALIASES.items():
+        if alias and re.search(rf"\b{re.escape(alias)}\b", normalized):
+            search_terms.add(alias)
+            search_terms.add(mapped_key.replace("_", " "))
+
+    for token in normalized.split():
+        if len(token) >= 4:
+            search_terms.add(token)
+
+    best_match: dict | None = None
+    best_score = 0
+    for circuit in circuits:
+        haystacks = [
+            _normalize_text(circuit.get("event_name", "")),
+            _normalize_text(circuit.get("circuit_name", "")),
+            _normalize_text(circuit.get("country", "")),
+        ]
+        gpless = haystacks[0].replace("grand prix", "").strip()
+        if gpless:
+            haystacks.append(gpless)
+        country = haystacks[2]
+        if country:
+            haystacks.append(f"{country} grand prix")
+            if country.endswith("n"):
+                haystacks.append(country[:-1])
+
+        score = 0
+        for hay in [h for h in haystacks if h]:
+            if re.search(rf"\b{re.escape(hay)}\b", normalized):
+                score = max(score, len(hay) + 10)
+
+        for term in list(search_terms):
+            normalized_term = term.replace("gp", "grand prix").strip()
+            if not normalized_term:
+                continue
+            for hay in [h for h in haystacks if h]:
+                if re.search(rf"\b{re.escape(normalized_term)}\b", hay):
+                    score = max(score, len(normalized_term))
+
+        if score > best_score:
+            best_score = score
+            best_match = circuit
+
+    return best_match if best_score > 0 else None
