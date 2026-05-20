@@ -1,10 +1,10 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import resolver
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_query_context_driver_event(mock_circuits, mock_drivers):
     mock_drivers.return_value = [
         {"full_name": "George Russell", "code": "RUS", "driver_id": "russell", "team": "Mercedes"},
@@ -25,7 +25,7 @@ def test_resolve_query_context_driver_event(mock_circuits, mock_drivers):
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_query_context_team(mock_circuits, mock_drivers):
     mock_drivers.return_value = [
         {"full_name": "George Russell", "code": "RUS", "driver_id": "russell", "team": "Mercedes"},
@@ -44,7 +44,7 @@ def test_resolve_query_context_team(mock_circuits, mock_drivers):
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_query_context_race_report(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = [
@@ -59,7 +59,7 @@ def test_resolve_query_context_race_report(mock_circuits, mock_drivers):
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_query_context_inherits_event_from_previous(mock_circuits, mock_drivers):
     mock_drivers.return_value = [
         {"full_name": "George Russell", "code": "RUS", "driver_id": "russell", "team": "Mercedes"},
@@ -79,7 +79,7 @@ def test_resolve_query_context_inherits_event_from_previous(mock_circuits, mock_
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_context_from_history(mock_circuits, mock_drivers):
     mock_drivers.return_value = [
         {"full_name": "George Russell", "code": "RUS", "driver_id": "russell", "team": "Mercedes"},
@@ -102,7 +102,7 @@ def test_resolve_context_from_history(mock_circuits, mock_drivers):
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_query_context_multi_driver_qualifying_analysis(mock_circuits, mock_drivers):
     mock_drivers.return_value = [
         {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
@@ -123,7 +123,7 @@ def test_resolve_query_context_multi_driver_qualifying_analysis(mock_circuits, m
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_query_context_inherits_multi_driver_analysis_context(mock_circuits, mock_drivers):
     mock_drivers.return_value = [
         {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
@@ -143,7 +143,7 @@ def test_resolve_query_context_inherits_multi_driver_analysis_context(mock_circu
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_query_context_energy_scope(mock_circuits, mock_drivers):
     mock_drivers.return_value = [
         {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
@@ -161,7 +161,7 @@ def test_resolve_query_context_energy_scope(mock_circuits, mock_drivers):
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_query_context_prefers_explicit_japan_over_other_rounds(mock_circuits, mock_drivers):
     mock_drivers.return_value = [
         {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
@@ -179,7 +179,7 @@ def test_resolve_query_context_prefers_explicit_japan_over_other_rounds(mock_cir
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_query_context_detects_quali_shorthand(mock_circuits, mock_drivers):
     mock_drivers.return_value = [
         {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
@@ -198,7 +198,7 @@ def test_resolve_query_context_detects_quali_shorthand(mock_circuits, mock_drive
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_match_event_montreal(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = [
@@ -209,7 +209,7 @@ def test_match_event_montreal(mock_circuits, mock_drivers):
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_match_event_sakhir(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = [
@@ -220,7 +220,7 @@ def test_match_event_sakhir(mock_circuits, mock_drivers):
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_match_event_budapest(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = [
@@ -231,7 +231,7 @@ def test_match_event_budapest(mock_circuits, mock_drivers):
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_suggest_tool_qualifying_strategy_not_race_story(mock_circuits, mock_drivers):
     """Qualifying scope with 'strategy' keyword must NOT route to get_driver_race_story."""
     mock_drivers.return_value = [
@@ -246,7 +246,7 @@ def test_suggest_tool_qualifying_strategy_not_race_story(mock_circuits, mock_dri
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_detect_analysis_mode_outqualify(mock_circuits, mock_drivers):
     mock_drivers.return_value = [
         {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
@@ -261,7 +261,7 @@ def test_detect_analysis_mode_outqualify(mock_circuits, mock_drivers):
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_detect_analysis_mode_gap_between(mock_circuits, mock_drivers):
     mock_drivers.return_value = [
         {"full_name": "Max Verstappen", "code": "VER", "driver_id": "verstappen", "team": "Red Bull"},
@@ -275,7 +275,7 @@ def test_detect_analysis_mode_gap_between(mock_circuits, mock_drivers):
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_query_context_race_pace_comparison(mock_circuits, mock_drivers):
     mock_drivers.return_value = [
         {"full_name": "Max Verstappen", "code": "VER", "driver_id": "verstappen", "team": "Red Bull"},
@@ -292,7 +292,7 @@ def test_resolve_query_context_race_pace_comparison(mock_circuits, mock_drivers)
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_query_context_team_performance_analysis(mock_circuits, mock_drivers):
     mock_drivers.return_value = [
         {"full_name": "Charles Leclerc", "code": "LEC", "driver_id": "leclerc", "team": "Ferrari"},
@@ -310,7 +310,7 @@ def test_resolve_query_context_team_performance_analysis(mock_circuits, mock_dri
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_standings_scope_driver(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = []
@@ -320,7 +320,7 @@ def test_standings_scope_driver(mock_circuits, mock_drivers):
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_standings_scope_constructor(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = []
@@ -330,7 +330,7 @@ def test_standings_scope_constructor(mock_circuits, mock_drivers):
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_standings_scope_points_table(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = []
@@ -341,7 +341,7 @@ def test_standings_scope_points_table(mock_circuits, mock_drivers):
 
 @patch('resolver._extract_entities_llm', return_value={})
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_query_context_circuit_scope_tell_me_about(mock_circuits, mock_drivers, mock_llm):
     """'tell me about the X circuit' sets scope=circuit and analysis_mode=circuit_profile."""
     mock_drivers.return_value = []
@@ -359,7 +359,7 @@ def test_resolve_query_context_circuit_scope_tell_me_about(mock_circuits, mock_d
 
 @patch('resolver._extract_entities_llm', return_value={})
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_query_context_circuit_scope_circuit_guide(mock_circuits, mock_drivers, mock_llm):
     """'circuit guide' phrasing also triggers circuit scope."""
     mock_drivers.return_value = []
@@ -376,7 +376,7 @@ def test_resolve_query_context_circuit_scope_circuit_guide(mock_circuits, mock_d
 
 @patch('resolver._extract_entities_llm', return_value={})
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_query_context_team_circuit_fit(mock_circuits, mock_drivers, mock_llm):
     mock_circuits.return_value = []
     mock_drivers.return_value = [
@@ -392,7 +392,7 @@ def test_resolve_query_context_team_circuit_fit(mock_circuits, mock_drivers, moc
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_pit_strategy_scope_routes_to_pit_stop_analysis(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = [
@@ -406,7 +406,7 @@ def test_pit_strategy_scope_routes_to_pit_stop_analysis(mock_circuits, mock_driv
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_undercut_scope_routes_to_pit_stop_analysis(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = [
@@ -420,7 +420,7 @@ def test_undercut_scope_routes_to_pit_stop_analysis(mock_circuits, mock_drivers)
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_weather_pace_scope_routes_to_weather_correlation(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = [
@@ -434,7 +434,7 @@ def test_weather_pace_scope_routes_to_weather_correlation(mock_circuits, mock_dr
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_degradation_scope_with_driver_routes_to_stint_degradation(mock_circuits, mock_drivers):
     mock_drivers.return_value = [
         {"full_name": "George Russell", "code": "RUS", "driver_id": "russell", "team": "Mercedes"},
@@ -450,7 +450,7 @@ def test_degradation_scope_with_driver_routes_to_stint_degradation(mock_circuits
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_degradation_scope_without_driver_returns_no_tool(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = [
@@ -464,7 +464,7 @@ def test_degradation_scope_without_driver_returns_no_tool(mock_circuits, mock_dr
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_strategy_keyword_without_pit_terms_stays_strategy_scope(mock_circuits, mock_drivers):
     mock_drivers.return_value = [
         {"full_name": "George Russell", "code": "RUS", "driver_id": "russell", "team": "Mercedes"},
@@ -479,7 +479,7 @@ def test_strategy_keyword_without_pit_terms_stays_strategy_scope(mock_circuits, 
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_fp_scope_routes_to_fp_summary(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = [
@@ -492,7 +492,7 @@ def test_fp_scope_routes_to_fp_summary(mock_circuits, mock_drivers):
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_fp2_scope_carries_fp_number(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = [
@@ -505,7 +505,7 @@ def test_fp2_scope_carries_fp_number(mock_circuits, mock_drivers):
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_speed_trap_scope_routes_to_leaderboard(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = [
@@ -517,7 +517,7 @@ def test_speed_trap_scope_routes_to_leaderboard(mock_circuits, mock_drivers):
 
 
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_speed_trap_scope_straight_line_language(mock_circuits, mock_drivers):
     mock_drivers.return_value = []
     mock_circuits.return_value = [
@@ -526,6 +526,44 @@ def test_speed_trap_scope_straight_line_language(mock_circuits, mock_drivers):
     result = resolver.resolve_query_context("who was fastest down the straight in the race at Suzuka?")
     assert result["scope"] == "speed_trap"
     assert result["suggested_tool"] == "get_speed_trap_leaderboard"
+
+
+def _capture_llm_system_prompt(message: str = "What did Lando do?") -> str:
+    """Invoke _extract_entities_llm with a mocked Haiku client and return the system prompt argument."""
+    import circuits_cache
+    resolver._drivers_cache = []
+    resolver._drivers_cache_time = 0.0
+    circuits_cache._circuits_cache = []
+    circuits_cache._circuits_cache_time = 0.0
+    captured = {}
+
+    def _capture(**kwargs):
+        captured["system"] = kwargs.get("system", "")
+        response = MagicMock()
+        response.content = []
+        return response
+
+    mock_client = MagicMock()
+    mock_client.messages.create.side_effect = _capture
+
+    with patch('resolver.get_drivers', return_value=[]), \
+         patch('circuits_cache.get_circuits', return_value=[]), \
+         patch('resolver._get_haiku_client', return_value=mock_client):
+        resolver._extract_entities_llm(message)
+
+    return captured.get("system", "")
+
+
+def test_prompt_includes_2026_aliases():
+    system = _capture_llm_system_prompt()
+    for code in ("ANT", "BEA", "LAW", "HAD", "BOR", "DOO", "TSU", "COL"):
+        assert code in system, f"expected 2026 alias {code} in system prompt"
+
+
+def test_prompt_preserves_legacy_aliases():
+    system = _capture_llm_system_prompt()
+    for alias in ("Mad Max", "Lando", "Checo", "Carlos", "George", "Lewis", "Charles", "Oscar", "Fernando", "Lance"):
+        assert alias in system, f"expected legacy alias {alias!r} in system prompt"
 
 
 def test_suggest_tool_sprint_race_driver_entity():
@@ -584,7 +622,7 @@ def test_detect_session_scope_sprint_race_gives_s():
 
 @patch('resolver._extract_entities_llm', return_value={})
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_single_driver_sprint_qualifying_routes_to_sprint_qualifying_results(mock_circuits, mock_drivers, mock_llm):
     mock_drivers.return_value = [
         {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
@@ -602,7 +640,7 @@ def test_single_driver_sprint_qualifying_routes_to_sprint_qualifying_results(moc
 
 @patch('resolver._extract_entities_llm', return_value={})
 @patch('resolver.get_drivers')
-@patch('resolver.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_sprint_quali_comparison_uses_sq_analysis(mock_circuits, mock_drivers, mock_llm):
     mock_drivers.return_value = [
         {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
@@ -617,3 +655,56 @@ def test_sprint_quali_comparison_uses_sq_analysis(mock_circuits, mock_drivers, m
     assert result["session_type"] == "SQ"
     assert result["analysis_mode"] == "driver_comparison"
     assert result["analysis_focus"] == "qualifying"
+
+
+def test_circuits_cache_ttl(monkeypatch):
+    import circuits_cache
+    circuits_cache._circuits_cache = []
+    circuits_cache._circuits_cache_time = 0.0
+
+    call_count = {"n": 0}
+
+    def fake_get_circuits():
+        call_count["n"] += 1
+        return [{"round": call_count["n"], "event_name": f"Event {call_count['n']}", "country": "Test"}]
+
+    monkeypatch.setattr(circuits_cache, "get_circuits", fake_get_circuits)
+
+    fake_time = {"now": 1000.0}
+    monkeypatch.setattr(circuits_cache.time, "time", lambda: fake_time["now"])
+
+    first = circuits_cache._cached_circuits()
+    assert call_count["n"] == 1
+    assert first[0]["round"] == 1
+
+    # Within TTL — should not refresh
+    fake_time["now"] = 1000.0 + circuits_cache._CIRCUITS_CACHE_TTL - 1
+    second = circuits_cache._cached_circuits()
+    assert call_count["n"] == 1
+    assert second[0]["round"] == 1
+
+    # Past TTL — should refresh
+    fake_time["now"] = 1000.0 + circuits_cache._CIRCUITS_CACHE_TTL + 1
+    third = circuits_cache._cached_circuits()
+    assert call_count["n"] == 2
+    assert third[0]["round"] == 2
+
+    circuits_cache._circuits_cache = []
+    circuits_cache._circuits_cache_time = 0.0
+
+
+class TestHasReferenceLanguage:
+    def test_single_weak_token_returns_false(self):
+        assert resolver._has_reference_language("what s the weather like today") is False
+
+    def test_single_his_returns_false(self):
+        assert resolver._has_reference_language("how was his race") is False
+
+    def test_deictic_phrase_returns_true(self):
+        assert resolver._has_reference_language("how was his race that weekend") is True
+
+    def test_teammate_returns_true(self):
+        assert resolver._has_reference_language("did he beat his teammate") is True
+
+    def test_two_weak_tokens_returns_true(self):
+        assert resolver._has_reference_language("did he and his car make it") is True

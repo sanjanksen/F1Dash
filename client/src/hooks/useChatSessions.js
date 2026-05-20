@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 
 const STORAGE_KEY = 'f1dash_sessions'
+const TARGET_BYTES = 4 * 1024 * 1024
+const MIN_SESSIONS_TO_KEEP = 5
 
 function load() {
   try {
@@ -10,8 +12,43 @@ function load() {
   }
 }
 
+function approxBytes(value) {
+  return value.length * 2
+}
+
+function trimSessions(sessions) {
+  let trimmed = sessions
+  while (trimmed.length > MIN_SESSIONS_TO_KEEP) {
+    const serialized = JSON.stringify(trimmed)
+    if (approxBytes(serialized) <= TARGET_BYTES) return trimmed
+    trimmed = trimmed.slice(0, trimmed.length - 1)
+  }
+  return trimmed
+}
+
 function persist(sessions) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions))
+  let toWrite = sessions
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(toWrite))
+    return toWrite
+  } catch (err) {
+    if (err?.name !== 'QuotaExceededError' && err?.code !== 22) {
+      console.warn('Failed to persist sessions:', err)
+      return toWrite
+    }
+    console.warn('localStorage quota exceeded; pruning oldest sessions.')
+    toWrite = trimSessions(toWrite)
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(toWrite))
+      return toWrite
+    } catch (innerErr) {
+      console.warn('Still over quota after pruning; clearing sessions.', innerErr)
+      try {
+        localStorage.removeItem(STORAGE_KEY)
+      } catch {}
+      return []
+    }
+  }
 }
 
 export function useChatSessions() {
@@ -33,8 +70,7 @@ export function useChatSessions() {
 
     setSessions((prev) => {
       const next = [session, ...prev]
-      persist(next)
-      return next
+      return persist(next)
     })
 
     setActiveId(id)
@@ -54,16 +90,14 @@ export function useChatSessions() {
         return { ...session, title, messages }
       })
 
-      persist(next)
-      return next
+      return persist(next)
     })
   }, [])
 
   const deleteSession = useCallback((id) => {
     setSessions((prev) => {
       const next = prev.filter((session) => session.id !== id)
-      persist(next)
-      return next
+      return persist(next)
     })
   }, [])
 

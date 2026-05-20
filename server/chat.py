@@ -9,20 +9,70 @@ import json
 import os
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 import anthropic
 try:
     import openai as openai_sdk
 except ImportError:
     openai_sdk = None
+try:
+    import openai
+except ImportError:
+    openai = None
 from tools import TOOL_DEFINITIONS, OPENAI_TOOL_DEFINITIONS, execute_tool
-from resolver import resolve_query_context, resolve_context_from_history
+from resolver import resolve_query_context, resolve_context_from_history, _cached_drivers
 from driver_styles import get_comparison_framing
 from circuit_profiles import get_circuit_profile
 from energy_2026 import get_energy_2026_knowledge
+from evidence_shaping import (
+    CORNERING_TOOL_NAMES,
+    reject_data_table_for_cornering,
+    strip_heavy_payload_fields,
+)
 
 MAX_TOOL_ROUNDS = 8
+MAX_DETERMINISTIC_TOOL_WORKERS = 4
 logger = logging.getLogger(__name__)
+
+
+class LLMTransientError(RuntimeError):
+    """Raised when a model-provider call should be surfaced as 'retry later'."""
+
+    def __init__(self, message: str, *, provider: str, kind: str):
+        super().__init__(message)
+        self.provider = provider
+        self.kind = kind  # "rate_limit" | "connection" | "api"
+
+
+def _call_anthropic(client, **kwargs):
+    try:
+        return client.messages.create(**kwargs)
+    except anthropic.RateLimitError as e:
+        logger.warning("Anthropic rate-limited: %s", type(e).__name__)
+        raise LLMTransientError("Anthropic rate-limited", provider="anthropic", kind="rate_limit") from e
+    except anthropic.APIConnectionError as e:
+        logger.warning("Anthropic connection error: %s", type(e).__name__)
+        raise LLMTransientError("Anthropic connection error", provider="anthropic", kind="connection") from e
+    except anthropic.APIError as e:
+        logger.error("Anthropic API error: %s", type(e).__name__, exc_info=True)
+        raise LLMTransientError("Anthropic API error", provider="anthropic", kind="api") from e
+
+
+def _call_openai(client, **kwargs):
+    if openai is None:
+        return client.chat.completions.create(**kwargs)
+    try:
+        return client.chat.completions.create(**kwargs)
+    except openai.RateLimitError as e:
+        logger.warning("OpenAI rate-limited: %s", type(e).__name__)
+        raise LLMTransientError("OpenAI rate-limited", provider="openai", kind="rate_limit") from e
+    except openai.APIConnectionError as e:
+        logger.warning("OpenAI connection error: %s", type(e).__name__)
+        raise LLMTransientError("OpenAI connection error", provider="openai", kind="connection") from e
+    except openai.APIError as e:
+        logger.error("OpenAI API error: %s", type(e).__name__, exc_info=True)
+        raise LLMTransientError("OpenAI API error", provider="openai", kind="api") from e
 
 import datetime
 
@@ -309,6 +359,15 @@ def _make_deg_trend_chart_widget(result: dict) -> dict:
                 "r_squared": s.get("r_squared"),
                 "scatter_data": s.get("scatter_data") or [],
                 "regression_line": s.get("regression_line") or [],
+                "cliff_detected": s.get("cliff_detected", False),
+                "cliff_tyre_age": s.get("cliff_tyre_age"),
+                "cliff_slope_increase_s_per_lap": s.get("cliff_slope_increase_s_per_lap"),
+                "cliff_severity_ratio": s.get("cliff_severity_ratio"),
+                "pre_cliff_deg_rate_s_per_lap": s.get("pre_cliff_deg_rate_s_per_lap"),
+                "post_cliff_deg_rate_s_per_lap": s.get("post_cliff_deg_rate_s_per_lap"),
+                "pre_cliff_regression_line": s.get("pre_cliff_regression_line") or [],
+                "post_cliff_regression_line": s.get("post_cliff_regression_line") or [],
+                "cliff_confidence": s.get("cliff_confidence"),
             }
             for s in (result.get("stints") or [])
             if s.get("scatter_data") or s.get("regression_line")
@@ -549,12 +608,39 @@ def _extract_inline_widgets(text: str | None) -> tuple[str, list[dict]]:
     return cleaned.strip(), widgets
 
 
-def _payload_with_inline_widgets(response: str | None, base_widgets: list[dict] | None = None) -> dict:
+def _payload_with_inline_widgets(
+    response: str | None,
+    base_widgets: list[dict] | None = None,
+    *,
+    executed_evidence: list[dict] | None = None,
+) -> dict:
     clean_response, inline_widgets = _extract_inline_widgets(response)
+    if executed_evidence and any(
+        item.get("tool") in CORNERING_TOOL_NAMES for item in executed_evidence
+    ):
+        inline_widgets = [
+            w for w in inline_widgets
+            if not reject_data_table_for_cornering(w.get("type"), _infer_widget_source_tool(w, executed_evidence))
+        ]
     return {
         "response": clean_response,
         "widgets": _merge_widgets(base_widgets or [], inline_widgets),
     }
+
+
+def _infer_widget_source_tool(widget: dict, executed_evidence: list[dict]) -> str | None:
+    """Heuristic: if a cornering tool ran this turn, assume data_table widgets came from it.
+
+    The LLM emits data_table widgets inline via prose; no explicit tool linkage exists.
+    When cornering evidence is present we treat the data_table as cornering-sourced so
+    it gets suppressed per system policy.
+    """
+    if widget.get("type") != "data_table":
+        return None
+    for item in executed_evidence:
+        if item.get("tool") in CORNERING_TOOL_NAMES:
+            return item.get("tool")
+    return None
 
 
 def _find_evidence_result(evidence: list[dict], tool_name: str) -> dict | None:
@@ -767,8 +853,9 @@ Answer quality rules:
 - Use the conversation history for follow-up questions.
 - 3-5 sentences for most answers. Use bullets only when listing genuinely separate items.
 - When ranking, comparing many entities, or presenting 3+ rows of structured data, do not use a Markdown table. Add a hidden data table widget at the end of your answer using a fenced `f1-widget` JSON block. The JSON shape is: {{"type":"data_table","title":"Short title","subtitle":"Optional scope","columns":[{{"key":"rank","label":"Rank","align":"right"}},{{"key":"driver","label":"Driver"}}],"rows":[{{"rank":"1","driver":"PIA"}}],"note":"Optional caveat"}}. Keep the prose short and let the widget carry the rows.
-- **Exception — cornering data: NEVER generate a data_table for `analyze_cornering_loads` or `analyze_race_cornering_profile` results.** Cornering metrics are rendered in a dedicated two-panel widget (Commitment / Technique). Write prose only. A data_table duplicates the panel and confuses the layout.
-- If you cannot determine which specific race or round the question refers to, ask ONE short clarifying question before calling any data tools. Do not guess a round number and do not call tools with a missing or uncertain race context."""
+- Cornering data has its own dedicated widget; data_tables sourced from cornering tools are suppressed in code, so write prose only.
+- If you cannot determine which specific race or round the question refers to, ask ONE short clarifying question before calling any data tools. Do not guess a round number and do not call tools with a missing or uncertain race context.
+- If a tool result contains `"available": false` and a `guidance_for_model` field, follow that guidance verbatim. Never paper over the gap with invented characteristics."""
 
 def _build_analysis_system_prompt() -> str:
     energy = get_energy_2026_knowledge()
@@ -792,6 +879,7 @@ You do not answer like a chatbot. You read retrieved evidence and produce a JSON
 - Keep reasons non-overlapping. Each secondary reason must be a genuinely distinct mechanism from the primary.
 - Do not claim setup, tyre condition, balance, confidence, or car behavior unless explicitly present in the supplied evidence.
 - If telemetry or energy evidence is unavailable, say that clearly and do not invent a braking/traction/setup explanation.
+- If a tool result contains `"available": false` and a `guidance_for_model` field, follow that guidance verbatim. Never paper over the gap with invented characteristics.
 - If the evidence is mixed or weak, say so in uncertainties.
 - Output valid JSON only.
 
@@ -1034,11 +1122,12 @@ top speed trap, slipstream, tow, drag penalty, sacrificing downforce, high-drag 
 - 3-5 sentences. Use bullets only for genuinely separate contributing factors.
 - For cornering data: NEVER say "lateral load variance", "grip utilisation percentage", "avg_corrections_per_corner". Those are internal metrics. Translate to character language: "Norris had more tyre confidence — really committed, on the absolute limit for a third of every corner" is correct. "Norris had 74% avg_grip_utilisation_pct" is completely wrong.
 - For tyre data: NEVER say "deg_rate_delta" or "fuel-corrected pace". Say "his tyres were dropping off faster" or "once you strip out the fuel, he had the edge on raw pace."
+- Only say "cliff", "fell off a cliff", or "fell out of the optimal window" when `cliff_detected` is true. If it is false, describe the stint as linear degradation, noisy degradation, or normal drop-off. If the cliff flag is true, use F1 language: "it looks like the tyre fell out of the optimal window around age 13" or "after age 13 the tyre seems to have dropped out of its window and the degradation got much steeper." Do not claim graining, blistering, or thermal deg unless that cause is separately evidenced.
 - When discussing a driver's stints or compounds, always follow chronological race order — first stint first, second stint second. Never reorder stints for narrative effect or to lead with the more impressive number.
 - For tyre-management rankings, always show the actual deg rate if it is available. Rank primarily by lower positive deg rate, then use consistency as the noise check and R² as the trust check. Do not rank by R² alone. If raw pace trend is negative, explain that the car got faster on the stopwatch, but the fuel-corrected deg estimate adds back expected fuel burn to estimate tyre loss. Explain `±0.58s` as lap-to-lap spread around the trend, not time lost per lap.
 - For team/car characterization, rank evidence in this order: current telemetry traits first, historical circuit-fit trends second, sourced public-reporting profiles third. Never turn any one layer into a definitive private setup claim.
 - When the answer ranks drivers, teams, tyres, stints, circuits, or any list with 3+ comparable rows, do not write a Markdown table. Add a hidden `f1-widget` JSON block after the prose with `type: "data_table"`, `title`, optional `subtitle`, `columns`, `rows`, and optional `note`. Use concise strings only; the system will render the widget and remove the JSON from the visible answer.
-- **Exception — cornering data: NEVER generate a data_table when the analysis contains cornering loads results.** The Commitment / Technique panels are already rendered as a server-side widget. Write prose — describe the character (committed, smooth, fighting the balance) using the F1 vocabulary. No table. A data_table creates a confusing duplicate.
+- Cornering data has its own dedicated Commitment/Technique widget; data_tables sourced from cornering tools are suppressed in code, so write prose only.
 - When cornering data is present, your prose MUST cover BOTH dimensions: (1) Commitment — how much of the car's grip ceiling was used, who was more aggressive at entries and exits; (2) Technique — who had the steadier G trace through the corners (load wobble), what that means physically (settled arc vs fighting the car mid-corner). Skipping either dimension is an incomplete answer.
 - For tyre-management data_table widgets, the table shape is EXACTLY: one deg-rate column per compound used (e.g. "Medium /lap", "Hard /lap"), followed by ONE "Total lost (s)" column taken from `total_deg_loss_all_stints_s` — the total time lost to tyre wear across all stints combined. Example: `columns: ["Driver","Medium /lap","Hard /lap","Total lost (s)"]`. NEVER include finishing position, race position, "Fin", points, or any race-result field in a tyre-management table. The total-loss column must always be present.
 
@@ -1465,31 +1554,42 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
     return None
 
 
+def _execute_analysis_tool_call(tool_name: str, args: dict) -> dict:
+    try:
+        logger.info("Deterministic analysis tool call: %s args=%s", tool_name, args)
+        result = execute_tool(tool_name, args)
+        result = strip_heavy_payload_fields(tool_name, result)
+        return {
+            "tool": tool_name,
+            "args": args,
+            "result": result,
+        }
+    except Exception as exc:
+        return {
+            "tool": tool_name,
+            "args": args,
+            "error": str(exc),
+        }
+
+
+def _execute_analysis_tool_calls(tool_calls: list[tuple[str, dict]]) -> list[dict]:
+    if not tool_calls:
+        return []
+    if len(tool_calls) == 1:
+        tool_name, args = tool_calls[0]
+        return [_execute_analysis_tool_call(tool_name, args)]
+
+    max_workers = min(MAX_DETERMINISTIC_TOOL_WORKERS, len(tool_calls))
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="f1dash-analysis-tool") as executor:
+        futures = [
+            executor.submit(_execute_analysis_tool_call, tool_name, args)
+            for tool_name, args in tool_calls
+        ]
+        return [future.result() for future in futures]
+
+
 def _retrieve_analysis_evidence(plan: dict, resolved: dict | None = None) -> list[dict]:
-    evidence = []
-    for tool_name, args in plan.get("tool_calls", []):
-        try:
-            logger.info("Deterministic analysis tool call: %s args=%s", tool_name, args)
-            result = execute_tool(tool_name, args)
-            # Strip per_corner from cornering analysis — it's used for widget building
-            # only (via _make_grip_commitment_summary which reads summary, not per_corner).
-            # Giving the LLM raw per-corner data causes it to cherry-pick individual-corner
-            # metric values and cite them alongside the aggregate, creating two conflicting
-            # numbers for the same stat. The pre-built narrative field already contains the
-            # corner-spread sentence that belongs in the answer.
-            if tool_name in ("analyze_cornering_loads", "analyze_race_cornering_profile"):
-                result = {k: v for k, v in result.items() if k != "per_corner"}
-            evidence.append({
-                "tool": tool_name,
-                "args": args,
-                "result": result,
-            })
-        except Exception as exc:
-            evidence.append({
-                "tool": tool_name,
-                "args": args,
-                "error": str(exc),
-            })
+    evidence = _execute_analysis_tool_calls(plan.get("tool_calls", []))
 
     # ── Auto-inject driver style context ────────────────────────────────────
     drivers = plan.get("drivers") or []
@@ -1658,6 +1758,7 @@ def _try_deterministic_analysis(question: str, history: list[dict], *, provider:
             return _payload_with_inline_widgets(
                 _run_openai_answer_writer(question, analysis),
                 _widgets_from_analysis_evidence(plan, evidence),
+                executed_evidence=evidence,
             )
 
         analysis = _run_anthropic_analysis(question, resolved, plan, evidence)
@@ -1668,6 +1769,7 @@ def _try_deterministic_analysis(question: str, history: list[dict], *, provider:
         return _payload_with_inline_widgets(
             _run_anthropic_answer_writer(question, analysis),
             _widgets_from_analysis_evidence(plan, evidence),
+            executed_evidence=evidence,
         )
     except Exception as exc:
         logger.warning("Deterministic analysis failed; falling back to normal tool loop. error=%s", exc)
@@ -1684,7 +1786,8 @@ def _get_anthropic_client() -> anthropic.Anthropic:
 
 def _run_anthropic_analysis(question: str, resolved: dict, plan: dict, evidence: list[dict]) -> dict:
     client = _get_anthropic_client()
-    response = client.messages.create(
+    response = _call_anthropic(
+        client,
         model="claude-opus-4-7",
         max_tokens=1200,
         system=ANALYSIS_SYSTEM_PROMPT,
@@ -1699,7 +1802,8 @@ def _run_anthropic_analysis(question: str, resolved: dict, plan: dict, evidence:
 
 def _run_anthropic_answer_writer(question: str, analysis: dict) -> str:
     client = _get_anthropic_client()
-    response = client.messages.create(
+    response = _call_anthropic(
+        client,
         model="claude-opus-4-7",
         max_tokens=1200,
         system=ANSWER_WRITER_SYSTEM_PROMPT,
@@ -1724,7 +1828,8 @@ def _answer_anthropic(message: str, history: list[dict], resolved_context: dict 
     executed_evidence = []
 
     for _ in range(MAX_TOOL_ROUNDS):
-        response = client.messages.create(
+        response = _call_anthropic(
+            client,
             model="claude-opus-4-7",
             max_tokens=4096,
             system=request_system_prompt,
@@ -1741,6 +1846,7 @@ def _answer_anthropic(message: str, history: list[dict], resolved_context: dict 
                             _widgets_from_preloaded(preloaded),
                             _widgets_from_analysis_evidence({}, executed_evidence),
                         ),
+                        executed_evidence=executed_evidence,
                     )
             raise ValueError("Claude returned end_turn but no text content block")
 
@@ -1752,6 +1858,7 @@ def _answer_anthropic(message: str, history: list[dict], resolved_context: dict 
                 try:
                     logger.info("Anthropic tool call: %s args=%s", block.name, block.input)
                     result = execute_tool(block.name, block.input)
+                    result = strip_heavy_payload_fields(block.name, result)
                     executed_evidence.append({
                         "tool": block.name,
                         "args": block.input,
@@ -1795,7 +1902,8 @@ def _get_openai_client() -> Any:
 
 def _run_openai_analysis(question: str, resolved: dict, plan: dict, evidence: list[dict]) -> dict:
     client = _get_openai_client()
-    response = client.chat.completions.create(
+    response = _call_openai(
+        client,
         model="gpt-4o",
         messages=[
             {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
@@ -1808,7 +1916,8 @@ def _run_openai_analysis(question: str, resolved: dict, plan: dict, evidence: li
 
 def _run_openai_answer_writer(question: str, analysis: dict) -> str:
     client = _get_openai_client()
-    response = client.chat.completions.create(
+    response = _call_openai(
+        client,
         model="gpt-4o",
         messages=[
             {"role": "system", "content": ANSWER_WRITER_SYSTEM_PROMPT},
@@ -1832,7 +1941,8 @@ def _answer_openai(message: str, history: list[dict], resolved_context: dict | N
     executed_evidence = []
 
     for _ in range(MAX_TOOL_ROUNDS):
-        response = client.chat.completions.create(
+        response = _call_openai(
+            client,
             model="gpt-4o",
             messages=messages,
             tools=OPENAI_TOOL_DEFINITIONS,
@@ -1848,6 +1958,7 @@ def _answer_openai(message: str, history: list[dict], resolved_context: dict | N
                     _widgets_from_preloaded(preloaded),
                     _widgets_from_analysis_evidence({}, executed_evidence),
                 ),
+                executed_evidence=executed_evidence,
             )
 
         if choice.finish_reason == "tool_calls":
@@ -1860,6 +1971,7 @@ def _answer_openai(message: str, history: list[dict], resolved_context: dict | N
                     args = json.loads(tool_call.function.arguments)
                     logger.info("OpenAI tool call: %s args=%s", tool_call.function.name, args)
                     result = execute_tool(tool_call.function.name, args)
+                    result = strip_heavy_payload_fields(tool_call.function.name, result)
                     executed_evidence.append({
                         "tool": tool_call.function.name,
                         "args": args,
@@ -1885,6 +1997,14 @@ def _answer_openai(message: str, history: list[dict], resolved_context: dict | N
 
 # ── Public interface ─────────────────────────────────────────────────────────
 
+def _valid_driver_codes() -> list[str]:
+    return sorted({
+        (d.get("code") or "").upper()
+        for d in _cached_drivers()
+        if d.get("code")
+    })
+
+
 def answer_f1_payload(message: str, history: list[dict] | None = None) -> dict:
     """
     Answer an F1 question using the configured LLM provider.
@@ -1892,17 +2012,30 @@ def answer_f1_payload(message: str, history: list[dict] | None = None) -> dict:
     history: list of prior {role, content} dicts from the conversation.
     Reads LLM_PROVIDER from the environment (default: 'anthropic').
     """
-    prior = history or []
-    provider = os.environ.get("LLM_PROVIDER", "anthropic").lower()
-    previous_context = resolve_context_from_history(prior)
-    resolved = resolve_query_context(message, previous_context)
-    deterministic = _try_deterministic_analysis(message, prior, provider=provider, resolved_context=resolved)
-    if deterministic:
-        return deterministic
-    preloaded = _preload_resolved_context(resolved)
-    if provider == "openai":
-        return _answer_openai(message, prior, resolved_context=resolved, preloaded_context=preloaded)
-    return _answer_anthropic(message, prior, resolved_context=resolved, preloaded_context=preloaded)
+    try:
+        prior = history or []
+        provider = os.environ.get("LLM_PROVIDER", "anthropic").lower()
+        previous_context = resolve_context_from_history(prior)
+        resolved = resolve_query_context(message, previous_context)
+        deterministic = _try_deterministic_analysis(message, prior, provider=provider, resolved_context=resolved)
+        if deterministic:
+            deterministic["valid_driver_codes"] = _valid_driver_codes()
+            return deterministic
+        preloaded = _preload_resolved_context(resolved)
+        if provider == "openai":
+            payload = _answer_openai(message, prior, resolved_context=resolved, preloaded_context=preloaded)
+        else:
+            payload = _answer_anthropic(message, prior, resolved_context=resolved, preloaded_context=preloaded)
+        payload["valid_driver_codes"] = _valid_driver_codes()
+        return payload
+    except LLMTransientError as e:
+        if e.kind == "rate_limit":
+            msg = "The model is throttling right now — please retry in a moment."
+        elif e.kind == "connection":
+            msg = "I lost the connection to the model — please retry."
+        else:
+            msg = "The model API returned an error — please retry."
+        return {"response": msg, "widgets": [], "valid_driver_codes": _valid_driver_codes()}
 
 
 def answer_f1_question(message: str, history: list[dict] | None = None) -> str:

@@ -329,6 +329,41 @@ def test_execute_tool_analyze_team_performance():
     assert result["team"] == "Ferrari"
 
 
+def test_get_team_car_profile_logs_warning_on_missing_team(caplog):
+    with patch('tools.get_team_car_profile', return_value=None):
+        with caplog.at_level("WARNING", logger="tools"):
+            result = tools.execute_tool("get_team_car_profile", {"team_name": "NotARealTeam"})
+    assert result["available"] is False
+    assert "guidance_for_model" in result
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("NotARealTeam" in r.getMessage() and "team_car_profiles.py" in r.getMessage()
+               for r in warnings)
+
+
+def test_get_driver_style_profile_logs_warning_on_missing_driver(caplog):
+    with patch('tools.get_driver_style', return_value=None):
+        with caplog.at_level("WARNING", logger="tools"):
+            result = tools.execute_tool("get_driver_style_profile", {"driver_a": "ZZZ"})
+    assert result["available"] is False
+    assert "guidance_for_model" in result
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("ZZZ" in r.getMessage() and "driver_styles.py" in r.getMessage()
+               for r in warnings)
+
+
+def test_get_driver_style_profile_logs_warning_on_missing_comparison_pair(caplog):
+    with patch('tools.get_comparison_framing', return_value=None), \
+         patch('tools.get_driver_style', return_value=None):
+        with caplog.at_level("WARNING", logger="tools"):
+            result = tools.execute_tool(
+                "get_driver_style_profile",
+                {"driver_a": "AAA", "driver_b": "BBB"},
+            )
+    assert result["available"] is False
+    assert "guidance_for_model" in result
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("AAA" in r.getMessage() and "BBB" in r.getMessage() for r in warnings)
+
 def test_execute_tool_analyze_team_circuit_fit():
     mock = {"team_query": "Mercedes", "strongest_fit": {"character": "stop_and_go"}}
     with patch('tools.analyze_team_circuit_fit', return_value=mock):
@@ -358,7 +393,7 @@ def test_execute_tool_get_team_car_profile():
 
 
 def test_execute_tool_get_team_car_profile_missing_returns_available_false():
-    result = tools.execute_tool("get_team_car_profile", {"team_name": "McLaren"})
+    result = tools.execute_tool("get_team_car_profile", {"team_name": "Nonexistent Team XYZ"})
     assert result["available"] is False
 
 
@@ -395,3 +430,47 @@ def test_execute_tool_analyze_qualifying_battle_passes_session_type():
     with patch('tools.analyze_qualifying_battle', return_value=mock) as mock_fn:
         tools.execute_tool("analyze_qualifying_battle", {"round_number": 5, "driver_a": "NOR", "driver_b": "PIA", "session_type": "SQ"})
     mock_fn.assert_called_once_with(5, "NOR", "PIA", session_type="SQ")
+
+
+def test_require_args_raises_value_error_listing_missing_keys():
+    with pytest.raises(ValueError) as exc_info:
+        tools._require_args({"round_number": 5}, ["round_number", "driver_a", "driver_b"], "some_tool")
+    msg = str(exc_info.value)
+    assert "some_tool" in msg
+    assert "driver_a" in msg
+    assert "driver_b" in msg
+    assert "round_number" not in msg
+
+
+def test_require_args_treats_none_and_empty_string_as_missing():
+    with pytest.raises(ValueError) as exc_info:
+        tools._require_args({"driver_name": None, "round_number": ""}, ["driver_name", "round_number"], "t")
+    msg = str(exc_info.value)
+    assert "driver_name" in msg
+    assert "round_number" in msg
+
+
+def test_require_args_passes_when_all_provided():
+    tools._require_args({"a": 1, "b": "x"}, ["a", "b"], "t")
+
+
+def test_execute_tool_missing_driver_name_raises_value_error():
+    with pytest.raises(ValueError) as exc_info:
+        tools.execute_tool("get_driver_season_stats", {})
+    assert "driver_name" in str(exc_info.value)
+    assert "get_driver_season_stats" in str(exc_info.value)
+
+
+def test_execute_tool_missing_round_number_raises_value_error():
+    with pytest.raises(ValueError) as exc_info:
+        tools.execute_tool("get_race_results", {})
+    assert "round_number" in str(exc_info.value)
+    assert "get_race_results" in str(exc_info.value)
+
+
+def test_execute_tool_missing_driver_a_and_b_raises_value_error_listing_both():
+    with pytest.raises(ValueError) as exc_info:
+        tools.execute_tool("get_head_to_head", {})
+    msg = str(exc_info.value)
+    assert "driver_a" in msg
+    assert "driver_b" in msg

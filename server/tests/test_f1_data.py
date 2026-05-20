@@ -1785,6 +1785,193 @@ def test_fit_stint_degradation_adds_back_fuel_burn_for_improving_raw_pace():
     assert stints[0]["positive_deg_rate_s_per_lap"] == pytest.approx(0.02)
 
 
+class TestDetectCliff:
+    def test_returns_no_cliff_when_too_few_laps(self):
+        ages = list(range(1, 10))
+        times = [90.0 + 0.05 * (age - 1) for age in ages]
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is False
+
+    def test_returns_no_cliff_for_linear_series(self):
+        ages = list(range(1, 21))
+        times = [90.0 + 0.05 * (age - 1) for age in ages]
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is False
+
+    def test_returns_no_cliff_for_noisy_linear_series(self):
+        ages = list(range(1, 25))
+        noise = [0.02, -0.03, 0.01, -0.01, 0.03, -0.02] * 4
+        times = [90.0 + 0.055 * (age - 1) + noise[i] for i, age in enumerate(ages)]
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is False
+
+    def test_returns_no_cliff_for_single_bad_outlier(self):
+        ages = list(range(1, 25))
+        times = [90.0 + 0.05 * (age - 1) for age in ages]
+        times[12] += 1.2
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is False
+
+    def test_detects_sustained_slope_change(self):
+        ages = list(range(1, 25))
+        times = []
+        for age in ages[:11]:
+            times.append(90.0 + 0.04 * (age - 1))
+        cliff_base = times[-1]
+        for i, _age in enumerate(ages[11:]):
+            times.append(cliff_base + 0.27 * (i + 1))
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is True
+        assert result["cliff_tyre_age"] == 11
+        assert result["cliff_slope_increase_s_per_lap"] >= 0.06
+        assert result["cliff_severity_ratio"] >= 2.5
+        assert result["pre_cliff_deg_rate_s_per_lap"] < result["post_cliff_deg_rate_s_per_lap"]
+        assert result["cliff_confidence"] in ("moderate", "high")
+
+    def test_no_cliff_when_slope_change_is_too_small(self):
+        ages = list(range(1, 25))
+        times = []
+        for age in ages[:12]:
+            times.append(90.0 + 0.05 * (age - 1))
+        cliff_base = times[-1]
+        for i in range(12):
+            times.append(cliff_base + 0.095 * (i + 1))
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is False
+
+    def test_detects_cliff_from_flat_pre_cliff_slope_without_ratio(self):
+        ages = list(range(1, 25))
+        times = []
+        for age in ages[:12]:
+            times.append(90.0 + 0.005 * (age - 1))
+        cliff_base = times[-1]
+        for i in range(12):
+            times.append(cliff_base + 0.18 * (i + 1))
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is True
+        assert result["cliff_severity_ratio"] is None
+        assert result["cliff_slope_increase_s_per_lap"] >= 0.06
+
+    def test_detected_cliff_output_has_required_keys(self):
+        ages = list(range(1, 25))
+        times = []
+        for age in ages[:12]:
+            times.append(90.0 + 0.04 * (age - 1))
+        cliff_base = times[-1]
+        for i in range(12):
+            times.append(cliff_base + 0.30 * (i + 1))
+
+        result = f1_data._detect_cliff(ages, times)
+
+        assert result["cliff_detected"] is True
+        for key in (
+            "cliff_tyre_age",
+            "cliff_slope_increase_s_per_lap",
+            "cliff_severity_ratio",
+            "pre_cliff_deg_rate_s_per_lap",
+            "post_cliff_deg_rate_s_per_lap",
+            "pre_cliff_lap_count",
+            "post_cliff_lap_count",
+            "pre_cliff_regression_line",
+            "post_cliff_regression_line",
+            "bic_improvement",
+            "cliff_confidence",
+        ):
+            assert key in result
+        assert len(result["pre_cliff_regression_line"]) == 2
+        assert len(result["post_cliff_regression_line"]) == 2
+
+
+class TestFitStintDegradationStintSplitting:
+    def test_same_compound_tyre_age_reset_splits_physical_stints(self):
+        clean_laps = [
+            {"lap_number": 1, "lap_time_s": 90.1, "compound": "MEDIUM", "tyre_age": 1},
+            {"lap_number": 2, "lap_time_s": 90.2, "compound": "MEDIUM", "tyre_age": 2},
+            {"lap_number": 3, "lap_time_s": 90.3, "compound": "MEDIUM", "tyre_age": 3},
+            {"lap_number": 4, "lap_time_s": 89.8, "compound": "MEDIUM", "tyre_age": 1},
+            {"lap_number": 5, "lap_time_s": 89.9, "compound": "MEDIUM", "tyre_age": 2},
+            {"lap_number": 6, "lap_time_s": 90.0, "compound": "MEDIUM", "tyre_age": 3},
+        ]
+
+        stints = f1_data._fit_stint_degradation(clean_laps, fuel_correction_s_per_lap=0.0)
+
+        assert len(stints) == 2
+        assert stints[0]["lap_numbers"] == [1, 2, 3]
+        assert stints[1]["lap_numbers"] == [4, 5, 6]
+        assert all(stint["cliff_detected"] is False for stint in stints)
+
+    def test_same_compound_increasing_tyre_age_remains_one_stint(self):
+        clean_laps = [
+            {"lap_number": i, "lap_time_s": 90.0 + i * 0.05, "compound": "HARD", "tyre_age": i}
+            for i in range(1, 7)
+        ]
+
+        stints = f1_data._fit_stint_degradation(clean_laps, fuel_correction_s_per_lap=0.0)
+
+        assert len(stints) == 1
+        assert stints[0]["lap_numbers"] == [1, 2, 3, 4, 5, 6]
+
+
+class TestFitStintDegradationCliffFields:
+    def _make_laps(self, lap_times_and_ages):
+        return [
+            {
+                "lap_number": lap_number,
+                "tyre_age": tyre_age,
+                "lap_time_s": lap_time_s,
+                "compound": "SOFT",
+                "driver_code": "VER",
+            }
+            for lap_number, tyre_age, lap_time_s in lap_times_and_ages
+        ]
+
+    def test_cliff_fields_present_in_output(self):
+        laps = []
+        for i in range(11):
+            laps.append((i + 1, i + 1, 90.0 + 0.04 * i))
+        cliff_base = laps[-1][2]
+        for i in range(13):
+            laps.append((i + 12, i + 12, cliff_base + 0.28 * (i + 1)))
+
+        result = f1_data._fit_stint_degradation(self._make_laps(laps), fuel_correction_s_per_lap=0.0)
+
+        assert len(result) == 1
+        stint = result[0]
+        assert stint["cliff_detected"] is True
+        assert stint["cliff_tyre_age"] == 11
+        assert stint["cliff_slope_increase_s_per_lap"] is not None
+        assert stint["cliff_severity_ratio"] is not None
+        assert stint["pre_cliff_deg_rate_s_per_lap"] is not None
+        assert stint["post_cliff_deg_rate_s_per_lap"] is not None
+        assert len(stint["pre_cliff_regression_line"]) == 2
+        assert len(stint["post_cliff_regression_line"]) == 2
+        assert len(stint["regression_line"]) == 2
+
+    def test_no_cliff_on_linear_stint_still_includes_field(self):
+        laps = [(i + 1, i + 1, 90.0 + 0.05 * i) for i in range(15)]
+
+        result = f1_data._fit_stint_degradation(self._make_laps(laps), fuel_correction_s_per_lap=0.0)
+
+        assert len(result) == 1
+        assert result[0]["cliff_detected"] is False
+        assert result[0]["pre_cliff_regression_line"] == []
+        assert result[0]["post_cliff_regression_line"] == []
+
+
 def test_summarize_tyre_management_weights_deg_consistency_and_r2():
     stints = [
         {
@@ -2927,3 +3114,171 @@ def test_aggregate_lap_cornering_stats_ggv_fields_with_envelope():
     assert 'avg_envelope_time_pct' in result
     assert 'avg_throttle_acceptance_pct' in result
     assert 'avg_entry_bravery_pct' in result
+
+
+def test_load_session_wraps_get_session_failure(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise RuntimeError("fastf1 outage")
+
+    monkeypatch.setattr(f1_data.fastf1, "get_session", _boom)
+
+    with pytest.raises(f1_data.FastF1Error) as excinfo:
+        f1_data._load_session(5, "R", laps=False, telemetry=False, weather=False, messages=False)
+
+    assert excinfo.value.round_number == 5
+    assert excinfo.value.session_type == "R"
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+
+
+def test_load_session_wraps_load_failure_clears_cache_entry(monkeypatch):
+    mock_session = MagicMock()
+    mock_session.load.side_effect = RuntimeError("load failed mid-flight")
+    monkeypatch.setattr(f1_data.fastf1, "get_session", lambda *a, **k: mock_session)
+
+    with pytest.raises(f1_data.FastF1Error) as excinfo:
+        f1_data._load_session(7, "Q", laps=True, telemetry=False, weather=False, messages=False)
+
+    assert excinfo.value.round_number == 7
+    assert excinfo.value.session_type == "Q"
+    cache_key = (f1_data.CURRENT_YEAR, 7, "Q")
+    assert cache_key not in f1_data._SESSION_CACHE
+
+
+def test_get_session_results_returns_unavailable_on_fastf1_error(monkeypatch):
+    def _raise(*args, **kwargs):
+        raise f1_data.FastF1Error("nope", round_number=3, session_type="R")
+
+    monkeypatch.setattr(f1_data, "_load_session", _raise)
+
+    result = f1_data.get_session_results(3, "R")
+    assert result == {
+        "available": False,
+        "reason": "fastf1_unavailable",
+        "round_number": 3,
+        "session_type": "R",
+    }
+
+
+def test_analyze_stint_degradation_returns_unavailable_on_fastf1_error(monkeypatch):
+    def _raise(*args, **kwargs):
+        raise f1_data.FastF1Error("nope", round_number=4, session_type="R")
+
+    monkeypatch.setattr(f1_data, "_load_session", _raise)
+
+    result = f1_data.analyze_stint_degradation(4, "VER", session_type="R")
+    assert result == {
+        "available": False,
+        "reason": "fastf1_unavailable",
+        "round_number": 4,
+        "session_type": "R",
+    }
+
+
+def test_get_lap_telemetry_returns_unavailable_on_fastf1_error(monkeypatch):
+    def _raise(*args, **kwargs):
+        raise f1_data.FastF1Error("nope", round_number=2, session_type="Q")
+
+    monkeypatch.setattr(f1_data, "_load_session", _raise)
+
+    result = f1_data.get_lap_telemetry(2, "Q", "NOR")
+    assert result == {
+        "available": False,
+        "reason": "fastf1_unavailable",
+        "round_number": 2,
+        "session_type": "Q",
+    }
+
+
+def _make_high_speed_telemetry(n_points=50, circuit_length_m=5000, peak_kph=340.0):
+    """Telemetry where Speed channel ranges up into realistic F1 kph (300-340)."""
+    distances = [i * circuit_length_m / n_points for i in range(n_points)]
+    # Speed sweeps 150 -> peak -> 150 (kph; FastF1 native unit).
+    speeds = [150.0 + (peak_kph - 150.0) * (1 - abs(i / (n_points - 1) - 0.5) * 2) for i in range(n_points)]
+    return pd.DataFrame({
+        'Distance': distances,
+        'Speed': speeds,
+        'Throttle': [100.0 if i > 10 else 0.0 for i in range(n_points)],
+        'Brake': [i <= 10 for i in range(n_points)],
+        'nGear': [8 if i > 10 else 4 for i in range(n_points)],
+        'DRS': [12 if i > 30 else 0 for i in range(n_points)],
+    })
+
+
+def test_get_lap_telemetry_emits_kph_not_ms():
+    nor_lap = _make_mock_fastest_lap("NOR")
+    mock_session = _make_mock_session({"NOR": nor_lap})
+    mock_tel = _make_high_speed_telemetry(n_points=50, circuit_length_m=3300, peak_kph=340.0)
+
+    mock_lap_obj = MagicMock()
+    mock_lap_obj.__getitem__.side_effect = lambda k: nor_lap[k]
+    mock_lap_obj.get.side_effect = lambda k, d=None: nor_lap.get(k, d)
+    mock_lap_obj.get_telemetry.return_value.add_distance.return_value = mock_tel
+
+    def pick_driver_tel(codes):
+        m = MagicMock()
+        m.empty = False
+        m.pick_fastest.return_value = mock_lap_obj
+        return m
+
+    mock_session.laps.pick_drivers.side_effect = pick_driver_tel
+
+    with patch('f1_data.fastf1.get_session', return_value=mock_session):
+        result = f1_data.get_lap_telemetry(8, 'Q', 'NOR')
+
+    # FastF1 Speed is already kph: passing 340 kph through should NOT come out as ~94 (m/s) or ~1224 (double-converted).
+    assert 300 <= result['max_speed_kph'] <= 360
+    sample_max = max(s['speed_kph'] for s in result['telemetry'])
+    assert 300 <= sample_max <= 360
+
+
+def test_telemetry_comparison_speed_units_are_kph():
+    nor_lap_series = _make_mock_fastest_lap("NOR")
+    lec_lap_series = _make_mock_fastest_lap("LEC", "Ferrari")
+
+    # Both drivers at high realistic F1 speeds.
+    def _hi_tel(boost):
+        n = 6
+        distances = [i * 500 / (n - 1) for i in range(n)]
+        return pd.DataFrame({
+            'Distance': distances,
+            'Speed': [300.0 + boost + i * 5 for i in range(n)],
+            'Throttle': [50.0 + i * 5 for i in range(n)],
+            'Brake': [i == 0 for i in range(n)],
+            'nGear': [4 + min(i, 4) for i in range(n)],
+            'DRS': [12 if i > 3 else 0 for i in range(n)],
+            'X': [float(i * 10) for i in range(n)],
+            'Y': [float((i % 3) * 8) for i in range(n)],
+        })
+
+    tel_nor = _hi_tel(boost=5.0)
+    tel_lec = _hi_tel(boost=0.0)
+
+    mock_lap_nor = MagicMock()
+    mock_lap_nor.__getitem__.side_effect = lambda k: nor_lap_series[k]
+    mock_lap_nor.get.side_effect = lambda k, d=None: nor_lap_series.get(k, d)
+    mock_lap_nor.get_telemetry.return_value.add_distance.return_value = tel_nor
+
+    mock_lap_lec = MagicMock()
+    mock_lap_lec.__getitem__.side_effect = lambda k: lec_lap_series[k]
+    mock_lap_lec.get.side_effect = lambda k, d=None: lec_lap_series.get(k, d)
+    mock_lap_lec.get_telemetry.return_value.add_distance.return_value = tel_lec
+
+    def pick_driver_tel(codes):
+        code = codes[0] if isinstance(codes, list) else codes
+        m = MagicMock()
+        m.empty = False
+        m.pick_fastest.return_value = mock_lap_nor if code.upper() == "NOR" else mock_lap_lec
+        return m
+
+    mock_session = MagicMock()
+    mock_session.event = {'EventName': 'Monaco Grand Prix'}
+    mock_session.laps.pick_drivers.side_effect = pick_driver_tel
+
+    with patch('f1_data.fastf1.get_session', return_value=mock_session):
+        result = f1_data.get_telemetry_comparison(8, 'Q', 'NOR', 'LEC')
+
+    speeds = [s['speed_a'] for s in result['comparison']] + [s['speed_b'] for s in result['comparison']]
+    assert all(280 <= v <= 360 for v in speeds), f"Speeds not in kph range: {speeds}"
+    # delta_speed (kph - kph) stays small, NOT scaled to ~18 (5 kph * 3.6).
+    deltas = [abs(s['delta_speed']) for s in result['comparison']]
+    assert max(deltas) < 15

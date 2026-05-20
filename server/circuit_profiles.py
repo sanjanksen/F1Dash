@@ -13,6 +13,11 @@ Used by the deterministic analysis pipeline and the agentic tool loop to
 give the LLM contextual grounding before it interprets telemetry evidence.
 """
 
+import re
+
+CALENDAR_YEAR = 2026
+
+
 CIRCUIT_PROFILES: dict[str, dict] = {
 
     "bahrain": {
@@ -619,7 +624,7 @@ CIRCUIT_PROFILES: dict[str, dict] = {
         },
         "sector_3": {
             "type": "final_corner_into_2200m_straight",
-            "description": "T17-T20: final tight corners into the 2.2km main straight — T20 exit speed is the single most consequential moment of the lap",
+            "description": "T17-T20: final tight corners onto the Turn 16 to Turn 1 start/finish main straight (~2.2 km) — T20 exit speed is the single most consequential moment of the lap",
             "style_advantage": "u_line",
             "energy_demand": "maximum",
         },
@@ -628,15 +633,15 @@ CIRCUIT_PROFILES: dict[str, dict] = {
             "harvesting_opportunity": "high",
             "clipping_risk": "maximum",
             "key_straights": ["main_straight_2200m"],
-            "notes": "The main straight at 2.2km is the longest in F1. Under 2026 rules cars will almost certainly exhaust deployment hundreds of meters before the braking zone — creating the most visible super-clipping on the calendar.",
+            "notes": "The Turn 16 to Turn 1 start/finish main straight at ~2.2 km is the longest single straight in F1 (not the total circuit length). Under 2026 rules cars will almost certainly exhaust deployment hundreds of meters before the braking zone — creating the most visible super-clipping on the calendar.",
         },
         "style_verdict": {
             "qualifier": "circuit_specific_by_sector",
-            "explanation": "S1 castle section rewards V-line rotation in ultra-tight corners; T20 exit speed onto the straight rewards U-line minimum speed for maximum velocity down the 2.2km straight. Dramatically different demands by sector.",
+            "explanation": "S1 castle section rewards V-line rotation in ultra-tight corners; T20 exit speed onto the straight rewards U-line minimum speed for maximum velocity down the ~2.2 km Turn 16 to Turn 1 main straight. Dramatically different demands by sector.",
         },
         "tyre_challenge": "Very low degradation on smooth tarmac. Strategy heavily influenced by safety car probability.",
         "downforce_level": "low",
-        "narrative": "Baku is the super-clipping circuit par excellence. The 2.2km main straight is the longest in F1 — under 2026 rules cars will almost certainly exhaust deployment before the braking zone. T20 exit speed is the most consequential moment on the lap: a driver carrying 3 kph more out of Turn 20 has a structural straight-line advantage all the way to the hairpin.",
+        "narrative": "Baku is the super-clipping circuit par excellence. The main straight — the Turn 16 to Turn 1 start/finish straight running roughly 2.2 km — is the longest single straight in F1 (this figure refers to the straight, not total circuit length). Under 2026 rules cars will almost certainly exhaust deployment before the braking zone. T20 exit speed is the most consequential moment on the lap: a driver carrying 3 kph more out of Turn 20 has a structural straight-line advantage all the way to the Turn 1 braking zone.",
     },
 
     "singapore": {
@@ -898,57 +903,216 @@ CIRCUIT_PROFILES: dict[str, dict] = {
 
 # ── Country/event → profile key lookup ───────────────────────────────────────
 
-_LOOKUP: list[tuple[str, str, str]] = [
-    # (country_fragment, event_name_fragment, profile_key)
-    # Both fragments are lowercased. Match is: country fragment in country AND
-    # (event fragment empty OR event fragment in event_name).
-    ("bahrain", "", "bahrain"),
-    ("saudi", "", "saudi_arabia"),
-    ("australia", "", "australia"),
-    ("japan", "", "japan"),
-    ("china", "", "china"),
-    ("united states", "miami", "miami"),
-    ("united states", "", "united_states"),   # COTA — lower priority than Miami
-    ("emilia", "", "emilia_romagna"),
-    ("monaco", "", "monaco"),
-    ("canada", "", "canada"),
-    ("spain", "", "spain"),
-    ("austria", "", "austria"),
-    ("brit", "", "britain"),
-    ("belgi", "", "belgium"),
-    ("hungar", "", "hungary"),
-    ("netherlands", "", "netherlands"),
-    ("ital", "", "italy"),
-    ("azerbai", "", "azerbaijan"),
-    ("singapore", "", "singapore"),
-    ("mexico", "", "mexico"),
-    ("brazil", "", "brazil"),
-    ("las vegas", "", "las_vegas"),
-    ("qatar", "", "qatar"),
-    ("abu dhabi", "", "abu_dhabi"),
+# Canonical mapping: casefolded country name (and common variants) → profile key.
+# Matched by exact equality first; substring scan is the fallback.
+_COUNTRY_ALIASES: dict[str, str] = {
+    "bahrain": "bahrain",
+    "saudi arabia": "saudi_arabia",
+    "saudi": "saudi_arabia",
+    "australia": "australia",
+    "japan": "japan",
+    "china": "china",
+    "united states": "united_states",
+    "united states of america": "united_states",
+    "usa": "united_states",
+    "us": "united_states",
+    "america": "united_states",
+    "emilia romagna": "emilia_romagna",
+    "emilia-romagna": "emilia_romagna",
+    "italy emilia romagna": "emilia_romagna",
+    "monaco": "monaco",
+    "canada": "canada",
+    "spain": "spain",
+    "austria": "austria",
+    "great britain": "britain",
+    "united kingdom": "britain",
+    "britain": "britain",
+    "uk": "britain",
+    "england": "britain",
+    "belgium": "belgium",
+    "hungary": "hungary",
+    "netherlands": "netherlands",
+    "holland": "netherlands",
+    "the netherlands": "netherlands",
+    "italy": "italy",
+    "azerbaijan": "azerbaijan",
+    "singapore": "singapore",
+    "mexico": "mexico",
+    "brazil": "brazil",
+    "las vegas": "las_vegas",
+    "qatar": "qatar",
+    "abu dhabi": "abu_dhabi",
+    "united arab emirates": "abu_dhabi",
+    "uae": "abu_dhabi",
+}
+
+
+# Fallback substring fragments — only consulted when the exact alias lookup
+# fails. Order matters: earlier entries win on ambiguous matches.
+_LOOKUP_FALLBACK: list[tuple[str, str]] = [
+    ("bahrain", "bahrain"),
+    ("saudi", "saudi_arabia"),
+    ("australia", "australia"),
+    ("japan", "japan"),
+    ("china", "china"),
+    ("emilia", "emilia_romagna"),
+    ("monaco", "monaco"),
+    ("canada", "canada"),
+    ("spain", "spain"),
+    ("austria", "austria"),
+    ("brit", "britain"),
+    ("kingdom", "britain"),
+    ("england", "britain"),
+    ("belgi", "belgium"),
+    ("hungar", "hungary"),
+    ("netherlands", "netherlands"),
+    ("holland", "netherlands"),
+    ("ital", "italy"),
+    ("azerbai", "azerbaijan"),
+    ("singapore", "singapore"),
+    ("mexico", "mexico"),
+    ("brazil", "brazil"),
+    ("las vegas", "las_vegas"),
+    ("qatar", "qatar"),
+    ("abu dhabi", "abu_dhabi"),
+    ("emirates", "abu_dhabi"),
+    # COTA fallback is the very last US match; Miami is handled by the
+    # event-name disambiguation in get_circuit_profile.
+    ("united states", "united_states"),
+    ("america", "united_states"),
 ]
 
 
 def get_circuit_profile(country: str, event_name: str = "") -> dict | None:
     """
     Return the circuit profile for a given country + optional event name.
-    Both are lowercased for matching. The event_name disambiguates cases
-    like two US rounds (Miami vs COTA).
+    Country is matched against an explicit canonical alias table first
+    (casefolded, whitespace-stripped); only if that misses do we fall back
+    to a substring scan. event_name is only consulted for the Miami vs
+    COTA disambiguation on US rounds.
     """
-    c = (country or "").lower()
-    e = (event_name or "").lower()
-    best_key: str | None = None
-    for country_frag, event_frag, key in _LOOKUP:
-        if country_frag not in c:
-            continue
-        if event_frag and event_frag not in e:
-            continue
-        best_key = key
-        if event_frag:   # exact event match wins immediately
-            break
+    c = " ".join((country or "").casefold().split())
+    e = (event_name or "").casefold()
+
+    best_key: str | None = _COUNTRY_ALIASES.get(c)
+
+    if best_key is None:
+        for frag, key in _LOOKUP_FALLBACK:
+            if frag in c:
+                best_key = key
+                break
+
+    # Miami vs COTA: both report country "united states" / "United States".
+    # Miami wins when the event name says so; otherwise COTA is the default.
+    if best_key == "united_states" and "miami" in e:
+        best_key = "miami"
+
     if best_key is None:
         return None
     profile = CIRCUIT_PROFILES.get(best_key)
     if profile is None:
         return None
     return {"circuit_key": best_key, **profile}
+
+
+# ── Free-text circuit matching (used by resolver) ────────────────────────────
+
+# Editorial alias map: free-text fragments → canonical country name used in
+# circuits-list `country` field. Single source of truth — resolver delegates
+# here instead of maintaining a parallel map.
+CIRCUIT_TEXT_ALIASES: dict[str, str] = {
+    "suzuka": "japan",
+    "japanese gp": "japan",
+    "japanese grand prix": "japan",
+    "monza": "italy",
+    "spa": "belgium",
+    "silverstone": "britain",
+    "interlagos": "brazil",
+    "yas marina": "abu dhabi",
+    "cota": "united states",
+    "imola": "emilia romagna",
+    "montreal": "canada",
+    "villeneuve": "canada",
+    "sakhir": "bahrain",
+    "albert park": "australia",
+    "budapest": "hungary",
+    "spielberg": "austria",
+    "red bull ring": "austria",
+    "marina bay": "singapore",
+    "lusail": "qatar",
+    "baku": "azerbaijan",
+    "jeddah": "saudi arabia",
+    "las vegas": "las vegas",
+    "mexico city": "mexico",
+    "autodromo hermanos rodriguez": "mexico",
+    "circuit de barcelona": "spain",
+    "barcelona": "spain",
+    "catalunya": "spain",
+    "zandvoort": "netherlands",
+}
+
+
+def _normalize_text(text: str) -> str:
+    return re.sub(r"[^a-z0-9\s]", " ", (text or "").lower()).strip()
+
+
+def match_circuit_from_text(normalized: str, circuits: list[dict]) -> dict | None:
+    """
+    Match free-text input against a list of circuit dicts (event_name,
+    circuit_name, country). Tries the canonical text-alias map first, then
+    canonical country aliases, then a token/substring scan. Returns the
+    matching circuit dict or None.
+    """
+    if not normalized or not circuits:
+        return None
+
+    search_terms: set[str] = set()
+    for alias, mapped in CIRCUIT_TEXT_ALIASES.items():
+        if alias in normalized:
+            search_terms.add(alias)
+            search_terms.add(mapped)
+
+    for alias, mapped_key in _COUNTRY_ALIASES.items():
+        if alias and re.search(rf"\b{re.escape(alias)}\b", normalized):
+            search_terms.add(alias)
+            search_terms.add(mapped_key.replace("_", " "))
+
+    for token in normalized.split():
+        if len(token) >= 4:
+            search_terms.add(token)
+
+    best_match: dict | None = None
+    best_score = 0
+    for circuit in circuits:
+        haystacks = [
+            _normalize_text(circuit.get("event_name", "")),
+            _normalize_text(circuit.get("circuit_name", "")),
+            _normalize_text(circuit.get("country", "")),
+        ]
+        gpless = haystacks[0].replace("grand prix", "").strip()
+        if gpless:
+            haystacks.append(gpless)
+        country = haystacks[2]
+        if country:
+            haystacks.append(f"{country} grand prix")
+            if country.endswith("n"):
+                haystacks.append(country[:-1])
+
+        score = 0
+        for hay in [h for h in haystacks if h]:
+            if re.search(rf"\b{re.escape(hay)}\b", normalized):
+                score = max(score, len(hay) + 10)
+
+        for term in list(search_terms):
+            normalized_term = term.replace("gp", "grand prix").strip()
+            if not normalized_term:
+                continue
+            for hay in [h for h in haystacks if h]:
+                if re.search(rf"\b{re.escape(normalized_term)}\b", hay):
+                    score = max(score, len(normalized_term))
+
+        if score > best_score:
+            best_score = score
+            best_match = circuit
+
+    return best_match if best_score > 0 else None

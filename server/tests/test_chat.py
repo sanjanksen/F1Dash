@@ -1,6 +1,8 @@
 # server/tests/test_chat.py
 import json
 import os
+import threading
+import time
 import pytest
 from unittest.mock import patch, MagicMock, call
 import importlib
@@ -117,6 +119,91 @@ def test_answer_f1_question_parallel_tool_calls():
     assert len(last_user_content) == 2  # two tool_result blocks
     assert last_user_content[0]["tool_use_id"] == "toolu_01"
     assert last_user_content[1]["tool_use_id"] == "toolu_02"
+
+
+def test_execute_analysis_tool_calls_preserves_plan_order():
+    import chat
+
+    tool_calls = [("slow_tool", {"id": 1}), ("fast_tool", {"id": 2})]
+
+    def fake_execute_tool(name, args):
+        if name == "slow_tool":
+            time.sleep(0.05)
+        return {"name": name, "args": args}
+
+    with patch.object(chat, "execute_tool", side_effect=fake_execute_tool):
+        evidence = chat._execute_analysis_tool_calls(tool_calls)
+
+    assert [item["tool"] for item in evidence] == ["slow_tool", "fast_tool"]
+    assert [item["result"]["name"] for item in evidence] == ["slow_tool", "fast_tool"]
+
+
+def test_execute_analysis_tool_calls_starts_calls_concurrently():
+    import chat
+
+    barrier = threading.Barrier(2, timeout=1.0)
+    started = []
+    lock = threading.Lock()
+
+    def fake_execute_tool(name, _args):
+        with lock:
+            started.append(name)
+        barrier.wait()
+        return {"name": name}
+
+    with patch.object(chat, "execute_tool", side_effect=fake_execute_tool):
+        evidence = chat._execute_analysis_tool_calls([
+            ("tool_a", {}),
+            ("tool_b", {}),
+        ])
+
+    assert sorted(started) == ["tool_a", "tool_b"]
+    assert [item["result"]["name"] for item in evidence] == ["tool_a", "tool_b"]
+
+
+def test_execute_analysis_tool_calls_keeps_successes_when_one_fails():
+    import chat
+
+    def fake_execute_tool(name, _args):
+        if name == "bad_tool":
+            raise ValueError("broken")
+        return {"ok": name}
+
+    with patch.object(chat, "execute_tool", side_effect=fake_execute_tool):
+        evidence = chat._execute_analysis_tool_calls([
+            ("bad_tool", {}),
+            ("good_tool", {}),
+        ])
+
+    assert evidence[0]["tool"] == "bad_tool"
+    assert evidence[0]["error"] == "broken"
+    assert evidence[1]["tool"] == "good_tool"
+    assert evidence[1]["result"] == {"ok": "good_tool"}
+
+
+def test_execute_analysis_tool_call_strips_per_corner_for_cornering_tools():
+    import chat
+
+    with patch.object(chat, "execute_tool", return_value={
+        "summary": {"driver_a": "NOR"},
+        "per_corner": [{"corner": 1}],
+    }):
+        evidence = chat._execute_analysis_tool_call("analyze_cornering_loads", {"round_number": 1})
+
+    assert evidence["result"] == {"summary": {"driver_a": "NOR"}}
+
+
+def test_execute_analysis_tool_calls_single_call_shape():
+    import chat
+
+    with patch.object(chat, "execute_tool", return_value={"ok": True}):
+        evidence = chat._execute_analysis_tool_calls([("one_tool", {"round_number": 1})])
+
+    assert evidence == [{
+        "tool": "one_tool",
+        "args": {"round_number": 1},
+        "result": {"ok": True},
+    }]
 
 
 def test_answer_f1_question_tool_error_uses_is_error_flag():
@@ -397,6 +484,14 @@ def test_make_qualifying_battle_widget_preserves_location_context():
     })
 
     assert widget["cause_explanations"][0]["location_context"]["label"] == "Exit of Turn 1"
+
+
+def test_make_qualifying_battle_widget_includes_driver_a_b_fields():
+    import chat
+
+    widget = chat._make_qualifying_battle_widget({"driver_a": "NOR", "driver_b": "PIA"})
+    assert widget.get("driver_a")
+    assert widget.get("driver_b")
 
 
 def test_canonicalize_qualifying_analysis_aligns_answer_with_widget_source():
@@ -794,6 +889,85 @@ def test_suggested_tool_args_sprint_qualifying():
     assert args["round_number"] == 5
 
 
+def test_answer_f1_payload_returns_throttle_message_on_rate_limit(caplog):
+    """LLMTransientError(kind=rate_limit) surfaces as a user-visible throttle message, not a 500."""
+    import logging
+    mock_client = MagicMock()
+    chat = _load_chat_with_client(mock_client)
+
+    def _raise_rate_limit(client, **kwargs):
+        raise chat.LLMTransientError("rate-limited", provider="anthropic", kind="rate_limit")
+
+    with patch.object(chat, '_call_anthropic', side_effect=_raise_rate_limit), \
+         patch.object(chat, '_try_deterministic_analysis', return_value=None), \
+         patch.object(chat, '_preload_resolved_context', return_value={}), \
+         caplog.at_level(logging.WARNING):
+        payload = chat.answer_f1_payload("Who leads the championship?")
+
+    assert "throttling" in payload["response"]
+    assert payload["widgets"] == []
+
+
+def test_answer_f1_payload_returns_connection_message_on_connection_error():
+    """LLMTransientError(kind=connection) surfaces as a 'lost the connection' message."""
+    mock_client = MagicMock()
+    chat = _load_chat_with_client(mock_client)
+
+    def _raise_conn(client, **kwargs):
+        raise chat.LLMTransientError("conn dropped", provider="anthropic", kind="connection")
+
+    with patch.object(chat, '_call_anthropic', side_effect=_raise_conn), \
+         patch.object(chat, '_try_deterministic_analysis', return_value=None), \
+         patch.object(chat, '_preload_resolved_context', return_value={}):
+        payload = chat.answer_f1_payload("Who leads the championship?")
+
+    assert "lost the connection" in payload["response"]
+    assert payload["widgets"] == []
+
+
+def test_answer_f1_payload_returns_api_message_on_generic_api_error():
+    """LLMTransientError(kind=api) surfaces as a generic API-error retry message."""
+    mock_client = MagicMock()
+    chat = _load_chat_with_client(mock_client)
+
+    def _raise_api(client, **kwargs):
+        raise chat.LLMTransientError("boom", provider="anthropic", kind="api")
+
+    with patch.object(chat, '_call_anthropic', side_effect=_raise_api), \
+         patch.object(chat, '_try_deterministic_analysis', return_value=None), \
+         patch.object(chat, '_preload_resolved_context', return_value={}):
+        payload = chat.answer_f1_payload("Who leads the championship?")
+
+    assert "API returned an error" in payload["response"]
+    assert payload["widgets"] == []
+
+
+def test_call_anthropic_logs_warning_not_error_on_rate_limit(caplog):
+    """Rate-limit errors must log at WARNING level (not ERROR), since they aren't code bugs."""
+    import logging
+    import anthropic as anthropic_real
+    import httpx
+
+    mock_client = MagicMock()
+    chat = _load_chat_with_client(mock_client)
+
+    # Construct a real RateLimitError; needs a response + body
+    response = httpx.Response(status_code=429, request=httpx.Request("POST", "https://api.anthropic.com"))
+    rate_limit_exc = anthropic_real.RateLimitError("rate limited", response=response, body=None)
+    mock_client.messages.create.side_effect = rate_limit_exc
+
+    with caplog.at_level(logging.WARNING, logger="chat"):
+        with pytest.raises(chat.LLMTransientError) as excinfo:
+            chat._call_anthropic(mock_client, model="x", max_tokens=1, messages=[])
+
+    assert excinfo.value.kind == "rate_limit"
+    warning_records = [r for r in caplog.records if r.name == "chat" and r.levelno == logging.WARNING]
+    assert any("rate-limited" in r.getMessage() for r in warning_records)
+    # And there must be no ERROR-level record for this call
+    error_records = [r for r in caplog.records if r.name == "chat" and r.levelno >= logging.ERROR]
+    assert not error_records
+
+
 def test_answer_f1_payload_reuses_resolved_context_on_fallback():
     import chat
 
@@ -817,3 +991,47 @@ def test_answer_f1_payload_reuses_resolved_context_on_fallback():
     assert payload["response"] == "Answer."
     history_mock.assert_called_once()
     resolve_mock.assert_called_once_with("How did Norris do?", prior_context)
+
+
+def test_agentic_loop_strips_per_corner_from_cornering_tool_result():
+    """In the agentic loop, per_corner must be stripped before the tool_result message is sent."""
+    mock_client = MagicMock()
+    mock_client.messages.create.side_effect = [
+        _tool_use_response("analyze_cornering_loads", tool_input={"round_number": 3}),
+        _end_turn_response("Norris was more committed."),
+    ]
+
+    chat = _load_chat_with_client(mock_client)
+    heavy_payload = {
+        "summary": {"NOR": {"avg_ggv_util_pct": 84.0}},
+        "per_corner": [{"corner": 1, "g_lat": 4.2}, {"corner": 2, "g_lat": 3.9}],
+        "narrative": "NOR committed harder.",
+    }
+    with patch.object(chat, 'execute_tool', return_value=heavy_payload):
+        chat.answer_f1_question("Who was more committed in the corners?")
+
+    second_call_messages = mock_client.messages.create.call_args_list[1][1]["messages"]
+    tool_result_content = second_call_messages[-1]["content"][0]["content"]
+    assert "per_corner" not in tool_result_content
+    assert "narrative" in tool_result_content
+
+
+def test_widget_builder_suppresses_data_table_for_cornering_tool():
+    """A data_table emitted inline alongside cornering evidence must be suppressed."""
+    import chat
+    importlib.reload(chat)
+
+    text = (
+        "Norris pushed harder.\n\n"
+        "```f1-widget\n"
+        '{"type":"data_table","title":"Grip util","columns":[{"key":"d","label":"D"}],"rows":[{"d":"NOR"}]}\n'
+        "```"
+    )
+    cornering_evidence = [{"tool": "analyze_cornering_loads", "args": {}, "result": {"summary": {}}}]
+
+    payload = chat._payload_with_inline_widgets(text, None, executed_evidence=cornering_evidence)
+    assert all(w.get("type") != "data_table" for w in payload["widgets"])
+
+    non_cornering_evidence = [{"tool": "get_driver_race_story", "args": {}, "result": {}}]
+    payload2 = chat._payload_with_inline_widgets(text, None, executed_evidence=non_cornering_evidence)
+    assert any(w.get("type") == "data_table" for w in payload2["widgets"])

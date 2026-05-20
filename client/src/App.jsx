@@ -7,6 +7,20 @@ import Sidebar from './components/Sidebar.jsx'
 import { Button } from './components/ui/button.jsx'
 import { useChatSessions } from './hooks/useChatSessions.js'
 
+function validateChatResponse(body) {
+  if (!body || typeof body !== 'object') {
+    return { ok: false, reason: 'not-an-object' }
+  }
+  if (typeof body.response !== 'string' || body.response.length === 0) {
+    return { ok: false, reason: 'missing-or-empty-response' }
+  }
+  if (body.widgets != null && !Array.isArray(body.widgets)) {
+    return { ok: false, reason: 'widgets-not-array' }
+  }
+  const validDriverCodes = Array.isArray(body.valid_driver_codes) ? body.valid_driver_codes : []
+  return { ok: true, response: body.response, widgets: body.widgets ?? [], validDriverCodes }
+}
+
 function getInitialTheme() {
   const stored = localStorage.getItem('f1dash-theme')
   if (stored === 'light' || stored === 'dark') return stored
@@ -48,10 +62,30 @@ export default function App() {
     const history = current.map((message) => ({ role: message.role, content: message.text }))
 
     try {
-      const { response, widgets = [] } = await sendChatMessage(text, history)
+      const body = await sendChatMessage(text, history)
+      const validated = validateChatResponse(body)
+      if (!validated.ok) {
+        console.error('Chat response shape invalid:', validated.reason, body)
+        updateMessages(sessionId, [
+          ...withUser,
+          {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            text: 'The server returned an unexpected response. Please try again.',
+            isError: true,
+          },
+        ])
+        return
+      }
+
+      const { response, widgets, validDriverCodes } = validated
+      const stampedWidgets = (widgets ?? []).map((w) => ({
+        ...w,
+        _id: w?._id ?? (typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`),
+      }))
       updateMessages(sessionId, [
         ...withUser,
-        { id: crypto.randomUUID(), role: 'assistant', text: response, widgets },
+        { id: crypto.randomUUID(), role: 'assistant', text: response, widgets: stampedWidgets, validDriverCodes },
       ])
     } catch (error) {
       updateMessages(sessionId, [

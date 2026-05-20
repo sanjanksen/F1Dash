@@ -48,11 +48,32 @@ export default function DataTableWidget({ widget }) {
           <tbody>
             {rows.map((row, rowIndex) => (
               <tr key={rowIndex} className="border-b border-border/55 last:border-b-0">
-                {columns.map((column) => (
-                  <td key={column.key} className={cellClass(column.align)}>
-                    {row?.[column.key] ?? ''}
-                  </td>
-                ))}
+                {columns.map((column) => {
+                  const present = row != null && Object.prototype.hasOwnProperty.call(row, column.key)
+                  const value = present ? row[column.key] : undefined
+
+                  let display
+                  let title
+                  if (!present) {
+                    display = '?'
+                    title = 'value not provided by backend'
+                  } else if (value === null || value === '') {
+                    display = '—'
+                  } else {
+                    display = value
+                  }
+
+                  return (
+                    <td
+                      key={column.key}
+                      className={cellClass(column.align)}
+                      title={title}
+                      aria-label={title}
+                    >
+                      {display}
+                    </td>
+                  )
+                })}
               </tr>
             ))}
           </tbody>

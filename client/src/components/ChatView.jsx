@@ -12,6 +12,7 @@ export default function ChatView({ messages, loading, onSend }) {
   const inputRef = useRef(null)
   const [lastRound, setLastRound] = useState(null)
   const [loadingTooLong, setLoadingTooLong] = useState(false)
+  const [suggestionsLoadError, setSuggestionsLoadError] = useState(false)
 
   useEffect(() => {
     fetchCircuits()
@@ -20,7 +21,10 @@ export default function ChatView({ messages, loading, onSend }) {
         const completed = circuits.filter((c) => c.date < today)
         if (completed.length > 0) setLastRound(completed[completed.length - 1])
       })
-      .catch(() => {})
+      .catch((err) => {
+        console.warn('Failed to fetch circuits for suggestion strip:', err)
+        setSuggestionsLoadError(true)
+      })
   }, [])
 
   const shortName = lastRound ? lastRound.event_name.replace(' Grand Prix', ' GP') : 'the latest race'
@@ -82,6 +86,11 @@ export default function ChatView({ messages, loading, onSend }) {
                 </button>
               ))}
             </div>
+            {suggestionsLoadError ? (
+              <p className="mt-4 text-xs text-muted-foreground">
+                Couldn't load suggestions — try a question anyway.
+              </p>
+            ) : null}
           </div>
         ) : (
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-5 py-8 sm:px-8">
@@ -93,7 +102,7 @@ export default function ChatView({ messages, loading, onSend }) {
                 {message.role === 'assistant' && !message.isError ? (
                   <div className="w-full">
                     <div className="mb-2 text-[13px] text-muted-foreground">F1Dash</div>
-                    <AnswerRenderer text={message.text} widgets={message.widgets || []} />
+                    <AnswerRenderer text={message.text} widgets={message.widgets || []} validDriverCodes={message.validDriverCodes} />
                   </div>
                 ) : message.isError ? (
                   <div className="w-full rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm leading-7 text-foreground">

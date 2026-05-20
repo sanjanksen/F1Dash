@@ -6,14 +6,14 @@ import time
 
 import anthropic
 
-from f1_data import get_circuits, get_drivers
+from f1_data import get_drivers
+from circuits_cache import _cached_circuits
 
 logger = logging.getLogger(__name__)
 
 # ── Canonical data cache ──────────────────────────────────────────────────────
 _drivers_cache: list[dict] = []
 _drivers_cache_time: float = 0.0
-_circuits_cache: list[dict] = []
 _DRIVER_CACHE_TTL = 300  # 5 minutes
 
 
@@ -26,16 +26,6 @@ def _cached_drivers() -> list[dict]:
         except Exception:
             pass
     return _drivers_cache
-
-
-def _cached_circuits() -> list[dict]:
-    global _circuits_cache
-    if not _circuits_cache:
-        try:
-            _circuits_cache = get_circuits()
-        except Exception:
-            pass
-    return _circuits_cache
 
 
 # ── Haiku entity extractor ────────────────────────────────────────────────────
@@ -91,6 +81,8 @@ Common aliases to resolve:
 - Max / Mad Max → VER  |  Lando → NOR  |  Checo / Sergio → PER
 - Carlos → SAI  |  George → RUS  |  Lewis → HAM  |  Charles → LEC
 - Oscar → PIA  |  Fernando / Alonso → ALO  |  Lance → STR
+- Kimi / Antonelli → ANT | Ollie / Oliver / Bearman → BEA | Liam / Lawson → LAW | Isack / Hadjar → HAD
+- Gabriel / Bortoleto → BOR | Jack / Doohan → DOO | Yuki / Tsunoda → TSU | Franco / Colapinto → COL
 
 Return JSON only: {{"drivers": [], "team": null, "event_country": null, "round": null}}"""
 
@@ -117,18 +109,28 @@ def _normalize(text: str) -> str:
 
 
 def _has_reference_language(normalized: str) -> bool:
-    reference_terms = (
-        "here", "there",
-        "that race", "that weekend", "that session", "that gp",
+    strong_phrases = (
+        "that race", "that weekend", "that session", "that gp", "that grand prix",
         "this race", "this weekend", "this session", "this gp",
-        "the race", "the session", "the gp", "the grand prix",
-        "same race", "same weekend", "last race",
-        "he", "him", "his", "she", "her",
-        "they", "them", "their", "both",
-        "it", "its",
+        "the same driver", "the same race", "same weekend",
+        "last race", "last weekend",
         "teammate",
     )
-    return any(re.search(rf"\b{re.escape(term)}\b", normalized) for term in reference_terms)
+    if any(re.search(rf"\b{re.escape(p)}\b", normalized) for p in strong_phrases):
+        return True
+
+    weak_tokens = (
+        "he", "him", "his", "she", "her",
+        "they", "them", "their",
+        "it", "its",
+        "the",
+        "here", "there", "both",
+    )
+    hits = sum(
+        1 for t in weak_tokens
+        if re.search(rf"\b{re.escape(t)}\b", normalized)
+    )
+    return hits >= 2
 
 
 def _detect_fp_number(normalized: str) -> int | None:
@@ -316,83 +318,8 @@ def _match_team(normalized: str) -> str | None:
 
 
 def _match_event(normalized: str) -> dict | None:
-    alias_map = {
-        "suzuka": "japan",
-        "japanese gp": "japan",
-        "japanese grand prix": "japan",
-        "monza": "italy",
-        "spa": "belgium",
-        "silverstone": "britain",
-        "interlagos": "brazil",
-        "yas marina": "abu dhabi",
-        "cota": "united states",
-        "imola": "emilia romagna",
-        "montreal": "canada",
-        "villeneuve": "canada",
-        "sakhir": "bahrain",
-        "albert park": "australia",
-        "budapest": "hungary",
-        "spielberg": "austria",
-        "red bull ring": "austria",
-        "marina bay": "singapore",
-        "lusail": "qatar",
-        "baku": "azerbaijan",
-        "jeddah": "saudi arabia",
-        "las vegas": "las vegas",
-        "mexico city": "mexico",
-        "autodromo hermanos rodriguez": "mexico",
-        "circuit de barcelona": "spain",
-        "barcelona": "spain",
-        "catalunya": "spain",
-        "zandvoort": "netherlands",
-    }
-    search_terms = set()
-    for alias, mapped in alias_map.items():
-        if alias in normalized:
-            search_terms.add(alias)
-            search_terms.add(mapped)
-
-    token_terms = set()
-    for token in normalized.split():
-        if len(token) >= 4:
-            token_terms.add(token)
-    search_terms.update(token_terms)
-
-    circuits = _cached_circuits()
-    best_match = None
-    best_score = 0
-    for circuit in circuits:
-        haystacks = [
-            _normalize(circuit.get("event_name", "")),
-            _normalize(circuit.get("circuit_name", "")),
-            _normalize(circuit.get("country", "")),
-        ]
-        gpless = haystacks[0].replace("grand prix", "").strip()
-        if gpless:
-            haystacks.append(gpless)
-        country = haystacks[2]
-        if country:
-            haystacks.append(f"{country} grand prix")
-            if country.endswith("n"):
-                haystacks.append(country[:-1])
-        score = 0
-        for hay in [hay for hay in haystacks if hay]:
-            if hay and re.search(rf"\b{re.escape(hay)}\b", normalized):
-                score = max(score, len(hay) + 10)
-
-        for term in list(search_terms):
-            normalized_term = term.replace("gp", "grand prix").strip()
-            if not normalized_term:
-                continue
-            for hay in [hay for hay in haystacks if hay]:
-                if re.search(rf"\b{re.escape(normalized_term)}\b", hay):
-                    score = max(score, len(normalized_term))
-
-        if score > best_score:
-            best_score = score
-            best_match = circuit
-
-    return best_match if best_score > 0 else None
+    from circuit_profiles import match_circuit_from_text
+    return match_circuit_from_text(normalized, _cached_circuits())
 
 
 def _suggest_tool(entity_type: str | None, scope: str | None, session_type: str | None = None) -> str | None:

@@ -13,6 +13,7 @@ from scipy.signal import savgol_filter
 from energy_2026 import get_energy_2026_knowledge
 from driver_styles import get_comparison_framing
 from circuit_profiles import get_circuit_profile
+from units import kph_to_ms
 
 # Enable FastF1 disk cache
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), 'cache')
@@ -25,6 +26,24 @@ logger = logging.getLogger(__name__)
 
 _SESSION_CACHE: dict[tuple[int, int, str], dict] = {}
 _SESSION_CACHE_LOCK = threading.Lock()
+
+
+class FastF1Error(RuntimeError):
+    """Raised when FastF1 cannot load the requested session."""
+
+    def __init__(self, message: str, *, round_number: int, session_type: str, cause: Exception | None = None):
+        super().__init__(message)
+        self.round_number = round_number
+        self.session_type = session_type
+
+
+def _unavailable_payload(round_number: int, session_type: str) -> dict:
+    return {
+        "available": False,
+        "reason": "fastf1_unavailable",
+        "round_number": round_number,
+        "session_type": session_type,
+    }
 
 
 def _fmt_td(td) -> str | None:
@@ -46,9 +65,19 @@ def _load_session(round_number: int, session_type: str, *,
 
     with _SESSION_CACHE_LOCK:
         entry = _SESSION_CACHE.get(cache_key)
+        newly_created = False
         if entry is None:
+            try:
+                ff1_session = fastf1.get_session(CURRENT_YEAR, round_number, normalized_session)
+            except Exception as exc:
+                raise FastF1Error(
+                    f"FastF1 unavailable for round {round_number} session {session_type}",
+                    round_number=round_number,
+                    session_type=session_type,
+                    cause=exc,
+                ) from exc
             entry = {
-                "session": fastf1.get_session(CURRENT_YEAR, round_number, normalized_session),
+                "session": ff1_session,
                 "laps": False,
                 "telemetry": False,
                 "weather": False,
@@ -56,6 +85,7 @@ def _load_session(round_number: int, session_type: str, *,
                 "lock": threading.Lock(),
             }
             _SESSION_CACHE[cache_key] = entry
+            newly_created = True
 
     session = entry["session"]
     entry_lock = entry["lock"]
@@ -77,12 +107,23 @@ def _load_session(round_number: int, session_type: str, *,
             )
             return session
 
-        session.load(
-            laps=target_flags["laps"],
-            telemetry=target_flags["telemetry"],
-            weather=target_flags["weather"],
-            messages=target_flags["messages"],
-        )
+        try:
+            session.load(
+                laps=target_flags["laps"],
+                telemetry=target_flags["telemetry"],
+                weather=target_flags["weather"],
+                messages=target_flags["messages"],
+            )
+        except Exception as exc:
+            if newly_created:
+                with _SESSION_CACHE_LOCK:
+                    _SESSION_CACHE.pop(cache_key, None)
+            raise FastF1Error(
+                f"FastF1 unavailable for round {round_number} session {session_type}",
+                round_number=round_number,
+                session_type=session_type,
+                cause=exc,
+            ) from exc
         entry.update(target_flags)
         return session
 
@@ -662,14 +703,17 @@ def get_session_results(round_number: int, session_type: str) -> dict:
     Rich session classification from FastF1 results metadata.
     Includes grid position, classified position, team color, and qualifying times when available.
     """
-    session = _load_session(
-        round_number,
-        session_type,
-        laps=True,
-        telemetry=False,
-        weather=False,
-        messages=_session_needs_race_control_messages(session_type),
-    )
+    try:
+        session = _load_session(
+            round_number,
+            session_type,
+            laps=True,
+            telemetry=False,
+            weather=False,
+            messages=_session_needs_race_control_messages(session_type),
+        )
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
     rows = _session_results_rows(session)
     return {
         "event": session.event['EventName'],
@@ -752,14 +796,18 @@ def get_session_fastest_laps(round_number: int, session_type: str) -> list[dict]
     Includes sector times (S1/S2/S3) and speed trap values (SpeedI1/I2/FL/ST).
     session_type: 'Q', 'R', 'FP1', 'FP2', 'FP3', 'S', 'SQ', 'SS'
     """
-    session = _load_session(
-        round_number,
-        session_type,
-        laps=True,
-        telemetry=False,
-        weather=False,
-        messages=_session_needs_race_control_messages(session_type),
-    )
+    try:
+        session = _load_session(
+            round_number,
+            session_type,
+            laps=True,
+            telemetry=False,
+            weather=False,
+            messages=_session_needs_race_control_messages(session_type),
+        )
+    except FastF1Error as exc:
+        # Return type is list[dict] — cannot carry the unavailable dict payload; chained ValueError surfaces the same information.
+        raise ValueError("session data unavailable") from exc
 
     results = []
     for driver_code in session.drivers:
@@ -798,14 +846,17 @@ def get_driver_lap_times(round_number: int, session_type: str, driver_code: str)
     speed traps, tyre compound, and pit stop flags.
     Answers: "how did Norris's pace evolve across his qualifying runs?"
     """
-    session = _load_session(
-        round_number,
-        session_type,
-        laps=True,
-        telemetry=False,
-        weather=False,
-        messages=_session_needs_race_control_messages(session_type),
-    )
+    try:
+        session = _load_session(
+            round_number,
+            session_type,
+            laps=True,
+            telemetry=False,
+            weather=False,
+            messages=_session_needs_race_control_messages(session_type),
+        )
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
 
     driver_laps = _pick_driver(session.laps, driver_code.upper())
     if driver_laps.empty:
@@ -842,7 +893,10 @@ def get_driver_strategy(round_number: int, session_type: str, driver_code: str |
     """
     Summarize tyre strategy and stints for a driver or the full field.
     """
-    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    try:
+        session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
     driver_info = _driver_lookup(session)
 
     def _summarize_driver(code: str) -> dict:
@@ -1562,7 +1616,10 @@ def get_qualifying_progression(round_number: int) -> dict:
     """
     Split qualifying into Q1/Q2/Q3 and summarize progression and knockout state.
     """
-    session = _load_session(round_number, 'Q', laps=True, telemetry=False, weather=False, messages=False)
+    try:
+        session = _load_session(round_number, 'Q', laps=True, telemetry=False, weather=False, messages=False)
+    except FastF1Error:
+        return _unavailable_payload(round_number, "Q")
     split = session.laps.split_qualifying_sessions()
     session_names = ['Q1', 'Q2', 'Q3']
     driver_info = _driver_lookup(session)
@@ -1627,14 +1684,17 @@ def get_clean_pace_summary(round_number: int, session_type: str,
     """
     Compare representative clean laps only, excluding deleted, inaccurate and pit laps.
     """
-    session = _load_session(
-        round_number,
-        session_type,
-        laps=True,
-        telemetry=False,
-        weather=False,
-        messages=_session_needs_race_control_messages(session_type),
-    )
+    try:
+        session = _load_session(
+            round_number,
+            session_type,
+            laps=True,
+            telemetry=False,
+            weather=False,
+            messages=_session_needs_race_control_messages(session_type),
+        )
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
     driver_info = _driver_lookup(session)
     drivers = [code.upper() for code in driver_codes] if driver_codes else [str(code).upper() for code in session.drivers]
     summaries = []
@@ -1713,14 +1773,17 @@ def get_sector_comparison(round_number: int, session_type: str,
     Positive gap_s = driver_a is SLOWER. Positive speed_delta = driver_a is FASTER.
     Answers: "why was Norris 0.3s faster than Leclerc in sector 2?"
     """
-    session = _load_session(
-        round_number,
-        session_type,
-        laps=True,
-        telemetry=False,
-        weather=False,
-        messages=_session_needs_race_control_messages(session_type),
-    )
+    try:
+        session = _load_session(
+            round_number,
+            session_type,
+            laps=True,
+            telemetry=False,
+            weather=False,
+            messages=_session_needs_race_control_messages(session_type),
+        )
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
 
     def _fastest(code: str):
         laps = _pick_driver(session.laps, code.upper())
@@ -1799,14 +1862,17 @@ def get_lap_telemetry(round_number: int, session_type: str,
     This is the deepest data level — use it to explain corner-specific pace differences.
     Requires session.load(telemetry=True); first load is slow, subsequent are cached.
     """
-    session = _load_session(
-        round_number,
-        session_type,
-        laps=True,
-        telemetry=True,
-        weather=False,
-        messages=_session_needs_race_control_messages(session_type),
-    )
+    try:
+        session = _load_session(
+            round_number,
+            session_type,
+            laps=True,
+            telemetry=True,
+            weather=False,
+            messages=_session_needs_race_control_messages(session_type),
+        )
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
 
     driver_laps = _pick_driver(session.laps, driver_code.upper())
     if driver_laps.empty:
@@ -1870,14 +1936,17 @@ def get_telemetry_comparison(round_number: int, session_type: str,
     Returns delta_speed (positive = driver_a faster) and delta_throttle at every 100m.
     Use this to pinpoint exactly where and why one driver gains time over another.
     """
-    session = _load_session(
-        round_number,
-        session_type,
-        laps=True,
-        telemetry=True,
-        weather=False,
-        messages=_session_needs_race_control_messages(session_type),
-    )
+    try:
+        session = _load_session(
+            round_number,
+            session_type,
+            laps=True,
+            telemetry=True,
+            weather=False,
+            messages=_session_needs_race_control_messages(session_type),
+        )
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
 
     def _get_lap(code: str, lap_num: int | None):
         laps = _pick_driver(session.laps, code.upper())
@@ -2039,8 +2108,8 @@ def _compute_energy_metrics(
             continue
         half_window_m = ((c.get("end_distance_m") or 0) - (c.get("start_distance_m") or 0)) / 2
         avg_speed_kph = c.get("mid_speed_kph") or 300
-        avg_speed_ms = max(avg_speed_kph / 3.6, 1.0)
-        drop_ms = abs(drop_kph) / 3.6
+        avg_speed_ms = max(kph_to_ms(avg_speed_kph), 1.0)
+        drop_ms = kph_to_ms(abs(drop_kph))
         est_time_lost += (drop_ms * half_window_m) / (avg_speed_ms ** 2)
 
     lico_count = len(lico_events)
@@ -2454,7 +2523,11 @@ def _telemetry_location_context(round_number: int, distance_m: int | float | Non
 
 
 def _get_comparable_qualifying_laps(round_number: int, driver_codes: list[str], session_type: str = "Q"):
-    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=True)
+    try:
+        session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=True)
+    except FastF1Error as exc:
+        # Return type is tuple — cannot carry the unavailable dict payload; chained ValueError surfaces the same information.
+        raise ValueError(f"session data unavailable for round {round_number} {session_type}") from exc
     try:
         split = session.laps.split_qualifying_sessions()
         segments = [("Q3", split[2]), ("Q2", split[1]), ("Q1", split[0])]
@@ -3109,6 +3182,8 @@ def get_circuit_details(round_number: int) -> dict:
     try:
         session = _load_session(round_number, 'R', laps=False, telemetry=True, weather=False, messages=False)
         circuit_info = session.get_circuit_info()
+    except FastF1Error:
+        circuit_info = fastf1.get_circuit_info(CURRENT_YEAR, round_number)
     except Exception:
         circuit_info = fastf1.get_circuit_info(CURRENT_YEAR, round_number)
 
@@ -3570,7 +3645,10 @@ def analyze_team_telemetry_traits(
     if not team_codes:
         raise ValueError(f"No current-season drivers found for team {resolved_team!r}.")
 
-    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    try:
+        session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
     fastest_rows = []
     for code in getattr(session, "drivers", []) or []:
         try:
@@ -3680,7 +3758,10 @@ def get_safety_car_periods(round_number: int, session_type: str) -> dict:
     with a plain-language note explaining the mechanism. Use this to answer questions about
     drivers being affected by an SC even when they didn't pit under it.
     """
-    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    try:
+        session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
 
     ts = session.track_status  # columns: Time (Timedelta), Status (str), Message (str)
     laps = session.laps
@@ -3880,7 +3961,10 @@ def get_race_control_messages(round_number: int, session_type: str,
     Return race control messages with optional category filtering.
     Useful for deleted lap reasons, incidents, flags and steward notes.
     """
-    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=True)
+    try:
+        session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=True)
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
     messages = getattr(session, "race_control_messages", None)
     if messages is None or getattr(messages, "empty", False):
         return {"event": session.event['EventName'], "session": session_type.upper(), "messages": []}
@@ -3924,7 +4008,10 @@ def get_track_position_comparison(round_number: int, session_type: str,
     Compare two drivers using raw position and car telemetry sampled by distance.
     Best for track maps, racing lines, and locating gains/losses.
     """
-    session = _load_session(round_number, session_type, laps=True, telemetry=True, weather=False, messages=False)
+    try:
+        session = _load_session(round_number, session_type, laps=True, telemetry=True, weather=False, messages=False)
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
 
     def _get_driver_lap(code: str, lap_num: int | None):
         laps = _pick_driver(session.laps, code.upper())
@@ -3997,7 +4084,10 @@ def get_session_weather(round_number: int, session_type: str) -> dict:
     evolved, and flags exactly when rain started/stopped.
     Useful for explaining pace anomalies, tyre choice, or lap time swings.
     """
-    session = _load_session(round_number, session_type, laps=False, telemetry=False, weather=True, messages=False)
+    try:
+        session = _load_session(round_number, session_type, laps=False, telemetry=False, weather=True, messages=False)
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
 
     weather = session.weather_data
 
@@ -4329,6 +4419,130 @@ def _linear_regression(x_vals: list[float], y_vals: list[float]) -> tuple[float,
     return (round(slope, 4), round(intercept, 3), round(r_squared, 3))
 
 
+def _linear_regression_raw(x_vals: list[float], y_vals: list[float]) -> tuple[float, float, float]:
+    """
+    Pure Python simple linear regression without rounding.
+    Used for model selection where rounded parameters can distort SSE/BIC.
+    """
+    n = len(x_vals)
+    if n < 2:
+        return (0.0, y_vals[0] if y_vals else 0.0, 0.0)
+
+    sum_x = sum(x_vals)
+    sum_y = sum(y_vals)
+    sum_xy = sum(x * y for x, y in zip(x_vals, y_vals))
+    sum_xx = sum(x * x for x in x_vals)
+
+    denom = n * sum_xx - sum_x ** 2
+    if abs(denom) < 1e-10:
+        return (0.0, sum_y / n, 0.0)
+
+    slope = (n * sum_xy - sum_x * sum_y) / denom
+    intercept = (sum_y - slope * sum_x) / n
+
+    y_mean = sum_y / n
+    ss_tot = sum((y - y_mean) ** 2 for y in y_vals)
+    ss_res = sum((y - (slope * x + intercept)) ** 2 for x, y in zip(x_vals, y_vals))
+    r_squared = 1.0 - ss_res / ss_tot if ss_tot > 1e-10 else 0.0
+
+    return (slope, intercept, r_squared)
+
+
+def _regression_sse(x_vals: list[float], y_vals: list[float], slope: float, intercept: float) -> float:
+    return sum((y - (slope * x + intercept)) ** 2 for x, y in zip(x_vals, y_vals))
+
+
+def _detect_cliff(
+    tyre_ages: list[float],
+    lap_times: list[float],
+    min_segment_laps: int = 5,
+    bic_threshold: float = 6.0,
+    slope_ratio_threshold: float = 2.5,
+    slope_abs_increase_threshold: float = 0.06,
+    sse_epsilon: float = 1e-9,
+) -> dict:
+    """
+    Detect a sustained tyre performance cliff with two-segment linear regression.
+
+    The model compares a one-line fit with all valid two-line breakpoints using
+    BIC, then requires the post-break slope to be materially worse.
+    """
+    n = len(tyre_ages)
+    if n != len(lap_times) or n < min_segment_laps * 2:
+        return {"cliff_detected": False}
+
+    s0, i0, _ = _linear_regression_raw(tyre_ages, lap_times)
+    sse0 = _regression_sse(tyre_ages, lap_times, s0, i0)
+    bic1 = n * math.log(max(sse0, sse_epsilon) / n) + 2 * math.log(n)
+
+    best_bic2 = float("inf")
+    best_k = None
+    best_fit = None
+
+    for k in range(min_segment_laps, n - min_segment_laps + 1):
+        ages_pre = tyre_ages[:k]
+        times_pre = lap_times[:k]
+        ages_post = tyre_ages[k:]
+        times_post = lap_times[k:]
+
+        s1, i1, _ = _linear_regression_raw(ages_pre, times_pre)
+        s2, i2, _ = _linear_regression_raw(ages_post, times_post)
+
+        sse_pre = _regression_sse(ages_pre, times_pre, s1, i1)
+        sse_post = _regression_sse(ages_post, times_post, s2, i2)
+        sse2 = sse_pre + sse_post
+        bic2 = n * math.log(max(sse2, sse_epsilon) / n) + 4 * math.log(n)
+
+        if bic2 < best_bic2:
+            best_bic2 = bic2
+            best_k = k
+            best_fit = (s1, i1, s2, i2)
+
+    if best_k is None or best_fit is None:
+        return {"cliff_detected": False}
+
+    delta_bic = bic1 - best_bic2
+    if delta_bic <= bic_threshold:
+        return {"cliff_detected": False}
+
+    s1, i1, s2, i2 = best_fit
+    if s2 <= s1:
+        return {"cliff_detected": False}
+
+    slope_increase = s2 - s1
+    ratio_is_meaningful = s1 > 0.01
+    ratio = s2 / s1 if ratio_is_meaningful else None
+    ratio_passes = ratio is not None and ratio >= slope_ratio_threshold
+    if not ratio_passes and slope_increase < slope_abs_increase_threshold:
+        return {"cliff_detected": False}
+
+    ages_pre = tyre_ages[:best_k]
+    ages_post = tyre_ages[best_k:]
+    cliff_tyre_age = ages_post[0]
+    confidence = "high" if delta_bic > 10 else "moderate"
+
+    return {
+        "cliff_detected": True,
+        "cliff_tyre_age": cliff_tyre_age,
+        "cliff_slope_increase_s_per_lap": round(slope_increase, 4),
+        "cliff_severity_ratio": round(ratio, 2) if ratio is not None else None,
+        "pre_cliff_deg_rate_s_per_lap": round(s1, 4),
+        "post_cliff_deg_rate_s_per_lap": round(s2, 4),
+        "pre_cliff_lap_count": len(ages_pre),
+        "post_cliff_lap_count": len(ages_post),
+        "pre_cliff_regression_line": [
+            {"tyre_age": ages_pre[0], "lap_time_s": round(s1 * ages_pre[0] + i1, 3)},
+            {"tyre_age": ages_pre[-1], "lap_time_s": round(s1 * ages_pre[-1] + i1, 3)},
+        ],
+        "post_cliff_regression_line": [
+            {"tyre_age": cliff_tyre_age, "lap_time_s": round(s2 * cliff_tyre_age + i2, 3)},
+            {"tyre_age": ages_post[-1], "lap_time_s": round(s2 * ages_post[-1] + i2, 3)},
+        ],
+        "bic_improvement": round(delta_bic, 2),
+        "cliff_confidence": confidence,
+    }
+
+
 def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: float = 0.04) -> list[dict]:
     """
     Group clean laps by compound block, fit linear regression per stint.
@@ -4341,15 +4555,24 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
     current_compound: str | None = None
     current_laps: list[dict] = []
 
+    previous_tyre_age = None
     for lap in sorted(clean_laps, key=lambda x: x['lap_number']):
         comp = lap['compound']
-        if comp != current_compound:
+        tyre_age = lap.get('tyre_age')
+        tyre_age_reset = (
+            current_laps
+            and tyre_age is not None
+            and previous_tyre_age is not None
+            and tyre_age < previous_tyre_age
+        )
+        if comp != current_compound or tyre_age_reset:
             if current_laps:
                 stints.append({'compound': current_compound, 'laps': current_laps})
             current_compound = comp
             current_laps = [lap]
         else:
             current_laps.append(lap)
+        previous_tyre_age = tyre_age
     if current_laps:
         stints.append({'compound': current_compound, 'laps': current_laps})
 
@@ -4386,6 +4609,7 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
 
         positive_deg = max(0.0, slope)
         total_deg_loss = round(positive_deg * len(laps), 3)
+        cliff = _detect_cliff(tyre_ages, fuel_corrected)
 
         results.append({
             'compound': stint['compound'],
@@ -4415,6 +4639,18 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
                 {'tyre_age': tyre_ages[0],  'lap_time_s': round(slope * tyre_ages[0]  + intercept, 3)},
                 {'tyre_age': tyre_ages[-1], 'lap_time_s': round(slope * tyre_ages[-1] + intercept, 3)},
             ],
+            'cliff_detected': cliff.get('cliff_detected', False),
+            'cliff_tyre_age': cliff.get('cliff_tyre_age'),
+            'cliff_slope_increase_s_per_lap': cliff.get('cliff_slope_increase_s_per_lap'),
+            'cliff_severity_ratio': cliff.get('cliff_severity_ratio'),
+            'pre_cliff_deg_rate_s_per_lap': cliff.get('pre_cliff_deg_rate_s_per_lap'),
+            'post_cliff_deg_rate_s_per_lap': cliff.get('post_cliff_deg_rate_s_per_lap'),
+            'pre_cliff_lap_count': cliff.get('pre_cliff_lap_count'),
+            'post_cliff_lap_count': cliff.get('post_cliff_lap_count'),
+            'pre_cliff_regression_line': cliff.get('pre_cliff_regression_line') or [],
+            'post_cliff_regression_line': cliff.get('post_cliff_regression_line') or [],
+            'bic_improvement': cliff.get('bic_improvement'),
+            'cliff_confidence': cliff.get('cliff_confidence'),
         })
 
     return results
@@ -4563,7 +4799,10 @@ def extract_corner_profiles(
     straight acceleration, DRS activation, clipping, and lap zone summary.
     """
     _validate_session_availability(round_number, session_type, telemetry=True)
-    session = _load_session(round_number, session_type, laps=True, telemetry=True, weather=False, messages=False)
+    try:
+        session = _load_session(round_number, session_type, laps=True, telemetry=True, weather=False, messages=False)
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
 
     driver_laps = _pick_driver(session.laps, driver_code.upper())
     if driver_laps.empty:
@@ -4764,7 +5003,10 @@ def analyze_stint_degradation(round_number: int, driver_code: str, session_type:
     r_squared, and consistency_std_dev_s for each stint.
     """
     _validate_session_availability(round_number, session_type, telemetry=False)
-    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    try:
+        session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
 
     driver_laps = _pick_driver(session.laps, driver_code.upper())
     if driver_laps.empty:
@@ -4819,7 +5061,10 @@ def analyze_race_pace_battle(
     about degradation rates, fuel-corrected pace deltas, and decisive factor.
     """
     _validate_session_availability(round_number, session_type, telemetry=False)
-    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    try:
+        session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
 
     def _driver_data(code: str):
         laps = _pick_driver(session.laps, code.upper())
@@ -5049,7 +5294,7 @@ def _compute_lateral_g(tel: pd.DataFrame) -> np.ndarray:
     # Interpolate kappa back to the full telemetry grid
     kappa_full = np.interp(s_full, s_u, kappa)
 
-    v_mps = v_full / 3.6
+    v_mps = kph_to_ms(v_full)
     lat_g_raw = (v_mps**2) * kappa_full / 9.81
     lat_g_raw = np.clip(lat_g_raw, 0.0, 6.0)
 
@@ -5073,7 +5318,7 @@ def _compute_longitudinal_g(tel: pd.DataFrame) -> np.ndarray:
     if 'Time' not in tel.columns or 'Speed' not in tel.columns or n < 3:
         return np.zeros(n)
 
-    v_mps = tel['Speed'].to_numpy(dtype=float) / 3.6
+    v_mps = kph_to_ms(tel['Speed'].to_numpy(dtype=float))
     t_s = tel['Time'].dt.total_seconds().to_numpy(dtype=float)
 
     if not np.all(np.diff(t_s) >= 0):
@@ -5332,14 +5577,17 @@ def analyze_cornering_loads(round_number: int, session_type: str,
     Caveat: derived from GPS position (not steering angle or IMU), so ±5-10%
     absolute uncertainty. Comparative rankings are reliable; absolute values less so.
     """
-    session = _load_session(
-        round_number,
-        session_type,
-        laps=True,
-        telemetry=True,
-        weather=False,
-        messages=_session_needs_race_control_messages(session_type),
-    )
+    try:
+        session = _load_session(
+            round_number,
+            session_type,
+            laps=True,
+            telemetry=True,
+            weather=False,
+            messages=_session_needs_race_control_messages(session_type),
+        )
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
 
     code_a = driver_a.upper()
     code_b = driver_b.upper()
@@ -5680,14 +5928,17 @@ def analyze_race_cornering_profile(
     Caveat: derived from GPS position, ±5-10% absolute uncertainty.
     Comparative rankings between drivers are reliable.
     """
-    session = _load_session(
-        round_number,
-        "R",
-        laps=True,
-        telemetry=True,
-        weather=False,
-        messages=False,
-    )
+    try:
+        session = _load_session(
+            round_number,
+            "R",
+            laps=True,
+            telemetry=True,
+            weather=False,
+            messages=False,
+        )
+    except FastF1Error:
+        return _unavailable_payload(round_number, "R")
 
     code_a = driver_a.upper()
     code_b = driver_b.upper()
@@ -5917,7 +6168,10 @@ def get_pit_stop_analysis(round_number: int) -> dict:
     Drivers are sorted by finish position.
     """
     _validate_session_availability(round_number, "R", telemetry=False)
-    session = _load_session(round_number, "R", laps=True)
+    try:
+        session = _load_session(round_number, "R", laps=True)
+    except FastF1Error:
+        return _unavailable_payload(round_number, "R")
 
     session_results = get_session_results(round_number, "R")
     results_list = session_results.get("results", [])
@@ -6013,7 +6267,10 @@ def analyze_weather_pace_correlation(round_number: int, session_type: str = "Q")
     Primary use: explain anomalies (Q3 slower than Q2, pace drop mid-race).
     """
     _validate_session_availability(round_number, session_type, telemetry=False)
-    session = _load_session(round_number, session_type, laps=True, weather=True)
+    try:
+        session = _load_session(round_number, session_type, laps=True, weather=True)
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
 
     if session.weather_data is None or session.weather_data.empty:
         raise ValueError(f"No weather data available for round {round_number} {session_type}.")
@@ -6118,7 +6375,10 @@ def analyze_weather_pace_correlation(round_number: int, session_type: str = "Q")
 def get_fp_summary(round_number: int, fp_number: int) -> dict:
     """Return a structured summary of a free practice session with stint classification."""
     session_type = f"FP{fp_number}"
-    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    try:
+        session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
     driver_info = _driver_lookup(session)
 
     _SOFT_COMPOUNDS = {"SOFT", "SUPERSOFT", "ULTRASOFT", "HYPERSOFT"}
@@ -6211,7 +6471,10 @@ def get_fp_summary(round_number: int, fp_number: int) -> dict:
 
 def get_speed_trap_leaderboard(round_number: int, session_type: str) -> dict:
     """Scan all laps and return peak speed at each trap (ST, FL, I1, I2) per driver."""
-    session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    try:
+        session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
     driver_info = _driver_lookup(session)
 
     traps = {

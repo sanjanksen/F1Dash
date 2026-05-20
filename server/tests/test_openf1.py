@@ -2,15 +2,18 @@ from unittest.mock import patch
 from unittest.mock import MagicMock
 
 import openf1
+import circuits_cache
 
 
 class FakeHTTPError(Exception):
     pass
 
 
-@patch("openf1.get_circuits")
+@patch("circuits_cache.get_circuits")
 @patch("openf1._openf1_get")
 def test_resolve_openf1_session(mock_openf1_get, mock_get_circuits):
+    circuits_cache._circuits_cache = []
+    circuits_cache._circuits_cache_time = 0.0
     mock_get_circuits.return_value = [
         {"round": 3, "event_name": "Japanese Grand Prix", "country": "Japan"},
     ]
@@ -104,10 +107,10 @@ def test_get_intervals(mock_resolve_session, mock_openf1_get):
 
 
 @patch('openf1._openf1_get')
-@patch('openf1.get_circuits')
+@patch('circuits_cache.get_circuits')
 def test_resolve_openf1_session_caches_schedule(mock_get_circuits, mock_openf1_get):
-    import openf1
-    openf1._circuits_cache = []
+    circuits_cache._circuits_cache = []
+    circuits_cache._circuits_cache_time = 0.0
     mock_get_circuits.return_value = [{"round": 3, "event_name": "Japanese Grand Prix", "country": "Japan"}]
     mock_openf1_get.return_value = [{"session_key": 321, "date_start": "2026-04-05T00:00:00"}]
 
@@ -115,6 +118,27 @@ def test_resolve_openf1_session_caches_schedule(mock_get_circuits, mock_openf1_g
     openf1._resolve_openf1_session(3, "SQ")
 
     mock_get_circuits.assert_called_once()
+
+
+def test_uses_shared_circuit_cache():
+    """openf1._resolve_openf1_session pulls from the shared circuits_cache module,
+    so patching the shared cache flows through to OpenF1 helpers."""
+    sentinel_circuits = [
+        {"round": 7, "event_name": "Sentinel GP", "country": "Sentinelland"},
+    ]
+    with patch("circuits_cache._cached_circuits", return_value=sentinel_circuits), \
+         patch("openf1._openf1_get") as mock_openf1_get:
+        mock_openf1_get.return_value = [
+            {"session_key": 9999, "session_name": "Race", "country_name": "Sentinelland", "circuit_short_name": "Sentinel"}
+        ]
+        # openf1 imported _cached_circuits at module load — patching the module
+        # attribute on circuits_cache is not enough; patch openf1's binding too.
+        with patch("openf1._cached_circuits", return_value=sentinel_circuits):
+            result = openf1._resolve_openf1_session(7, "R")
+        assert result["session_key"] == 9999
+        # Verify the call used country from the shared cache
+        kwargs = mock_openf1_get.call_args.kwargs
+        assert kwargs.get("country_name") == "Sentinelland"
 
 
 @patch('openf1._driver_number_for_session', return_value=4)
@@ -180,3 +204,92 @@ def test_get_pit_stops_skips_rows_without_lap_number():
          patch.object(openf1, '_openf1_get', return_value=rows):
         result = openf1.get_pit_stops(1)
     assert result == []
+
+
+class _FakeHTTPError(Exception):
+    def __init__(self, msg, response=None):
+        super().__init__(msg)
+        self.response = response
+
+
+class _FakeTimeout(Exception):
+    pass
+
+
+class _FakeConnectionError(Exception):
+    pass
+
+
+def _install_fake_requests():
+    """Replace openf1.requests with a fake module exposing real exception classes."""
+    fake = MagicMock()
+    fake.HTTPError = _FakeHTTPError
+    fake.Timeout = _FakeTimeout
+    fake.ConnectionError = _FakeConnectionError
+    return fake
+
+
+def _make_response(status_code: int, payload=None):
+    resp = MagicMock()
+    resp.status_code = status_code
+    if status_code >= 400:
+        def _raise():
+            raise _FakeHTTPError(f"{status_code} error", response=resp)
+        resp.raise_for_status.side_effect = _raise
+    else:
+        resp.raise_for_status.return_value = None
+    resp.json.return_value = payload if payload is not None else []
+    return resp
+
+
+def test_get_retries_on_502():
+    fake_requests = _install_fake_requests()
+    fake_requests.get.side_effect = [_make_response(502), _make_response(502), _make_response(200, [{"ok": True}])]
+    with patch.object(openf1, "requests", fake_requests), \
+         patch.object(openf1.time, "sleep") as mock_sleep:
+        result = openf1._openf1_get("sessions", year=2026)
+    assert result == [{"ok": True}]
+    assert fake_requests.get.call_count == 3
+    assert mock_sleep.call_count == 2
+
+
+def test_get_does_not_retry_404():
+    fake_requests = _install_fake_requests()
+    fake_requests.get.side_effect = [_make_response(404)]
+    with patch.object(openf1, "requests", fake_requests), \
+         patch.object(openf1.time, "sleep"):
+        try:
+            openf1._openf1_get("team_radio")
+        except _FakeHTTPError:
+            pass
+        else:
+            raise AssertionError("Expected HTTPError")
+    assert fake_requests.get.call_count == 1
+
+
+def test_get_does_not_retry_401():
+    fake_requests = _install_fake_requests()
+    fake_requests.get.side_effect = [_make_response(401)]
+    with patch.object(openf1, "requests", fake_requests), \
+         patch.object(openf1.time, "sleep"):
+        try:
+            openf1._openf1_get("sessions")
+        except _FakeHTTPError:
+            pass
+        else:
+            raise AssertionError("Expected HTTPError")
+    assert fake_requests.get.call_count == 1
+
+
+def test_get_propagates_after_three_failures():
+    fake_requests = _install_fake_requests()
+    fake_requests.get.side_effect = [_make_response(503), _make_response(503), _make_response(503)]
+    with patch.object(openf1, "requests", fake_requests), \
+         patch.object(openf1.time, "sleep"):
+        try:
+            openf1._openf1_get("sessions")
+        except _FakeHTTPError as exc:
+            assert "503" in str(exc)
+        else:
+            raise AssertionError("Expected HTTPError")
+    assert fake_requests.get.call_count == 3

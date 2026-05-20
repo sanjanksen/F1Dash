@@ -1,9 +1,11 @@
+import time
+
 import requests
 
-from f1_data import CURRENT_YEAR, _resolve_driver, get_circuits, get_session_results
+from f1_data import CURRENT_YEAR, _resolve_driver, get_session_results
+from circuits_cache import _cached_circuits
 
 OPENF1_BASE = "https://api.openf1.org/v1"
-_circuits_cache: list[dict] = []
 
 
 def _session_name_for_openf1(session_type: str) -> str:
@@ -24,16 +26,31 @@ def _session_name_for_openf1(session_type: str) -> str:
 
 
 def _openf1_get(endpoint: str, **params):
-    response = requests.get(f"{OPENF1_BASE}/{endpoint}", params=params, timeout=20)
-    response.raise_for_status()
-    return response.json()
-
-
-def _cached_circuits() -> list[dict]:
-    global _circuits_cache
-    if not _circuits_cache:
-        _circuits_cache = get_circuits()
-    return _circuits_cache
+    delays = [0.5, 1.5, 4.5]
+    last_exc = None
+    for i, delay in enumerate([0.0] + delays[:-1]):
+        if delay:
+            time.sleep(delay)
+        try:
+            response = requests.get(
+                f"{OPENF1_BASE}/{endpoint}",
+                params=params,
+                timeout=10,
+            )
+            if response.status_code in (401, 404):
+                response.raise_for_status()
+            if response.status_code >= 500:
+                last_exc = requests.HTTPError(
+                    f"OpenF1 {response.status_code} for /{endpoint}",
+                    response=response,
+                )
+                continue
+            response.raise_for_status()
+            return response.json()
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_exc = exc
+            continue
+    raise last_exc if last_exc else RuntimeError("OpenF1 retry exhausted with no exception")
 
 
 def _resolve_openf1_session(round_number: int, session_type: str) -> dict:

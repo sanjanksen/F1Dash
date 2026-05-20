@@ -305,6 +305,9 @@ DRIVER_STYLES: dict[str, dict] = {
         "telemetry_signature": "Smooth traces; early career data — profile will develop through 2025/2026.",
         "weakness": "Rookie adaptation — not yet extracting maximum from aggressive situations.",
         "wet_weather": "Unknown — limited data.",
+        "confidence": "low",
+        "editorial": "draft",
+        "last_reviewed": "2026-05-19",
     },
 
     "STR": {
@@ -388,7 +391,8 @@ DRIVER_STYLES: dict[str, dict] = {
         "corner_philosophy": (
             "Aggressive, raw natural speed. Late braker with v-line tendencies. "
             "Can be inconsistent — occasionally over-aggressive in high-pressure situations "
-            "but capable of very fast single laps when fully committed."
+            "but capable of very fast single laps when fully committed. 2026 team placement "
+            "(Red Bull vs RB) still being firmed up — profile carries over but context shifts."
         ),
         "key_traits": [
             "Aggressive, late braking with responsive front end preference",
@@ -398,6 +402,9 @@ DRIVER_STYLES: dict[str, dict] = {
         "telemetry_signature": "Late, aggressive braking; sharp turn-in; early throttle.",
         "weakness": "Inconsistency — over-aggression occasionally leads to mistakes or tyre abuse.",
         "wet_weather": "Mixed — aggressive instincts need managing in low grip.",
+        "confidence": "low",
+        "editorial": "draft",
+        "last_reviewed": "2026-05-19",
     },
 
     "LAW": {
@@ -411,16 +418,19 @@ DRIVER_STYLES: dict[str, dict] = {
         "setup_preference": "responsive_front",
         "corner_philosophy": (
             "Aggressive natural racer — similar aggressive tendencies to the Red Bull academy "
-            "mould. Late braker, committed entries. Still building F1 experience."
+            "mould. Late braker, committed entries. Still building F1 experience at RB."
         ),
         "key_traits": [
             "Aggressive, late-braking style",
             "Red Bull academy-style committed corner entries",
             "Building F1 consistency",
         ],
-        "telemetry_signature": "Aggressive entry; late brake points; sharp turn-in.",
+        "telemetry_signature": "Limited F1 data — profile will firm up through 2026.",
         "weakness": "Experience — still learning tyre and race management at the highest level.",
-        "wet_weather": "Limited data.",
+        "wet_weather": "Unknown — limited data.",
+        "confidence": "low",
+        "editorial": "draft",
+        "last_reviewed": "2026-05-19",
     },
 
     "BEA": {
@@ -433,17 +443,124 @@ DRIVER_STYLES: dict[str, dict] = {
         "car_preference": "balanced",
         "setup_preference": "balanced",
         "corner_philosophy": (
-            "Ferrari academy driver — smooth, disciplined inputs reflecting elite single-seater "
-            "training. Showed strong composure in limited F1 appearances. Profile developing."
+            "Ferrari academy driver now at Haas — smooth, disciplined inputs reflecting elite "
+            "single-seater training. Showed strong composure in limited F1 appearances. Profile developing."
         ),
         "key_traits": [
             "Ferrari academy smoothness — disciplined, precise inputs",
             "Composed under pressure for a rookie",
             "Style developing with F1 experience",
         ],
-        "telemetry_signature": "Clean, controlled traces — early career profile.",
+        "telemetry_signature": "Limited F1 data — profile will firm up through 2026.",
         "weakness": "Limited F1 data — style profile still emerging.",
         "wet_weather": "Unknown — limited data.",
+        "confidence": "low",
+        "editorial": "draft",
+        "last_reviewed": "2026-05-19",
+    },
+
+    "HAD": {
+        "full_name": "Isack Hadjar",
+        "steering_style": "measured",
+        "corner_approach": "balanced",
+        "braking_style": "balanced",
+        "apex_style": "standard",
+        "throttle_style": "measured",
+        "car_preference": "balanced",
+        "setup_preference": "balanced",
+        "corner_philosophy": (
+            "Red Bull junior promoted to RB. F2 form suggested strong qualifying pace and "
+            "improving racecraft. Style baseline measured pending F1 telemetry coverage."
+        ),
+        "key_traits": [
+            "Strong single-lap pace coming up from F2",
+            "Red Bull junior programme polish",
+            "Profile pending full F1 season data",
+        ],
+        "telemetry_signature": "Limited F1 data — profile will firm up through 2026.",
+        "weakness": "Unknown — limited data.",
+        "wet_weather": "Unknown — limited data.",
+        "confidence": "low",
+        "editorial": "draft",
+        "last_reviewed": "2026-05-19",
+    },
+
+    "BOR": {
+        "full_name": "Gabriel Bortoleto",
+        "steering_style": "measured",
+        "corner_approach": "balanced",
+        "braking_style": "balanced",
+        "apex_style": "standard",
+        "throttle_style": "measured",
+        "car_preference": "balanced",
+        "setup_preference": "balanced",
+        "corner_philosophy": (
+            "F2 champion stepping into Audi (Sauber rebrand). McLaren-academy-trained smoothness "
+            "with strong tyre management reputation from junior categories."
+        ),
+        "key_traits": [
+            "F2 champion — proven junior-category pace",
+            "Strong tyre management from junior coverage",
+            "Profile pending full F1 season data",
+        ],
+        "telemetry_signature": "Limited F1 data — profile will firm up through 2026.",
+        "weakness": "Unknown — limited data.",
+        "wet_weather": "Unknown — limited data.",
+        "confidence": "low",
+        "editorial": "draft",
+        "last_reviewed": "2026-05-19",
+    },
+
+    "DOO": {
+        "full_name": "Jack Doohan",
+        "steering_style": "measured",
+        "corner_approach": "balanced",
+        "braking_style": "balanced",
+        "apex_style": "standard",
+        "throttle_style": "measured",
+        "car_preference": "balanced",
+        "setup_preference": "balanced",
+        "corner_philosophy": (
+            "Alpine academy graduate — measured, methodical style from junior categories. "
+            "Builds pace progressively rather than chasing aggressive entries."
+        ),
+        "key_traits": [
+            "Methodical Alpine academy development path",
+            "Builds pace progressively across sessions",
+            "Profile pending full F1 season data",
+        ],
+        "telemetry_signature": "Limited F1 data — profile will firm up through 2026.",
+        "weakness": "Unknown — limited data.",
+        "wet_weather": "Unknown — limited data.",
+        "confidence": "low",
+        "editorial": "draft",
+        "last_reviewed": "2026-05-19",
+    },
+
+    "COL": {
+        "full_name": "Franco Colapinto",
+        "steering_style": "aggressive",
+        "corner_approach": "balanced",
+        "braking_style": "late_aggressive",
+        "apex_style": "standard",
+        "throttle_style": "early_explosive",
+        "car_preference": "balanced",
+        "setup_preference": "balanced",
+        "corner_philosophy": (
+            "Showed natural aggression and adaptability in 2024 Williams stint. "
+            "Now at Alpine — committed late braker with confident corner entries."
+        ),
+        "key_traits": [
+            "Natural aggression and committed entries",
+            "Adapted quickly during 2024 Williams cameo",
+            "Profile pending full F1 season data",
+        ],
+        "telemetry_signature": "Limited F1 data — profile will firm up through 2026.",
+        "weakness": "Unknown — limited data.",
+        "wet_weather": "Unknown — limited data.",
+        "confidence": "low",
+        "editorial": "draft",
+        "last_reviewed": "2026-05-19",
     },
 }
 
@@ -463,7 +580,8 @@ def get_comparison_framing(code_a: str, code_b: str) -> dict:
     b = get_driver_style(code_b)
 
     if not a or not b:
-        return {"driver_a_style": a, "driver_b_style": b, "style_prediction": None}
+        confidence = "low" if (a is None or b is None or a.get("confidence") == "low" or b.get("confidence") == "low") else "high"
+        return {"driver_a_style": a, "driver_b_style": b, "style_prediction": None, "style_confidence": confidence}
 
     predictions = []
 
@@ -501,8 +619,11 @@ def get_comparison_framing(code_a: str, code_b: str) -> dict:
             f"platform — the car's natural balance will favour one of them."
         )
 
+    style_confidence = "low" if (a.get("confidence") == "low" or b.get("confidence") == "low") else "high"
+
     return {
         "driver_a_style": a,
         "driver_b_style": b,
         "style_prediction": " ".join(predictions) if predictions else None,
+        "style_confidence": style_confidence,
     }
