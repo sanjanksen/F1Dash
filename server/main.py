@@ -2,6 +2,7 @@
 import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -76,7 +77,7 @@ async def chat_endpoint(request: ChatRequest):
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="message cannot be empty")
     try:
-        return answer_f1_payload(request.message, request.history)
+        return await run_in_threadpool(answer_f1_payload, request.message, request.history)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:

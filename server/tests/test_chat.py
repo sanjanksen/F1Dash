@@ -1,6 +1,8 @@
 # server/tests/test_chat.py
 import json
 import os
+import threading
+import time
 import pytest
 from unittest.mock import patch, MagicMock, call
 import importlib
@@ -117,6 +119,91 @@ def test_answer_f1_question_parallel_tool_calls():
     assert len(last_user_content) == 2  # two tool_result blocks
     assert last_user_content[0]["tool_use_id"] == "toolu_01"
     assert last_user_content[1]["tool_use_id"] == "toolu_02"
+
+
+def test_execute_analysis_tool_calls_preserves_plan_order():
+    import chat
+
+    tool_calls = [("slow_tool", {"id": 1}), ("fast_tool", {"id": 2})]
+
+    def fake_execute_tool(name, args):
+        if name == "slow_tool":
+            time.sleep(0.05)
+        return {"name": name, "args": args}
+
+    with patch.object(chat, "execute_tool", side_effect=fake_execute_tool):
+        evidence = chat._execute_analysis_tool_calls(tool_calls)
+
+    assert [item["tool"] for item in evidence] == ["slow_tool", "fast_tool"]
+    assert [item["result"]["name"] for item in evidence] == ["slow_tool", "fast_tool"]
+
+
+def test_execute_analysis_tool_calls_starts_calls_concurrently():
+    import chat
+
+    barrier = threading.Barrier(2, timeout=1.0)
+    started = []
+    lock = threading.Lock()
+
+    def fake_execute_tool(name, _args):
+        with lock:
+            started.append(name)
+        barrier.wait()
+        return {"name": name}
+
+    with patch.object(chat, "execute_tool", side_effect=fake_execute_tool):
+        evidence = chat._execute_analysis_tool_calls([
+            ("tool_a", {}),
+            ("tool_b", {}),
+        ])
+
+    assert sorted(started) == ["tool_a", "tool_b"]
+    assert [item["result"]["name"] for item in evidence] == ["tool_a", "tool_b"]
+
+
+def test_execute_analysis_tool_calls_keeps_successes_when_one_fails():
+    import chat
+
+    def fake_execute_tool(name, _args):
+        if name == "bad_tool":
+            raise ValueError("broken")
+        return {"ok": name}
+
+    with patch.object(chat, "execute_tool", side_effect=fake_execute_tool):
+        evidence = chat._execute_analysis_tool_calls([
+            ("bad_tool", {}),
+            ("good_tool", {}),
+        ])
+
+    assert evidence[0]["tool"] == "bad_tool"
+    assert evidence[0]["error"] == "broken"
+    assert evidence[1]["tool"] == "good_tool"
+    assert evidence[1]["result"] == {"ok": "good_tool"}
+
+
+def test_execute_analysis_tool_call_strips_per_corner_for_cornering_tools():
+    import chat
+
+    with patch.object(chat, "execute_tool", return_value={
+        "summary": {"driver_a": "NOR"},
+        "per_corner": [{"corner": 1}],
+    }):
+        evidence = chat._execute_analysis_tool_call("analyze_cornering_loads", {"round_number": 1})
+
+    assert evidence["result"] == {"summary": {"driver_a": "NOR"}}
+
+
+def test_execute_analysis_tool_calls_single_call_shape():
+    import chat
+
+    with patch.object(chat, "execute_tool", return_value={"ok": True}):
+        evidence = chat._execute_analysis_tool_calls([("one_tool", {"round_number": 1})])
+
+    assert evidence == [{
+        "tool": "one_tool",
+        "args": {"round_number": 1},
+        "result": {"ok": True},
+    }]
 
 
 def test_answer_f1_question_tool_error_uses_is_error_flag():

@@ -9,6 +9,7 @@ import json
 import os
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 import anthropic
 try:
@@ -22,6 +23,7 @@ from circuit_profiles import get_circuit_profile
 from energy_2026 import get_energy_2026_knowledge
 
 MAX_TOOL_ROUNDS = 8
+MAX_DETERMINISTIC_TOOL_WORKERS = 4
 logger = logging.getLogger(__name__)
 
 import datetime
@@ -309,6 +311,15 @@ def _make_deg_trend_chart_widget(result: dict) -> dict:
                 "r_squared": s.get("r_squared"),
                 "scatter_data": s.get("scatter_data") or [],
                 "regression_line": s.get("regression_line") or [],
+                "cliff_detected": s.get("cliff_detected", False),
+                "cliff_tyre_age": s.get("cliff_tyre_age"),
+                "cliff_slope_increase_s_per_lap": s.get("cliff_slope_increase_s_per_lap"),
+                "cliff_severity_ratio": s.get("cliff_severity_ratio"),
+                "pre_cliff_deg_rate_s_per_lap": s.get("pre_cliff_deg_rate_s_per_lap"),
+                "post_cliff_deg_rate_s_per_lap": s.get("post_cliff_deg_rate_s_per_lap"),
+                "pre_cliff_regression_line": s.get("pre_cliff_regression_line") or [],
+                "post_cliff_regression_line": s.get("post_cliff_regression_line") or [],
+                "cliff_confidence": s.get("cliff_confidence"),
             }
             for s in (result.get("stints") or [])
             if s.get("scatter_data") or s.get("regression_line")
@@ -1034,6 +1045,7 @@ top speed trap, slipstream, tow, drag penalty, sacrificing downforce, high-drag 
 - 3-5 sentences. Use bullets only for genuinely separate contributing factors.
 - For cornering data: NEVER say "lateral load variance", "grip utilisation percentage", "avg_corrections_per_corner". Those are internal metrics. Translate to character language: "Norris had more tyre confidence — really committed, on the absolute limit for a third of every corner" is correct. "Norris had 74% avg_grip_utilisation_pct" is completely wrong.
 - For tyre data: NEVER say "deg_rate_delta" or "fuel-corrected pace". Say "his tyres were dropping off faster" or "once you strip out the fuel, he had the edge on raw pace."
+- Only say "cliff", "fell off a cliff", or "fell out of the optimal window" when `cliff_detected` is true. If it is false, describe the stint as linear degradation, noisy degradation, or normal drop-off. If the cliff flag is true, use F1 language: "it looks like the tyre fell out of the optimal window around age 13" or "after age 13 the tyre seems to have dropped out of its window and the degradation got much steeper." Do not claim graining, blistering, or thermal deg unless that cause is separately evidenced.
 - When discussing a driver's stints or compounds, always follow chronological race order — first stint first, second stint second. Never reorder stints for narrative effect or to lead with the more impressive number.
 - For tyre-management rankings, always show the actual deg rate if it is available. Rank primarily by lower positive deg rate, then use consistency as the noise check and R² as the trust check. Do not rank by R² alone. If raw pace trend is negative, explain that the car got faster on the stopwatch, but the fuel-corrected deg estimate adds back expected fuel burn to estimate tyre loss. Explain `±0.58s` as lap-to-lap spread around the trend, not time lost per lap.
 - For team/car characterization, rank evidence in this order: current telemetry traits first, historical circuit-fit trends second, sourced public-reporting profiles third. Never turn any one layer into a definitive private setup claim.
@@ -1465,31 +1477,43 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
     return None
 
 
+def _execute_analysis_tool_call(tool_name: str, args: dict) -> dict:
+    try:
+        logger.info("Deterministic analysis tool call: %s args=%s", tool_name, args)
+        result = execute_tool(tool_name, args)
+        if tool_name in ("analyze_cornering_loads", "analyze_race_cornering_profile"):
+            result = {k: v for k, v in result.items() if k != "per_corner"}
+        return {
+            "tool": tool_name,
+            "args": args,
+            "result": result,
+        }
+    except Exception as exc:
+        return {
+            "tool": tool_name,
+            "args": args,
+            "error": str(exc),
+        }
+
+
+def _execute_analysis_tool_calls(tool_calls: list[tuple[str, dict]]) -> list[dict]:
+    if not tool_calls:
+        return []
+    if len(tool_calls) == 1:
+        tool_name, args = tool_calls[0]
+        return [_execute_analysis_tool_call(tool_name, args)]
+
+    max_workers = min(MAX_DETERMINISTIC_TOOL_WORKERS, len(tool_calls))
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="f1dash-analysis-tool") as executor:
+        futures = [
+            executor.submit(_execute_analysis_tool_call, tool_name, args)
+            for tool_name, args in tool_calls
+        ]
+        return [future.result() for future in futures]
+
+
 def _retrieve_analysis_evidence(plan: dict, resolved: dict | None = None) -> list[dict]:
-    evidence = []
-    for tool_name, args in plan.get("tool_calls", []):
-        try:
-            logger.info("Deterministic analysis tool call: %s args=%s", tool_name, args)
-            result = execute_tool(tool_name, args)
-            # Strip per_corner from cornering analysis — it's used for widget building
-            # only (via _make_grip_commitment_summary which reads summary, not per_corner).
-            # Giving the LLM raw per-corner data causes it to cherry-pick individual-corner
-            # metric values and cite them alongside the aggregate, creating two conflicting
-            # numbers for the same stat. The pre-built narrative field already contains the
-            # corner-spread sentence that belongs in the answer.
-            if tool_name in ("analyze_cornering_loads", "analyze_race_cornering_profile"):
-                result = {k: v for k, v in result.items() if k != "per_corner"}
-            evidence.append({
-                "tool": tool_name,
-                "args": args,
-                "result": result,
-            })
-        except Exception as exc:
-            evidence.append({
-                "tool": tool_name,
-                "args": args,
-                "error": str(exc),
-            })
+    evidence = _execute_analysis_tool_calls(plan.get("tool_calls", []))
 
     # ── Auto-inject driver style context ────────────────────────────────────
     drivers = plan.get("drivers") or []
