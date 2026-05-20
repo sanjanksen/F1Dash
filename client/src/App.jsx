@@ -17,7 +17,8 @@ function validateChatResponse(body) {
   if (body.widgets != null && !Array.isArray(body.widgets)) {
     return { ok: false, reason: 'widgets-not-array' }
   }
-  return { ok: true, response: body.response, widgets: body.widgets ?? [] }
+  const validDriverCodes = Array.isArray(body.valid_driver_codes) ? body.valid_driver_codes : []
+  return { ok: true, response: body.response, widgets: body.widgets ?? [], validDriverCodes }
 }
 
 function getInitialTheme() {
@@ -77,14 +78,14 @@ export default function App() {
         return
       }
 
-      const { response, widgets } = validated
+      const { response, widgets, validDriverCodes } = validated
       const stampedWidgets = (widgets ?? []).map((w) => ({
         ...w,
         _id: w?._id ?? (typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`),
       }))
       updateMessages(sessionId, [
         ...withUser,
-        { id: crypto.randomUUID(), role: 'assistant', text: response, widgets: stampedWidgets },
+        { id: crypto.randomUUID(), role: 'assistant', text: response, widgets: stampedWidgets, validDriverCodes },
       ])
     } catch (error) {
       updateMessages(sessionId, [

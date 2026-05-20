@@ -93,7 +93,7 @@ export default function ChatView({ messages, loading, onSend }) {
                 {message.role === 'assistant' && !message.isError ? (
                   <div className="w-full">
                     <div className="mb-2 text-[13px] text-muted-foreground">F1Dash</div>
-                    <AnswerRenderer text={message.text} widgets={message.widgets || []} />
+                    <AnswerRenderer text={message.text} widgets={message.widgets || []} validDriverCodes={message.validDriverCodes} />
                   </div>
                 ) : message.isError ? (
                   <div className="w-full rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm leading-7 text-foreground">

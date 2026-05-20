@@ -21,7 +21,7 @@ try:
 except ImportError:
     openai = None
 from tools import TOOL_DEFINITIONS, OPENAI_TOOL_DEFINITIONS, execute_tool
-from resolver import resolve_query_context, resolve_context_from_history
+from resolver import resolve_query_context, resolve_context_from_history, _cached_drivers
 from driver_styles import get_comparison_framing
 from circuit_profiles import get_circuit_profile
 from energy_2026 import get_energy_2026_knowledge
@@ -1997,6 +1997,14 @@ def _answer_openai(message: str, history: list[dict], resolved_context: dict | N
 
 # ── Public interface ─────────────────────────────────────────────────────────
 
+def _valid_driver_codes() -> list[str]:
+    return sorted({
+        (d.get("code") or "").upper()
+        for d in _cached_drivers()
+        if d.get("code")
+    })
+
+
 def answer_f1_payload(message: str, history: list[dict] | None = None) -> dict:
     """
     Answer an F1 question using the configured LLM provider.
@@ -2011,11 +2019,15 @@ def answer_f1_payload(message: str, history: list[dict] | None = None) -> dict:
         resolved = resolve_query_context(message, previous_context)
         deterministic = _try_deterministic_analysis(message, prior, provider=provider, resolved_context=resolved)
         if deterministic:
+            deterministic["valid_driver_codes"] = _valid_driver_codes()
             return deterministic
         preloaded = _preload_resolved_context(resolved)
         if provider == "openai":
-            return _answer_openai(message, prior, resolved_context=resolved, preloaded_context=preloaded)
-        return _answer_anthropic(message, prior, resolved_context=resolved, preloaded_context=preloaded)
+            payload = _answer_openai(message, prior, resolved_context=resolved, preloaded_context=preloaded)
+        else:
+            payload = _answer_anthropic(message, prior, resolved_context=resolved, preloaded_context=preloaded)
+        payload["valid_driver_codes"] = _valid_driver_codes()
+        return payload
     except LLMTransientError as e:
         if e.kind == "rate_limit":
             msg = "The model is throttling right now — please retry in a moment."
@@ -2023,7 +2035,7 @@ def answer_f1_payload(message: str, history: list[dict] | None = None) -> dict:
             msg = "I lost the connection to the model — please retry."
         else:
             msg = "The model API returned an error — please retry."
-        return {"response": msg, "widgets": []}
+        return {"response": msg, "widgets": [], "valid_driver_codes": _valid_driver_codes()}
 
 
 def answer_f1_question(message: str, history: list[dict] | None = None) -> str:

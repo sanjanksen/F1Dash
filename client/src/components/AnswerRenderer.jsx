@@ -72,15 +72,7 @@ function parseBlock(block) {
   }
 }
 
-const BADGE_BLOCKLIST = new Set([
-    'LAP', 'WET', 'DRY', 'FIA', 'ERS', 'PIT', 'CAR', 'RUN', 'END',
-    'ALL', 'THE', 'AND', 'FOR', 'BUT', 'NOT', 'NEW', 'OLD', 'TOP',
-    'ONE', 'TWO', 'SET', 'BOX', 'OFF', 'OWN', 'WAY', 'PUT', 'GET',
-    'GOT', 'HAD', 'HAS', 'WAS', 'CAN', 'DID', 'NOW', 'ITS', 'OUT',
-    'WIN', 'LED', 'GAP', 'AIR', 'KPH', 'MPH', 'KMH', 'TYR', 'AGO',
-])
-
-function renderInline(text) {
+function renderInline(text, driverCodeSet) {
   const parts = text.split(
     /(\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|`[^`]+`|\bP\d+\b|\bQ[123]\b|\bSC\b|\bVSC\b|\bFP[123]\b|\b[A-Z]{3}\b|\b\d+\.\d+s\b)/g,
   )
@@ -112,7 +104,7 @@ function renderInline(text) {
       return <Badge key={index} variant="default" className="mx-0.5 normal-case tracking-normal">{part}</Badge>
     }
 
-    if (/^[A-Z]{3}$/.test(part) && !BADGE_BLOCKLIST.has(part)) {
+    if (/^[A-Z]{3}$/.test(part) && driverCodeSet && driverCodeSet.has(part)) {
       return <Badge key={index} variant="muted" className="mx-0.5 tracking-[0.08em]">{part}</Badge>
     }
 
@@ -128,13 +120,13 @@ function renderInline(text) {
   })
 }
 
-function List({ items, ordered = false }) {
+function List({ items, ordered = false, driverCodeSet }) {
   const Tag = ordered ? 'ol' : 'ul'
 
   return (
     <Tag className={ordered ? 'space-y-2 pl-5 text-[15px] leading-7 text-foreground list-decimal' : 'space-y-2 pl-5 text-[15px] leading-7 text-foreground list-disc'}>
       {items.map((item, index) => (
-        <li key={index}>{renderInline(item)}</li>
+        <li key={index}>{renderInline(item, driverCodeSet)}</li>
       ))}
     </Tag>
   )
@@ -175,9 +167,13 @@ function WidgetRenderer({ widget }) {
   return null
 }
 
-export default function AnswerRenderer({ text, widgets = [] }) {
+export default function AnswerRenderer({ text, widgets = [], validDriverCodes }) {
   const blocks = splitBlocks(text).map(parseBlock).filter(Boolean)
   if (blocks.length === 0 && widgets.length === 0) return null
+
+  const driverCodeSet = Array.isArray(validDriverCodes) && validDriverCodes.length > 0
+    ? new Set(validDriverCodes)
+    : null
 
   const [first, ...rest] = blocks
   const hasLead = first?.type === 'paragraph'
@@ -187,7 +183,7 @@ export default function AnswerRenderer({ text, widgets = [] }) {
     <div className="max-w-3xl space-y-5">
       {hasLead ? (
         <p className="text-[15px] leading-7 text-foreground">
-          {renderInline(first.text)}
+          {renderInline(first.text, driverCodeSet)}
         </p>
       ) : null}
 
@@ -204,17 +200,17 @@ export default function AnswerRenderer({ text, widgets = [] }) {
         if (block.type === 'paragraph') {
           return (
             <p key={index} className="text-[15px] leading-7 text-foreground">
-              {renderInline(block.text)}
+              {renderInline(block.text, driverCodeSet)}
             </p>
           )
         }
 
         if (block.type === 'bullet-list') {
-          return <List key={index} items={block.items} />
+          return <List key={index} items={block.items} driverCodeSet={driverCodeSet} />
         }
 
         if (block.type === 'number-list') {
-          return <List key={index} items={block.items} ordered />
+          return <List key={index} items={block.items} ordered driverCodeSet={driverCodeSet} />
         }
 
         if (block.type === 'kv-grid') {
@@ -226,7 +222,7 @@ export default function AnswerRenderer({ text, widgets = [] }) {
                   className="grid gap-1 border-b border-border/60 py-3 last:border-b-0 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-4"
                 >
                   <dt className="text-sm font-medium text-muted-foreground">{row.label}</dt>
-                  <dd className="text-[15px] leading-7 text-foreground">{renderInline(row.value)}</dd>
+                  <dd className="text-[15px] leading-7 text-foreground">{renderInline(row.value, driverCodeSet)}</dd>
                 </div>
               ))}
             </dl>
@@ -237,7 +233,7 @@ export default function AnswerRenderer({ text, widgets = [] }) {
           return (
             <section key={index} className="space-y-3">
               <h3 className="text-[15px] font-semibold text-foreground">{block.title}</h3>
-              <List items={block.items} />
+              <List items={block.items} driverCodeSet={driverCodeSet} />
             </section>
           )
         }
