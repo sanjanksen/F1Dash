@@ -98,6 +98,103 @@ TEAM_CAR_PROFILES: dict[str, dict] = {
         ],
         "caveat": "Low confidence because this is package-specific and likely to change with development.",
     },
+    "mclaren": {
+        "team": "McLaren",
+        "profile_type": "curated_editorial",
+        "last_reviewed": "2026-05-19",
+        "confidence": "medium",
+        "summary": "Skeleton entry. McLaren's recent car generations have been publicly characterised as strong in medium- and high-speed corners with tyre-management as a relative strength, but this entry needs sourced detail before being used as evidence.",
+        "traits": [
+            {
+                "trait": "medium_high_speed_strength",
+                "status": "reported_strength",
+                "note": "Placeholder skeleton. Public reporting has framed McLaren as competitive in flowing medium- and high-speed corners; replace with a dated citation before relying on it.",
+                "source": "pending citation",
+                "source_url": "pending citation",
+            },
+        ],
+        "caveat": "Skeleton entry created 2026-05-19 to close a coverage gap; specific traits are not yet sourced and should not be quoted as confirmed reporting.",
+    },
+    "alpine": {
+        "team": "Alpine",
+        "profile_type": "curated_editorial",
+        "last_reviewed": "2026-05-19",
+        "confidence": "medium",
+        "summary": "Skeleton entry. Public reporting through 2024-2025 framed Alpine as power-unit limited with chassis behaviour varying by track, but this entry needs sourced detail before being used as evidence.",
+        "traits": [
+            {
+                "trait": "power_unit_limitation",
+                "status": "reported_limitation",
+                "note": "Placeholder skeleton. Renault PU deficit has been a recurring public talking point; replace with a dated citation before relying on it.",
+                "source": "pending citation",
+                "source_url": "pending citation",
+            },
+        ],
+        "caveat": "Skeleton entry created 2026-05-19 to close a coverage gap; specific traits are not yet sourced and should not be quoted as confirmed reporting.",
+    },
+    "williams": {
+        "team": "Williams",
+        "profile_type": "curated_editorial",
+        "last_reviewed": "2026-05-19",
+        "confidence": "medium",
+        "summary": "Skeleton entry. Public reporting around the FW46/FW47 era described Williams as strong on low-drag, high-speed layouts but weaker in slow, traction-limited sections; this entry needs sourced detail before being used as evidence.",
+        "traits": [
+            {
+                "trait": "low_drag_high_speed_bias",
+                "status": "reported_tendency",
+                "note": "Placeholder skeleton. Williams has often been described as a low-drag car favouring power circuits; replace with a dated citation before relying on it.",
+                "source": "pending citation",
+                "source_url": "pending citation",
+            },
+        ],
+        "caveat": "Skeleton entry created 2026-05-19 to close a coverage gap; specific traits are not yet sourced and should not be quoted as confirmed reporting.",
+    },
+    "racing bulls": {
+        "team": "Racing Bulls",
+        "profile_type": "curated_editorial",
+        "last_reviewed": "2026-05-19",
+        "confidence": "low",
+        "summary": "Skeleton entry. Racing Bulls (formerly AlphaTauri/RB) shares components with Red Bull but has its own chassis identity; this entry needs sourced detail before being used as evidence.",
+        "traits": [
+            {
+                "trait": "shared_component_inheritance",
+                "status": "structural_note",
+                "note": "Placeholder skeleton. Racing Bulls inherits transferable Red Bull components within the regulations but is a distinct car; replace with a dated citation before relying on it.",
+                "source": "pending citation",
+                "source_url": "pending citation",
+            },
+        ],
+        "caveat": "Skeleton entry created 2026-05-19 to close a coverage gap; do not conflate with the senior Red Bull team's car characteristics.",
+    },
+    "audi": {
+        "team": "Audi",
+        "profile_type": "curated_editorial",
+        "last_reviewed": "2026-05-19",
+        "confidence": "low",
+        "summary": "Skeleton entry. Audi enters the 2026 regulation cycle as the rebadged former Sauber works programme; very little dated public reporting yet exists on the new car's character.",
+        "traits": [
+            {
+                "trait": "new_works_programme",
+                "status": "structural_note",
+                "note": "Placeholder skeleton. 2026 is Audi's first works season under the new regulations; replace with a dated citation as reporting accumulates.",
+                "source": "pending citation",
+                "source_url": "pending citation",
+            },
+        ],
+        "caveat": "Skeleton entry created 2026-05-19 to close a coverage gap; confidence is low because the 2026 Audi car has minimal public reporting history.",
+    },
+}
+
+
+_ALIASES: dict[str, str] = {
+    "racing bulls": "racing bulls",
+    "rb": "racing bulls",
+    "visa cash app rb": "racing bulls",
+    "vcarb": "racing bulls",
+    "alphatauri": "racing bulls",
+    "red bull": "red bull",
+    "red bull racing": "red bull",
+    "oracle red bull racing": "red bull",
 }
 
 
@@ -105,6 +202,8 @@ def get_team_car_profile(team_name: str) -> dict | None:
     needle = (team_name or "").strip().lower()
     if not needle:
         return None
+    if needle in _ALIASES:
+        return dict(TEAM_CAR_PROFILES[_ALIASES[needle]])
     for key, profile in TEAM_CAR_PROFILES.items():
         team = profile.get("team", "").lower()
         if needle in key or key in needle or needle in team or team in needle:

@@ -393,7 +393,7 @@ def test_execute_tool_get_team_car_profile():
 
 
 def test_execute_tool_get_team_car_profile_missing_returns_available_false():
-    result = tools.execute_tool("get_team_car_profile", {"team_name": "McLaren"})
+    result = tools.execute_tool("get_team_car_profile", {"team_name": "Nonexistent Team XYZ"})
     assert result["available"] is False
 
 
