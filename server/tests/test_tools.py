@@ -329,6 +329,41 @@ def test_execute_tool_analyze_team_performance():
     assert result["team"] == "Ferrari"
 
 
+def test_get_team_car_profile_logs_warning_on_missing_team(caplog):
+    with patch('tools.get_team_car_profile', return_value=None):
+        with caplog.at_level("WARNING", logger="tools"):
+            result = tools.execute_tool("get_team_car_profile", {"team_name": "NotARealTeam"})
+    assert result["available"] is False
+    assert "guidance_for_model" in result
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("NotARealTeam" in r.getMessage() and "team_car_profiles.py" in r.getMessage()
+               for r in warnings)
+
+
+def test_get_driver_style_profile_logs_warning_on_missing_driver(caplog):
+    with patch('tools.get_driver_style', return_value=None):
+        with caplog.at_level("WARNING", logger="tools"):
+            result = tools.execute_tool("get_driver_style_profile", {"driver_a": "ZZZ"})
+    assert result["available"] is False
+    assert "guidance_for_model" in result
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("ZZZ" in r.getMessage() and "driver_styles.py" in r.getMessage()
+               for r in warnings)
+
+
+def test_get_driver_style_profile_logs_warning_on_missing_comparison_pair(caplog):
+    with patch('tools.get_comparison_framing', return_value=None), \
+         patch('tools.get_driver_style', return_value=None):
+        with caplog.at_level("WARNING", logger="tools"):
+            result = tools.execute_tool(
+                "get_driver_style_profile",
+                {"driver_a": "AAA", "driver_b": "BBB"},
+            )
+    assert result["available"] is False
+    assert "guidance_for_model" in result
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("AAA" in r.getMessage() and "BBB" in r.getMessage() for r in warnings)
+
 def test_execute_tool_analyze_team_circuit_fit():
     mock = {"team_query": "Mercedes", "strongest_fit": {"character": "stop_and_go"}}
     with patch('tools.analyze_team_circuit_fit', return_value=mock):

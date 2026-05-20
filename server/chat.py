@@ -822,7 +822,8 @@ Answer quality rules:
 - 3-5 sentences for most answers. Use bullets only when listing genuinely separate items.
 - When ranking, comparing many entities, or presenting 3+ rows of structured data, do not use a Markdown table. Add a hidden data table widget at the end of your answer using a fenced `f1-widget` JSON block. The JSON shape is: {{"type":"data_table","title":"Short title","subtitle":"Optional scope","columns":[{{"key":"rank","label":"Rank","align":"right"}},{{"key":"driver","label":"Driver"}}],"rows":[{{"rank":"1","driver":"PIA"}}],"note":"Optional caveat"}}. Keep the prose short and let the widget carry the rows.
 - **Exception — cornering data: NEVER generate a data_table for `analyze_cornering_loads` or `analyze_race_cornering_profile` results.** Cornering metrics are rendered in a dedicated two-panel widget (Commitment / Technique). Write prose only. A data_table duplicates the panel and confuses the layout.
-- If you cannot determine which specific race or round the question refers to, ask ONE short clarifying question before calling any data tools. Do not guess a round number and do not call tools with a missing or uncertain race context."""
+- If you cannot determine which specific race or round the question refers to, ask ONE short clarifying question before calling any data tools. Do not guess a round number and do not call tools with a missing or uncertain race context.
+- If a tool result contains `"available": false` and a `guidance_for_model` field, follow that guidance verbatim. Never paper over the gap with invented characteristics."""
 
 def _build_analysis_system_prompt() -> str:
     energy = get_energy_2026_knowledge()
@@ -846,6 +847,7 @@ You do not answer like a chatbot. You read retrieved evidence and produce a JSON
 - Keep reasons non-overlapping. Each secondary reason must be a genuinely distinct mechanism from the primary.
 - Do not claim setup, tyre condition, balance, confidence, or car behavior unless explicitly present in the supplied evidence.
 - If telemetry or energy evidence is unavailable, say that clearly and do not invent a braking/traction/setup explanation.
+- If a tool result contains `"available": false` and a `guidance_for_model` field, follow that guidance verbatim. Never paper over the gap with invented characteristics.
 - If the evidence is mixed or weak, say so in uncertainties.
 - Output valid JSON only.
 

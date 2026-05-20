@@ -9,6 +9,8 @@ Tool taxonomy:
 The model should prefer composite recap tools for broad "tell me about..."
 questions and use primitives for focused follow-ups.
 """
+import logging
+
 from driver_styles import get_driver_style, get_comparison_framing
 from circuit_profiles import get_circuit_profile
 from team_car_profiles import get_team_car_profile
@@ -60,6 +62,8 @@ from f1_data import (
     get_sprint_qualifying_results,
 )
 from openf1 import get_intervals, get_live_position_timeline, get_team_radio
+
+logger = logging.getLogger(__name__)
 
 
 def _tool(name: str, description: str, properties: dict, required: list[str]) -> dict:
@@ -924,11 +928,19 @@ def execute_tool(name: str, args: dict):
         _require_args(args, ["team_name"], name)
         profile = get_team_car_profile(args["team_name"])
         if profile is None:
+            logger.warning(
+                "Missing team_car_profile for query=%r — add an entry to team_car_profiles.py",
+                args["team_name"],
+            )
             return {
                 "team_query": args["team_name"],
                 "profile_type": "curated_editorial",
                 "available": False,
                 "caveat": "No sourced public-reporting profile is currently curated for this team.",
+                "guidance_for_model": (
+                    "I do not have a curated car-character profile for this team. "
+                    "Do not invent traits — say the profile is unavailable."
+                ),
             }
         return profile
     if name == "get_circuit_profile":
@@ -943,14 +955,43 @@ def execute_tool(name: str, args: dict):
         if driver_b:
             result = get_comparison_framing(args["driver_a"], driver_b)
             if result is None:
-                # At least one driver unknown — return whatever we have
                 a = get_driver_style(args["driver_a"])
                 b = get_driver_style(driver_b)
+                if a is None and b is None:
+                    logger.warning(
+                        "Missing driver_style profiles for both drivers in comparison: %r and %r — add entries to driver_styles.py",
+                        args["driver_a"],
+                        driver_b,
+                    )
+                    return {
+                        "driver_a_query": args["driver_a"],
+                        "driver_b_query": driver_b,
+                        "profile_type": "curated_editorial",
+                        "available": False,
+                        "caveat": "No curated style profiles are available for either driver.",
+                        "guidance_for_model": (
+                            "I do not have curated style profiles for either driver. "
+                            "Do not invent traits — say the profiles are unavailable."
+                        ),
+                    }
                 return {"driver_a": a, "driver_b": b}
             return result
         profile = get_driver_style(args["driver_a"])
         if profile is None:
-            raise ValueError(f"No style profile found for driver code {args['driver_a']!r}.")
+            logger.warning(
+                "Missing driver_style profile for query=%r — add an entry to driver_styles.py",
+                args["driver_a"],
+            )
+            return {
+                "driver_query": args["driver_a"],
+                "profile_type": "curated_editorial",
+                "available": False,
+                "caveat": "No curated style profile is available for this driver.",
+                "guidance_for_model": (
+                    "I do not have a curated style profile for this driver. "
+                    "Do not invent traits — say the profile is unavailable."
+                ),
+            }
         return profile
     if name == "get_pit_stop_analysis":
         _require_args(args, ["round_number"], name)
