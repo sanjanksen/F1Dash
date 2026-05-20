@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Stub out heavy dependencies before any test module imports them.
-for _mod in ('fastf1', 'fastf1.Cache', 'anthropic'):
+for _mod in ('fastf1', 'fastf1.Cache'):
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 

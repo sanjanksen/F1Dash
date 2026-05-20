@@ -881,6 +881,85 @@ def test_suggested_tool_args_sprint_qualifying():
     assert args["round_number"] == 5
 
 
+def test_answer_f1_payload_returns_throttle_message_on_rate_limit(caplog):
+    """LLMTransientError(kind=rate_limit) surfaces as a user-visible throttle message, not a 500."""
+    import logging
+    mock_client = MagicMock()
+    chat = _load_chat_with_client(mock_client)
+
+    def _raise_rate_limit(client, **kwargs):
+        raise chat.LLMTransientError("rate-limited", provider="anthropic", kind="rate_limit")
+
+    with patch.object(chat, '_call_anthropic', side_effect=_raise_rate_limit), \
+         patch.object(chat, '_try_deterministic_analysis', return_value=None), \
+         patch.object(chat, '_preload_resolved_context', return_value={}), \
+         caplog.at_level(logging.WARNING):
+        payload = chat.answer_f1_payload("Who leads the championship?")
+
+    assert "throttling" in payload["response"]
+    assert payload["widgets"] == []
+
+
+def test_answer_f1_payload_returns_connection_message_on_connection_error():
+    """LLMTransientError(kind=connection) surfaces as a 'lost the connection' message."""
+    mock_client = MagicMock()
+    chat = _load_chat_with_client(mock_client)
+
+    def _raise_conn(client, **kwargs):
+        raise chat.LLMTransientError("conn dropped", provider="anthropic", kind="connection")
+
+    with patch.object(chat, '_call_anthropic', side_effect=_raise_conn), \
+         patch.object(chat, '_try_deterministic_analysis', return_value=None), \
+         patch.object(chat, '_preload_resolved_context', return_value={}):
+        payload = chat.answer_f1_payload("Who leads the championship?")
+
+    assert "lost the connection" in payload["response"]
+    assert payload["widgets"] == []
+
+
+def test_answer_f1_payload_returns_api_message_on_generic_api_error():
+    """LLMTransientError(kind=api) surfaces as a generic API-error retry message."""
+    mock_client = MagicMock()
+    chat = _load_chat_with_client(mock_client)
+
+    def _raise_api(client, **kwargs):
+        raise chat.LLMTransientError("boom", provider="anthropic", kind="api")
+
+    with patch.object(chat, '_call_anthropic', side_effect=_raise_api), \
+         patch.object(chat, '_try_deterministic_analysis', return_value=None), \
+         patch.object(chat, '_preload_resolved_context', return_value={}):
+        payload = chat.answer_f1_payload("Who leads the championship?")
+
+    assert "API returned an error" in payload["response"]
+    assert payload["widgets"] == []
+
+
+def test_call_anthropic_logs_warning_not_error_on_rate_limit(caplog):
+    """Rate-limit errors must log at WARNING level (not ERROR), since they aren't code bugs."""
+    import logging
+    import anthropic as anthropic_real
+    import httpx
+
+    mock_client = MagicMock()
+    chat = _load_chat_with_client(mock_client)
+
+    # Construct a real RateLimitError; needs a response + body
+    response = httpx.Response(status_code=429, request=httpx.Request("POST", "https://api.anthropic.com"))
+    rate_limit_exc = anthropic_real.RateLimitError("rate limited", response=response, body=None)
+    mock_client.messages.create.side_effect = rate_limit_exc
+
+    with caplog.at_level(logging.WARNING, logger="chat"):
+        with pytest.raises(chat.LLMTransientError) as excinfo:
+            chat._call_anthropic(mock_client, model="x", max_tokens=1, messages=[])
+
+    assert excinfo.value.kind == "rate_limit"
+    warning_records = [r for r in caplog.records if r.name == "chat" and r.levelno == logging.WARNING]
+    assert any("rate-limited" in r.getMessage() for r in warning_records)
+    # And there must be no ERROR-level record for this call
+    error_records = [r for r in caplog.records if r.name == "chat" and r.levelno >= logging.ERROR]
+    assert not error_records
+
+
 def test_answer_f1_payload_reuses_resolved_context_on_fallback():
     import chat
 

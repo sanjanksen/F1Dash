@@ -16,6 +16,10 @@ try:
     import openai as openai_sdk
 except ImportError:
     openai_sdk = None
+try:
+    import openai
+except ImportError:
+    openai = None
 from tools import TOOL_DEFINITIONS, OPENAI_TOOL_DEFINITIONS, execute_tool
 from resolver import resolve_query_context, resolve_context_from_history
 from driver_styles import get_comparison_framing
@@ -25,6 +29,45 @@ from energy_2026 import get_energy_2026_knowledge
 MAX_TOOL_ROUNDS = 8
 MAX_DETERMINISTIC_TOOL_WORKERS = 4
 logger = logging.getLogger(__name__)
+
+
+class LLMTransientError(RuntimeError):
+    """Raised when a model-provider call should be surfaced as 'retry later'."""
+
+    def __init__(self, message: str, *, provider: str, kind: str):
+        super().__init__(message)
+        self.provider = provider
+        self.kind = kind  # "rate_limit" | "connection" | "api"
+
+
+def _call_anthropic(client, **kwargs):
+    try:
+        return client.messages.create(**kwargs)
+    except anthropic.RateLimitError as e:
+        logger.warning("Anthropic rate-limited: %s", type(e).__name__)
+        raise LLMTransientError("Anthropic rate-limited", provider="anthropic", kind="rate_limit") from e
+    except anthropic.APIConnectionError as e:
+        logger.warning("Anthropic connection error: %s", type(e).__name__)
+        raise LLMTransientError("Anthropic connection error", provider="anthropic", kind="connection") from e
+    except anthropic.APIError as e:
+        logger.error("Anthropic API error: %s", type(e).__name__, exc_info=True)
+        raise LLMTransientError("Anthropic API error", provider="anthropic", kind="api") from e
+
+
+def _call_openai(client, **kwargs):
+    if openai is None:
+        return client.chat.completions.create(**kwargs)
+    try:
+        return client.chat.completions.create(**kwargs)
+    except openai.RateLimitError as e:
+        logger.warning("OpenAI rate-limited: %s", type(e).__name__)
+        raise LLMTransientError("OpenAI rate-limited", provider="openai", kind="rate_limit") from e
+    except openai.APIConnectionError as e:
+        logger.warning("OpenAI connection error: %s", type(e).__name__)
+        raise LLMTransientError("OpenAI connection error", provider="openai", kind="connection") from e
+    except openai.APIError as e:
+        logger.error("OpenAI API error: %s", type(e).__name__, exc_info=True)
+        raise LLMTransientError("OpenAI API error", provider="openai", kind="api") from e
 
 import datetime
 
@@ -1708,7 +1751,8 @@ def _get_anthropic_client() -> anthropic.Anthropic:
 
 def _run_anthropic_analysis(question: str, resolved: dict, plan: dict, evidence: list[dict]) -> dict:
     client = _get_anthropic_client()
-    response = client.messages.create(
+    response = _call_anthropic(
+        client,
         model="claude-opus-4-7",
         max_tokens=1200,
         system=ANALYSIS_SYSTEM_PROMPT,
@@ -1723,7 +1767,8 @@ def _run_anthropic_analysis(question: str, resolved: dict, plan: dict, evidence:
 
 def _run_anthropic_answer_writer(question: str, analysis: dict) -> str:
     client = _get_anthropic_client()
-    response = client.messages.create(
+    response = _call_anthropic(
+        client,
         model="claude-opus-4-7",
         max_tokens=1200,
         system=ANSWER_WRITER_SYSTEM_PROMPT,
@@ -1748,7 +1793,8 @@ def _answer_anthropic(message: str, history: list[dict], resolved_context: dict 
     executed_evidence = []
 
     for _ in range(MAX_TOOL_ROUNDS):
-        response = client.messages.create(
+        response = _call_anthropic(
+            client,
             model="claude-opus-4-7",
             max_tokens=4096,
             system=request_system_prompt,
@@ -1819,7 +1865,8 @@ def _get_openai_client() -> Any:
 
 def _run_openai_analysis(question: str, resolved: dict, plan: dict, evidence: list[dict]) -> dict:
     client = _get_openai_client()
-    response = client.chat.completions.create(
+    response = _call_openai(
+        client,
         model="gpt-4o",
         messages=[
             {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
@@ -1832,7 +1879,8 @@ def _run_openai_analysis(question: str, resolved: dict, plan: dict, evidence: li
 
 def _run_openai_answer_writer(question: str, analysis: dict) -> str:
     client = _get_openai_client()
-    response = client.chat.completions.create(
+    response = _call_openai(
+        client,
         model="gpt-4o",
         messages=[
             {"role": "system", "content": ANSWER_WRITER_SYSTEM_PROMPT},
@@ -1856,7 +1904,8 @@ def _answer_openai(message: str, history: list[dict], resolved_context: dict | N
     executed_evidence = []
 
     for _ in range(MAX_TOOL_ROUNDS):
-        response = client.chat.completions.create(
+        response = _call_openai(
+            client,
             model="gpt-4o",
             messages=messages,
             tools=OPENAI_TOOL_DEFINITIONS,
@@ -1916,17 +1965,26 @@ def answer_f1_payload(message: str, history: list[dict] | None = None) -> dict:
     history: list of prior {role, content} dicts from the conversation.
     Reads LLM_PROVIDER from the environment (default: 'anthropic').
     """
-    prior = history or []
-    provider = os.environ.get("LLM_PROVIDER", "anthropic").lower()
-    previous_context = resolve_context_from_history(prior)
-    resolved = resolve_query_context(message, previous_context)
-    deterministic = _try_deterministic_analysis(message, prior, provider=provider, resolved_context=resolved)
-    if deterministic:
-        return deterministic
-    preloaded = _preload_resolved_context(resolved)
-    if provider == "openai":
-        return _answer_openai(message, prior, resolved_context=resolved, preloaded_context=preloaded)
-    return _answer_anthropic(message, prior, resolved_context=resolved, preloaded_context=preloaded)
+    try:
+        prior = history or []
+        provider = os.environ.get("LLM_PROVIDER", "anthropic").lower()
+        previous_context = resolve_context_from_history(prior)
+        resolved = resolve_query_context(message, previous_context)
+        deterministic = _try_deterministic_analysis(message, prior, provider=provider, resolved_context=resolved)
+        if deterministic:
+            return deterministic
+        preloaded = _preload_resolved_context(resolved)
+        if provider == "openai":
+            return _answer_openai(message, prior, resolved_context=resolved, preloaded_context=preloaded)
+        return _answer_anthropic(message, prior, resolved_context=resolved, preloaded_context=preloaded)
+    except LLMTransientError as e:
+        if e.kind == "rate_limit":
+            msg = "The model is throttling right now — please retry in a moment."
+        elif e.kind == "connection":
+            msg = "I lost the connection to the model — please retry."
+        else:
+            msg = "The model API returned an error — please retry."
+        return {"response": msg, "widgets": []}
 
 
 def answer_f1_question(message: str, history: list[dict] | None = None) -> str:
