@@ -424,13 +424,19 @@ PRIMITIVE_TOOL_DEFINITIONS = [
         "PRIMITIVE TOOL. Peak speed at each timing trap for every driver, scanning all laps. "
         "Returns four ranked lists: speed_st (main straight), speed_fl (finish line), "
         "speed_i1 (intermediate 1), speed_i2 (intermediate 2). Each entry: driver, team, "
-        "speed_kph, lap_number, compound, rank. A driver's fastest ST may come on a different "
-        "lap than their fastest FL — each trap is ranked independently. "
+        "speed_kph, lap_number, compound, drs_open, rank. A driver's fastest ST may come on a "
+        "different lap than their fastest FL — each trap is ranked independently. "
+        "DRS state: each row carries drs_open: bool derived from telemetry at the moment of the "
+        "peak reading. By default, if some drivers' peaks came DRS-open and others DRS-closed, "
+        "the tool returns a refusal payload (with a `refusal` field plus per-row drs_open) "
+        "because mixing DRS states inflates the gap by ~6+ km/h. Re-call with "
+        "allow_mixed_drs=true to get the raw figures anyway. "
         "Use for 'who had the highest top speed?', 'speed trap leaderboard', "
         "'who was fastest down the straight?', 'drag/straight-line speed' questions.",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
             "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
+            "allow_mixed_drs": {"type": "boolean", "description": "Optional. If true, return ranked rows even when some peaks were DRS-open and others DRS-closed. Default false (the tool refuses with a payload that explains why)."},
         },
         ["round_number", "session_type"],
     ),
@@ -541,7 +547,8 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
     ),
     _tool(
         "get_lap_telemetry",
-        "DEEP ANALYSIS PRIMITIVE. Full telemetry for one driver's lap with speed, throttle, brake, gear, RPM, and DRS.",
+        "DEEP ANALYSIS PRIMITIVE. Full telemetry for one driver's lap with speed, throttle, brake, gear, RPM, and DRS. "
+        "Each sample carries drs_active: bool — true only when the FastF1 DRS channel reads 10/12/14 (open and active).",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
             "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
@@ -552,7 +559,8 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
     ),
     _tool(
         "get_telemetry_comparison",
-        "DEEP ANALYSIS PRIMITIVE. Overlay two drivers' telemetry traces aligned by distance.",
+        "DEEP ANALYSIS PRIMITIVE. Overlay two drivers' telemetry traces aligned by distance. "
+        "Deployment-curve-aware clipping segments are surfaced via analyze_energy_management (uses the 290/355 km/h MGU-K taper).",
         {
             "round_number": {"type": "integer", "description": "The 2026 season round number."},
             "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
@@ -1004,5 +1012,9 @@ def execute_tool(name: str, args: dict):
         return get_fp_summary(args["round_number"], args["fp_number"])
     if name == "get_speed_trap_leaderboard":
         _require_args(args, ["round_number", "session_type"], name)
-        return get_speed_trap_leaderboard(args["round_number"], args["session_type"])
+        return get_speed_trap_leaderboard(
+            args["round_number"],
+            args["session_type"],
+            bool(args.get("allow_mixed_drs", False)),
+        )
     raise ValueError(f"Unknown tool: {name!r}")

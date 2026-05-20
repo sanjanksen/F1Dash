@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 const COLOR_A = 'hsl(var(--primary))'
 const COLOR_B = 'hsl(var(--speed))'
+const DRS_BAND_FILL = 'hsl(120 60% 45% / 0.18)'
 const CHART_W = 680
 const CHART_H = 180
 const DELTA_H = 60
@@ -91,6 +92,24 @@ function deltaLinePath(points, width, height, maxAbs, domain) {
     .join(' ')
 }
 
+function drsActiveSegments(points) {
+  const segments = []
+  let start = null
+  for (let i = 0; i < points.length; i += 1) {
+    const active = !!(points[i]?.drs_a_active || points[i]?.drs_b_active)
+    const dist = points[i]?.distance_m
+    if (active && start === null) start = dist
+    if ((!active || i === points.length - 1) && start !== null) {
+      const end = active ? dist : points[i - 1]?.distance_m
+      if (typeof start === 'number' && typeof end === 'number' && end > start) {
+        segments.push({ start, end })
+      }
+      start = null
+    }
+  }
+  return segments
+}
+
 function nearestPoint(points, cursorDist) {
   if (!points.length) return null
   return points.reduce((best, p) =>
@@ -136,6 +155,8 @@ export default function SpeedTraceChart({
   const maxAbsDelta = Math.max(...deltas.map(Math.abs), 1)
   const deltaScale = Math.ceil(maxAbsDelta / 5) * 5
 
+  const drsSegments = drsActiveSegments(points)
+  const hasDrsBand = drsSegments.length > 0
   const pathA = linePath(points, CHART_W, CHART_H, minY, maxY, 'speed_a', domain)
   const pathB = linePath(points, CHART_W, CHART_H, minY, maxY, 'speed_b', domain)
   const fillA = fillPath(points, CHART_W, CHART_H, minY, maxY, 'speed_a', domain)
@@ -197,6 +218,12 @@ export default function SpeedTraceChart({
             <span className="h-[3px] w-5 rounded-sm" style={{ background: COLOR_B }} />
             <span className="font-semibold" style={{ color: COLOR_B }}>{driverB}</span>
           </span>
+          {hasDrsBand && (
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-4 rounded-sm" style={{ background: DRS_BAND_FILL }} />
+              <span className="text-xs text-muted-foreground">DRS open</span>
+            </span>
+          )}
         </div>
       </div>
 
@@ -260,6 +287,22 @@ export default function SpeedTraceChart({
                   {RANK_LABELS[index]}
                 </text>
               </g>
+            )
+          })}
+
+          {drsSegments.map((seg, idx) => {
+            const xStart = xForDistance(seg.start, domain, CHART_W)
+            const xEnd = xForDistance(seg.end, domain, CHART_W)
+            const w = Math.max(xEnd - xStart, 1)
+            return (
+              <rect
+                key={`drs-${idx}`}
+                x={xStart}
+                y={CHART_H - 14}
+                width={w}
+                height={14}
+                fill={DRS_BAND_FILL}
+              />
             )
           })}
 
