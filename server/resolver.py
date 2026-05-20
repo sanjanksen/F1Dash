@@ -122,18 +122,28 @@ def _normalize(text: str) -> str:
 
 
 def _has_reference_language(normalized: str) -> bool:
-    reference_terms = (
-        "here", "there",
-        "that race", "that weekend", "that session", "that gp",
+    strong_phrases = (
+        "that race", "that weekend", "that session", "that gp", "that grand prix",
         "this race", "this weekend", "this session", "this gp",
-        "the race", "the session", "the gp", "the grand prix",
-        "same race", "same weekend", "last race",
-        "he", "him", "his", "she", "her",
-        "they", "them", "their", "both",
-        "it", "its",
+        "the same driver", "the same race", "same weekend",
+        "last race", "last weekend",
         "teammate",
     )
-    return any(re.search(rf"\b{re.escape(term)}\b", normalized) for term in reference_terms)
+    if any(re.search(rf"\b{re.escape(p)}\b", normalized) for p in strong_phrases):
+        return True
+
+    weak_tokens = (
+        "he", "him", "his", "she", "her",
+        "they", "them", "their",
+        "it", "its",
+        "the",
+        "here", "there", "both",
+    )
+    hits = sum(
+        1 for t in weak_tokens
+        if re.search(rf"\b{re.escape(t)}\b", normalized)
+    )
+    return hits >= 2
 
 
 def _detect_fp_number(normalized: str) -> int | None:

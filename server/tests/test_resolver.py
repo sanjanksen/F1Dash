@@ -688,3 +688,20 @@ def test_circuits_cache_ttl(monkeypatch):
 
     resolver._circuits_cache = []
     resolver._circuits_cache_time = 0.0
+
+
+class TestHasReferenceLanguage:
+    def test_single_weak_token_returns_false(self):
+        assert resolver._has_reference_language("what s the weather like today") is False
+
+    def test_single_his_returns_false(self):
+        assert resolver._has_reference_language("how was his race") is False
+
+    def test_deictic_phrase_returns_true(self):
+        assert resolver._has_reference_language("how was his race that weekend") is True
+
+    def test_teammate_returns_true(self):
+        assert resolver._has_reference_language("did he beat his teammate") is True
+
+    def test_two_weak_tokens_returns_true(self):
+        assert resolver._has_reference_language("did he and his car make it") is True
