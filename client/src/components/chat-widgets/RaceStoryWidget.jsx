@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Badge } from '../ui/badge.jsx'
 
 function formatRadioTime(dateStr) {
@@ -26,6 +27,7 @@ function positionTone(pos) {
 
 export default function RaceStoryWidget({ widget }) {
   const finishPos = widget.finish_position
+  const [storyExpanded, setStoryExpanded] = useState(false)
 
   return (
     <div className="widget-enter max-w-3xl overflow-hidden border-y border-border/80 py-1">
@@ -66,13 +68,22 @@ export default function RaceStoryWidget({ widget }) {
           <section className="py-4">
             <h4 className="text-sm font-medium text-foreground">Race story</h4>
             <ol className="mt-3 space-y-2 text-sm leading-6 text-foreground">
-              {widget.story_points.slice(0, 4).map((point, index) => (
+              {(storyExpanded ? widget.story_points : widget.story_points.slice(0, 4)).map((point, index) => (
                 <li key={index} className="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-2">
                   <span className="font-mono-data text-xs text-muted-foreground">{index + 1}</span>
                   <span>{point}</span>
                 </li>
               ))}
             </ol>
+            {widget.story_points.length > 4 ? (
+              <button
+                type="button"
+                onClick={() => setStoryExpanded((v) => !v)}
+                className="mt-3 text-xs text-muted-foreground underline-offset-2 hover:underline"
+              >
+                {storyExpanded ? 'Show fewer' : `Show ${widget.story_points.length - 4} more`}
+              </button>
+            ) : null}
           </section>
         ) : null}
 
