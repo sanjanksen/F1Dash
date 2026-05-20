@@ -701,20 +701,34 @@ OPENAI_TOOL_DEFINITIONS = [
 ]
 
 
+def _require_args(args: dict, required: list[str], tool_name: str) -> None:
+    missing = [k for k in required if k not in args or args[k] in (None, "")]
+    if missing:
+        raise ValueError(
+            f"Tool {tool_name!r} called without required arg(s): {', '.join(missing)}. "
+            f"Please retry with the missing field(s) populated."
+        )
+
+
 def execute_tool(name: str, args: dict):
     if name == "get_team_radio":
+        _require_args(args, ["round_number", "session_type"], name)
         return get_team_radio(args["round_number"], args["session_type"], args.get("driver_ref"), args.get("limit", 10))
     if name == "get_intervals":
+        _require_args(args, ["round_number"], name)
         return get_intervals(args["round_number"], args.get("driver_ref"), args.get("limit", 25), args.get("session_type", "R"))
     if name == "get_live_position_timeline":
+        _require_args(args, ["round_number", "session_type"], name)
         return get_live_position_timeline(args["round_number"], args["session_type"], args.get("driver_ref"), args.get("limit", 50))
     if name == "analyze_qualifying_battle":
+        _require_args(args, ["round_number", "driver_a", "driver_b"], name)
         return analyze_qualifying_battle(args["round_number"], args["driver_a"], args["driver_b"], session_type=args.get("session_type", "Q"))
     if name == "get_driver_standings":
         return get_drivers()[:args.get("limit", 20)]
     if name == "get_constructor_standings":
         return get_constructor_standings()
     if name == "get_driver_season_stats":
+        _require_args(args, ["driver_name"], name)
         stats = get_driver_stats(args["driver_name"])
         if stats is None:
             raise ValueError(f"Driver not found: {args['driver_name']!r}. Try the driver's surname or 3-letter code.")
@@ -722,34 +736,49 @@ def execute_tool(name: str, args: dict):
     if name == "get_season_schedule":
         return get_circuits()
     if name == "get_race_results":
+        _require_args(args, ["round_number"], name)
         return get_race_results(args["round_number"])
     if name == "get_qualifying_results":
+        _require_args(args, ["round_number"], name)
         return get_qualifying_results(args["round_number"])
     if name == "get_session_results":
+        _require_args(args, ["round_number", "session_type"], name)
         return get_session_results(args["round_number"], args["session_type"])
     if name == "get_head_to_head":
+        _require_args(args, ["driver_a", "driver_b"], name)
         return get_head_to_head(args["driver_a"], args["driver_b"])
     if name == "get_driver_strategy":
+        _require_args(args, ["round_number", "session_type"], name)
         return get_driver_strategy(args["round_number"], args["session_type"], args.get("driver_code"))
     if name == "get_sprint_results":
+        _require_args(args, ["round_number"], name)
         return get_sprint_results(args["round_number"])
     if name == "get_sprint_qualifying_results":
+        _require_args(args, ["round_number"], name)
         return get_sprint_qualifying_results(args["round_number"])
     if name == "get_driver_weekend_overview":
+        _require_args(args, ["round_number", "driver_name"], name)
         return get_driver_weekend_overview(args["round_number"], args["driver_name"], session_type=args.get("session_type", "R"))
     if name == "get_driver_race_story":
+        _require_args(args, ["round_number", "driver_name"], name)
         return get_driver_race_story(args["round_number"], args["driver_name"], session_type=args.get("session_type", "R"))
     if name == "get_team_weekend_overview":
+        _require_args(args, ["round_number", "team_name"], name)
         return get_team_weekend_overview(args["round_number"], args["team_name"], session_type=args.get("session_type", "R"))
     if name == "get_race_report":
+        _require_args(args, ["round_number"], name)
         return get_race_report(args["round_number"], session_type=args.get("session_type", "R"))
     if name == "get_qualifying_progression":
+        _require_args(args, ["round_number"], name)
         return get_qualifying_progression(args["round_number"])
     if name == "get_session_fastest_laps":
+        _require_args(args, ["round_number", "session_type"], name)
         return get_session_fastest_laps(args["round_number"], args["session_type"])
     if name == "get_driver_lap_times":
+        _require_args(args, ["round_number", "session_type", "driver_code"], name)
         return get_driver_lap_times(args["round_number"], args["session_type"], args["driver_code"])
     if name == "get_clean_pace_summary":
+        _require_args(args, ["round_number", "session_type"], name)
         return get_clean_pace_summary(
             args["round_number"],
             args["session_type"],
@@ -758,20 +787,28 @@ def execute_tool(name: str, args: dict):
             args.get("limit", 10),
         )
     if name == "get_sector_comparison":
+        _require_args(args, ["round_number", "session_type", "driver_a", "driver_b"], name)
         return get_sector_comparison(args["round_number"], args["session_type"], args["driver_a"], args["driver_b"])
     if name == "get_safety_car_periods":
+        _require_args(args, ["round_number", "session_type"], name)
         return get_safety_car_periods(args["round_number"], args["session_type"])
     if name == "get_session_weather":
+        _require_args(args, ["round_number", "session_type"], name)
         return get_session_weather(args["round_number"], args["session_type"])
     if name == "get_circuit_corners":
+        _require_args(args, ["round_number"], name)
         return get_circuit_corners(args["round_number"])
     if name == "get_circuit_details":
+        _require_args(args, ["round_number"], name)
         return get_circuit_details(args["round_number"])
     if name == "get_circuit_track_map":
+        _require_args(args, ["round_number"], name)
         return get_circuit_track_map(args["round_number"])
     if name == "get_historical_circuit_performance":
+        _require_args(args, ["round_number"], name)
         return get_historical_circuit_performance(args["round_number"], args.get("years"))
     if name == "analyze_cornering_loads":
+        _require_args(args, ["round_number", "session_type", "driver_a", "driver_b"], name)
         return analyze_cornering_loads(
             args["round_number"],
             args["session_type"],
@@ -781,14 +818,17 @@ def execute_tool(name: str, args: dict):
             args.get("lap_number_b"),
         )
     if name == "analyze_race_cornering_profile":
+        _require_args(args, ["round_number", "driver_a", "driver_b"], name)
         return analyze_race_cornering_profile(
             args["round_number"],
             args["driver_a"],
             args["driver_b"],
         )
     if name == "get_lap_telemetry":
+        _require_args(args, ["round_number", "session_type", "driver_code"], name)
         return get_lap_telemetry(args["round_number"], args["session_type"], args["driver_code"], args.get("lap_number"))
     if name == "analyze_energy_management":
+        _require_args(args, ["round_number", "session_type", "driver_a"], name)
         return analyze_energy_management(
             args["round_number"],
             args["session_type"],
@@ -798,6 +838,7 @@ def execute_tool(name: str, args: dict):
             args.get("lap_number_b"),
         )
     if name == "get_telemetry_comparison":
+        _require_args(args, ["round_number", "session_type", "driver_a", "driver_b"], name)
         return get_telemetry_comparison(
             args["round_number"],
             args["session_type"],
@@ -807,6 +848,7 @@ def execute_tool(name: str, args: dict):
             args.get("lap_number_b"),
         )
     if name == "get_track_position_comparison":
+        _require_args(args, ["round_number", "session_type", "driver_a", "driver_b"], name)
         return get_track_position_comparison(
             args["round_number"],
             args["session_type"],
@@ -816,6 +858,7 @@ def execute_tool(name: str, args: dict):
             args.get("lap_number_b"),
         )
     if name == "get_race_control_messages":
+        _require_args(args, ["round_number", "session_type"], name)
         return get_race_control_messages(
             args["round_number"],
             args["session_type"],
@@ -823,6 +866,7 @@ def execute_tool(name: str, args: dict):
             args.get("limit", 50),
         )
     if name == "extract_corner_profiles":
+        _require_args(args, ["round_number", "session_type", "driver_code"], name)
         return extract_corner_profiles(
             args["round_number"],
             args["session_type"],
@@ -830,6 +874,7 @@ def execute_tool(name: str, args: dict):
             args.get("lap_number"),
         )
     if name == "compare_corner_profiles":
+        _require_args(args, ["round_number", "session_type", "driver_a", "driver_b"], name)
         return compare_corner_profiles(
             args["round_number"],
             args["session_type"],
@@ -839,12 +884,14 @@ def execute_tool(name: str, args: dict):
             args.get("lap_number_b"),
         )
     if name == "analyze_stint_degradation":
+        _require_args(args, ["round_number", "driver_code"], name)
         return analyze_stint_degradation(
             args["round_number"],
             args["driver_code"],
             args.get("session_type", "R"),
         )
     if name == "analyze_race_pace_battle":
+        _require_args(args, ["round_number", "driver_a", "driver_b"], name)
         return analyze_race_pace_battle(
             args["round_number"],
             args["driver_a"],
@@ -852,18 +899,21 @@ def execute_tool(name: str, args: dict):
             args.get("session_type", "R"),
         )
     if name == "analyze_team_performance":
+        _require_args(args, ["round_number", "team_name", "session_type"], name)
         return analyze_team_performance(
             args["round_number"],
             args["team_name"],
             args["session_type"],
         )
     if name == "analyze_team_circuit_fit":
+        _require_args(args, ["team_name"], name)
         return analyze_team_circuit_fit(
             args["team_name"],
             args.get("years"),
             args.get("session_type", "Q"),
         )
     if name == "analyze_team_telemetry_traits":
+        _require_args(args, ["round_number", "team_name"], name)
         return analyze_team_telemetry_traits(
             args["round_number"],
             args["team_name"],
@@ -871,6 +921,7 @@ def execute_tool(name: str, args: dict):
             args.get("field_limit", 10),
         )
     if name == "get_team_car_profile":
+        _require_args(args, ["team_name"], name)
         profile = get_team_car_profile(args["team_name"])
         if profile is None:
             return {
@@ -881,11 +932,13 @@ def execute_tool(name: str, args: dict):
             }
         return profile
     if name == "get_circuit_profile":
+        _require_args(args, ["country"], name)
         profile = get_circuit_profile(args["country"], args.get("event_name", ""))
         if profile is None:
             raise ValueError(f"No circuit profile found for country={args['country']!r}.")
         return profile
     if name == "get_driver_style_profile":
+        _require_args(args, ["driver_a"], name)
         driver_b = args.get("driver_b")
         if driver_b:
             result = get_comparison_framing(args["driver_a"], driver_b)
@@ -900,11 +953,15 @@ def execute_tool(name: str, args: dict):
             raise ValueError(f"No style profile found for driver code {args['driver_a']!r}.")
         return profile
     if name == "get_pit_stop_analysis":
+        _require_args(args, ["round_number"], name)
         return get_pit_stop_analysis(args["round_number"])
     if name == "analyze_weather_pace_correlation":
+        _require_args(args, ["round_number"], name)
         return analyze_weather_pace_correlation(args["round_number"], args.get("session_type", "Q"))
     if name == "get_fp_summary":
+        _require_args(args, ["round_number", "fp_number"], name)
         return get_fp_summary(args["round_number"], args["fp_number"])
     if name == "get_speed_trap_leaderboard":
+        _require_args(args, ["round_number", "session_type"], name)
         return get_speed_trap_leaderboard(args["round_number"], args["session_type"])
     raise ValueError(f"Unknown tool: {name!r}")

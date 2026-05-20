@@ -395,3 +395,47 @@ def test_execute_tool_analyze_qualifying_battle_passes_session_type():
     with patch('tools.analyze_qualifying_battle', return_value=mock) as mock_fn:
         tools.execute_tool("analyze_qualifying_battle", {"round_number": 5, "driver_a": "NOR", "driver_b": "PIA", "session_type": "SQ"})
     mock_fn.assert_called_once_with(5, "NOR", "PIA", session_type="SQ")
+
+
+def test_require_args_raises_value_error_listing_missing_keys():
+    with pytest.raises(ValueError) as exc_info:
+        tools._require_args({"round_number": 5}, ["round_number", "driver_a", "driver_b"], "some_tool")
+    msg = str(exc_info.value)
+    assert "some_tool" in msg
+    assert "driver_a" in msg
+    assert "driver_b" in msg
+    assert "round_number" not in msg
+
+
+def test_require_args_treats_none_and_empty_string_as_missing():
+    with pytest.raises(ValueError) as exc_info:
+        tools._require_args({"driver_name": None, "round_number": ""}, ["driver_name", "round_number"], "t")
+    msg = str(exc_info.value)
+    assert "driver_name" in msg
+    assert "round_number" in msg
+
+
+def test_require_args_passes_when_all_provided():
+    tools._require_args({"a": 1, "b": "x"}, ["a", "b"], "t")
+
+
+def test_execute_tool_missing_driver_name_raises_value_error():
+    with pytest.raises(ValueError) as exc_info:
+        tools.execute_tool("get_driver_season_stats", {})
+    assert "driver_name" in str(exc_info.value)
+    assert "get_driver_season_stats" in str(exc_info.value)
+
+
+def test_execute_tool_missing_round_number_raises_value_error():
+    with pytest.raises(ValueError) as exc_info:
+        tools.execute_tool("get_race_results", {})
+    assert "round_number" in str(exc_info.value)
+    assert "get_race_results" in str(exc_info.value)
+
+
+def test_execute_tool_missing_driver_a_and_b_raises_value_error_listing_both():
+    with pytest.raises(ValueError) as exc_info:
+        tools.execute_tool("get_head_to_head", {})
+    msg = str(exc_info.value)
+    assert "driver_a" in msg
+    assert "driver_b" in msg
