@@ -40,6 +40,7 @@ from f1_data import (
     get_head_to_head,
     get_historical_circuit_performance,
     analyze_energy_management,
+    analyze_override_usage,
     get_lap_telemetry,
     get_qualifying_progression,
     get_qualifying_results,
@@ -507,6 +508,21 @@ DEEP_ANALYSIS_TOOL_DEFINITIONS = [
         ["round_number", "session_type", "driver_a"],
     ),
     _tool(
+        "analyze_override_usage",
+        "DEEP ANALYSIS PRIMITIVE. Detect 2026 override-mode boost segments for a specific lap. "
+        "Identifies where a driver was within 1 second of the car ahead and used the extended 350 kW deployment "
+        "to accelerate past 290 km/h up to 337 km/h. Use this for specific-lap questions like "
+        "'did Verstappen use override on lap 14?' For broad race narratives, prefer get_driver_race_story which "
+        "already weaves override evidence into overtake descriptions.",
+        {
+            "driver_code": {"type": "string", "description": "3-letter driver code."},
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "session_type": {"type": "string", "description": "Session type: Q, R, FP1, FP2, FP3, S, SQ, SS."},
+            "lap_number": {"type": "integer", "description": "Specific lap number to analyse."},
+        },
+        ["driver_code", "round_number", "session_type", "lap_number"],
+    ),
+    _tool(
         "analyze_cornering_loads",
         "DEEP ANALYSIS PRIMITIVE. Compute lateral G and grip utilisation for two drivers across all corners of their fastest laps, "
         "using curvature derived from X/Y position telemetry. Returns per-corner stats (peak G, apex G, load variance, "
@@ -848,6 +864,14 @@ def execute_tool(name: str, args: dict):
             args.get("driver_b"),
             args.get("lap_number_a"),
             args.get("lap_number_b"),
+        )
+    if name == "analyze_override_usage":
+        _require_args(args, ["driver_code", "round_number", "session_type", "lap_number"], name)
+        return analyze_override_usage(
+            args["driver_code"],
+            args["round_number"],
+            args["session_type"],
+            args["lap_number"],
         )
     if name == "get_telemetry_comparison":
         _require_args(args, ["round_number", "session_type", "driver_a", "driver_b"], name)

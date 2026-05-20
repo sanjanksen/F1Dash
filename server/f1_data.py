@@ -490,6 +490,192 @@ def _evaluate_clipping_sub_window(
     }
 
 
+def _override_curve_thresholds() -> tuple[float, float]:
+    """Return (full_power_below_kmh, override_extended_below_kmh) from energy_2026.
+    Raises if override_mode is missing."""
+    knowledge = get_energy_2026_knowledge()
+    override = knowledge.get("override_mode")
+    if not override or "curve" not in override:
+        raise RuntimeError(
+            "energy_2026 knowledge missing 'override_mode.curve' — required for F32 override-mode detection."
+        )
+    standard_anchors = sorted(_deployment_curve_anchors("standard"), key=lambda a: a["speed_kph"])
+    override_anchors = sorted(override["curve"], key=lambda a: a["speed_kph"])
+    return float(standard_anchors[0]["speed_kph"]), float(override_anchors[0]["speed_kph"])
+
+
+def detect_override_mode(
+    lap_telemetry: list[dict],
+    gap_to_ahead_trace: list[float | None],
+    *,
+    full_power_below_kmh: float | None = None,
+    override_extended_below_kmh: float | None = None,
+    gap_window_s: float = 1.0,
+    min_segment_length_m: float = 40.0,
+) -> dict:
+    """Identify segments where 2026 override-mode boost (extended 350 kW above
+    290 km/h up to 337 km/h) was plausibly active.
+
+    Trigger: speed in [290, 337] km/h, throttle >= 95, brake off, gap to ahead
+    < 1s for >= 80% of samples, observed slope steeper than the F33 standard
+    deployment-taper reference at the same speed.
+
+    `lap_telemetry` samples must carry distance_m, speed_kph, throttle_pct, and
+    either `brake` (bool) or `brake_pct` (float).
+    `gap_to_ahead_trace` is parallel; entries may be None when unknown.
+
+    Defaults read from energy_2026.override_mode."""
+    if full_power_below_kmh is None or override_extended_below_kmh is None:
+        full_default, override_default = _override_curve_thresholds()
+        if full_power_below_kmh is None:
+            full_power_below_kmh = full_default
+        if override_extended_below_kmh is None:
+            override_extended_below_kmh = override_default
+
+    standard_anchors = sorted(_deployment_curve_anchors("standard"), key=lambda a: a["speed_kph"])
+    n = min(len(lap_telemetry), len(gap_to_ahead_trace))
+
+    def _brake_off(sample: dict) -> bool:
+        brake = sample.get("brake")
+        if isinstance(brake, bool):
+            return not brake
+        bp = sample.get("brake_pct")
+        if bp is None and brake is None:
+            return True
+        if isinstance(brake, (int, float)):
+            return brake == 0
+        return (bp or 0) == 0
+
+    candidate_blocks: list[list[int]] = []
+    current: list[int] = []
+    for i in range(n):
+        s = lap_telemetry[i]
+        sp = s.get("speed_kph")
+        th = s.get("throttle_pct")
+        if (
+            sp is not None and th is not None
+            and full_power_below_kmh <= sp <= override_extended_below_kmh
+            and th >= 95
+            and _brake_off(s)
+        ):
+            current.append(i)
+        else:
+            if len(current) >= 2:
+                candidate_blocks.append(current)
+            current = []
+    if len(current) >= 2:
+        candidate_blocks.append(current)
+
+    segments: list[dict] = []
+    for block in candidate_blocks:
+        gaps_in_window: list[float] = [gap_to_ahead_trace[i] for i in block if gap_to_ahead_trace[i] is not None]
+        if not gaps_in_window:
+            continue
+        in_window_count = sum(1 for g in gaps_in_window if g < gap_window_s)
+        if in_window_count / len(gaps_in_window) < 0.8:
+            continue
+        start = lap_telemetry[block[0]]
+        end = lap_telemetry[block[-1]]
+        sd = start.get("distance_m")
+        ed = end.get("distance_m")
+        ss = start.get("speed_kph")
+        es = end.get("speed_kph")
+        if sd is None or ed is None or ss is None or es is None:
+            continue
+        length_m = ed - sd
+        if length_m < min_segment_length_m:
+            continue
+        observed_slope = (es - ss) / length_m if length_m > 0 else 0.0
+        mid_speed = (ss + es) / 2.0
+        reference_slope = _reference_slope_kph_per_m(mid_speed, standard_anchors)
+        if reference_slope <= 0:
+            continue
+        # Override-mode signature: observed slope is STEEPER than the standard
+        # taper reference (car is still accelerating where the standard curve
+        # would already be tapering).
+        slope_ratio = observed_slope / reference_slope
+        if slope_ratio < 1.5:
+            continue
+        avg_speed_ms = (ss + es) / 2.0 / 3.6
+        duration_s = length_m / avg_speed_ms if avg_speed_ms > 0 else 0.0
+        peak_speed = max((lap_telemetry[i].get("speed_kph") or 0) for i in block)
+        avg_gap = sum(gaps_in_window) / len(gaps_in_window)
+        segments.append({
+            "start_distance_m": round(sd, 1),
+            "end_distance_m": round(ed, 1),
+            "peak_speed_kph": round(peak_speed, 1),
+            "gap_at_segment_s": round(avg_gap, 3),
+            "speed_gain_kph": round(es - ss, 1),
+            "duration_s": round(duration_s, 3),
+            "slope_ratio_vs_reference": round(slope_ratio, 2),
+            "circuit_straight_label": None,
+        })
+
+    total_override_seconds = round(sum(s["duration_s"] for s in segments), 3)
+
+    strong_segments = [
+        s for s in segments
+        if (s["end_distance_m"] - s["start_distance_m"]) >= min_segment_length_m
+        and s["gap_at_segment_s"] < 0.7
+        and s["slope_ratio_vs_reference"] >= 1.5
+    ]
+    if len(strong_segments) >= 2:
+        confidence = "high"
+    elif len(strong_segments) == 1 or len(segments) >= 2:
+        confidence = "moderate"
+    elif segments:
+        confidence = "low"
+    else:
+        confidence = "low"
+
+    return {
+        "override_detected": bool(segments),
+        "segments": segments,
+        "total_override_seconds": total_override_seconds,
+        "confidence": confidence,
+        "detector_version": "f32-v1",
+    }
+
+
+def analyze_override_usage(driver_code: str, round_number: int, session_type: str, lap_number: int) -> dict:
+    """Detect 2026 override-mode boost on a specific lap. Loads telemetry for
+    the lap, approximates gap-to-ahead from openf1 intervals (averaged across
+    the lap due to lack of per-sample interval data), and runs detect_override_mode."""
+    tele = get_lap_telemetry(round_number, session_type, driver_code, lap_number)
+    samples = tele.get("telemetry") or []
+
+    # Approximation: openf1 'interval' is the gap to the car immediately ahead,
+    # sampled at ~1Hz across the session. We average it over the driver's lap
+    # window and apply the same scalar to every telemetry sample. This is
+    # coarse but correct in steady-state straight-line scenarios where override
+    # actually matters.
+    from openf1 import get_intervals
+    avg_gap = None
+    try:
+        intervals = get_intervals(round_number, driver_ref=driver_code, limit=200, session_type=session_type)
+        rows = intervals.get("intervals") or []
+        numeric_gaps = []
+        for row in rows:
+            g = row.get("interval")
+            if isinstance(g, (int, float)):
+                numeric_gaps.append(float(g))
+        if numeric_gaps:
+            avg_gap = sum(numeric_gaps) / len(numeric_gaps)
+    except Exception:
+        avg_gap = None
+
+    gap_trace = [avg_gap] * len(samples) if avg_gap is not None else [None] * len(samples)
+    result = detect_override_mode(samples, gap_trace)
+    return {
+        **result,
+        "driver_code": driver_code.upper(),
+        "round_number": round_number,
+        "session_type": session_type,
+        "lap_number": lap_number,
+        "gap_source": "openf1_interval_average" if avg_gap is not None else "unavailable",
+    }
+
+
 def compare_drivers_clipping(
     driver_a_signature: dict,
     driver_b_signature: dict,

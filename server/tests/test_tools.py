@@ -474,3 +474,36 @@ def test_execute_tool_missing_driver_a_and_b_raises_value_error_listing_both():
     msg = str(exc_info.value)
     assert "driver_a" in msg
     assert "driver_b" in msg
+
+
+def test_execute_tool_analyze_override_usage():
+    mock = {
+        "override_detected": True,
+        "segments": [{"start_distance_m": 1300, "end_distance_m": 1420, "peak_speed_kph": 322.0,
+                      "gap_at_segment_s": 0.5, "speed_gain_kph": 25.0, "duration_s": 1.4,
+                      "slope_ratio_vs_reference": 1.8, "circuit_straight_label": None}],
+        "total_override_seconds": 1.4,
+        "confidence": "moderate",
+        "detector_version": "f32-v1",
+        "driver_code": "VER",
+        "round_number": 5,
+        "session_type": "R",
+        "lap_number": 14,
+        "gap_source": "openf1_interval_average",
+    }
+    with patch('tools.analyze_override_usage', return_value=mock):
+        result = tools.execute_tool("analyze_override_usage", {
+            "driver_code": "VER", "round_number": 5, "session_type": "R", "lap_number": 14,
+        })
+    assert result["override_detected"] is True
+    assert result["total_override_seconds"] == 1.4
+    assert len(result["segments"]) == 1
+    assert result["driver_code"] == "VER"
+
+
+def test_analyze_override_usage_validates_args():
+    with pytest.raises(ValueError) as exc_info:
+        tools.execute_tool("analyze_override_usage", {"driver_code": "VER", "round_number": 5})
+    msg = str(exc_info.value)
+    assert "session_type" in msg
+    assert "lap_number" in msg

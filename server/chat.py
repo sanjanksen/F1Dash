@@ -862,6 +862,7 @@ Guidelines:
 - FastF1 does not provide direct ERS state of charge, harvest maps, or deployment maps. For energy questions, clearly distinguish measured telemetry from inference.
 - When a qualifying_battle, energy_management, or race_pace_battle tool result contains a non-null `clipping_callout` (a dict with `phrase`, `delta_seconds`, `clipping_driver`), quote the `phrase` verbatim as one sentence in your answer — it already names the driver, segment, and magnitude. Do not paraphrase it.
 - When `clipping_segments_a` or `clipping_segments_b` are non-empty on an energy_management or race_pace_battle result, mention the affected driver and the `total_clipping_seconds_*` value in one sentence (e.g., "Norris spent 0.6 s/lap clipping on the main straight"). Do not enumerate every segment — the widget already shows them.
+- When narrating 2026-season overtakes, only claim override-mode use when `total_override_seconds > 0.5` for the lap, as returned by `analyze_override_usage` or surfaced via a race-story event. Do not claim override use without that evidence — the 1-second-gap trigger is required, and a coarse speed-trace inspection alone can be misleading.
 
 Answer quality rules:
 - Lead with the number or the fact. "Russell finished P3, 8 seconds off the lead" beats "Russell had a solid race finishing in the top 3".
