@@ -34,7 +34,15 @@ class FastF1Error(RuntimeError):
         super().__init__(message)
         self.round_number = round_number
         self.session_type = session_type
-        self.__cause__ = cause
+
+
+def _unavailable_payload(round_number: int, session_type: str) -> dict:
+    return {
+        "available": False,
+        "reason": "fastf1_unavailable",
+        "round_number": round_number,
+        "session_type": session_type,
+    }
 
 
 def _fmt_td(td) -> str | None:
@@ -665,8 +673,6 @@ def get_sprint_qualifying_results(round_number: int) -> dict:
     """Return sprint qualifying/shootout classification via FastF1."""
     try:
         session = _load_session(round_number, "SQ", laps=False, telemetry=False, weather=False, messages=False)
-    except FastF1Error as exc:
-        raise ValueError(f"Sprint qualifying data unavailable for round {round_number}: {exc}") from exc
     except Exception as exc:
         raise ValueError(f"Sprint qualifying data unavailable for round {round_number}: {exc}") from exc
     rows = _session_results_rows(session)
@@ -706,7 +712,7 @@ def get_session_results(round_number: int, session_type: str) -> dict:
             messages=_session_needs_race_control_messages(session_type),
         )
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
     rows = _session_results_rows(session)
     return {
         "event": session.event['EventName'],
@@ -799,6 +805,7 @@ def get_session_fastest_laps(round_number: int, session_type: str) -> list[dict]
             messages=_session_needs_race_control_messages(session_type),
         )
     except FastF1Error as exc:
+        # Return type is list[dict] — cannot carry the unavailable dict payload; chained ValueError surfaces the same information.
         raise ValueError("session data unavailable") from exc
 
     results = []
@@ -848,7 +855,7 @@ def get_driver_lap_times(round_number: int, session_type: str, driver_code: str)
             messages=_session_needs_race_control_messages(session_type),
         )
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
 
     driver_laps = _pick_driver(session.laps, driver_code.upper())
     if driver_laps.empty:
@@ -888,7 +895,7 @@ def get_driver_strategy(round_number: int, session_type: str, driver_code: str |
     try:
         session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
     driver_info = _driver_lookup(session)
 
     def _summarize_driver(code: str) -> dict:
@@ -1611,7 +1618,7 @@ def get_qualifying_progression(round_number: int) -> dict:
     try:
         session = _load_session(round_number, 'Q', laps=True, telemetry=False, weather=False, messages=False)
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": "Q"}
+        return _unavailable_payload(round_number, "Q")
     split = session.laps.split_qualifying_sessions()
     session_names = ['Q1', 'Q2', 'Q3']
     driver_info = _driver_lookup(session)
@@ -1686,7 +1693,7 @@ def get_clean_pace_summary(round_number: int, session_type: str,
             messages=_session_needs_race_control_messages(session_type),
         )
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
     driver_info = _driver_lookup(session)
     drivers = [code.upper() for code in driver_codes] if driver_codes else [str(code).upper() for code in session.drivers]
     summaries = []
@@ -1775,7 +1782,7 @@ def get_sector_comparison(round_number: int, session_type: str,
             messages=_session_needs_race_control_messages(session_type),
         )
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
 
     def _fastest(code: str):
         laps = _pick_driver(session.laps, code.upper())
@@ -1864,7 +1871,7 @@ def get_lap_telemetry(round_number: int, session_type: str,
             messages=_session_needs_race_control_messages(session_type),
         )
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
 
     driver_laps = _pick_driver(session.laps, driver_code.upper())
     if driver_laps.empty:
@@ -1938,7 +1945,7 @@ def get_telemetry_comparison(round_number: int, session_type: str,
             messages=_session_needs_race_control_messages(session_type),
         )
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
 
     def _get_lap(code: str, lap_num: int | None):
         laps = _pick_driver(session.laps, code.upper())
@@ -2518,6 +2525,7 @@ def _get_comparable_qualifying_laps(round_number: int, driver_codes: list[str], 
     try:
         session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=True)
     except FastF1Error as exc:
+        # Return type is tuple — cannot carry the unavailable dict payload; chained ValueError surfaces the same information.
         raise ValueError(f"session data unavailable for round {round_number} {session_type}") from exc
     try:
         split = session.laps.split_qualifying_sessions()
@@ -3639,7 +3647,7 @@ def analyze_team_telemetry_traits(
     try:
         session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
     fastest_rows = []
     for code in getattr(session, "drivers", []) or []:
         try:
@@ -3752,7 +3760,7 @@ def get_safety_car_periods(round_number: int, session_type: str) -> dict:
     try:
         session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
 
     ts = session.track_status  # columns: Time (Timedelta), Status (str), Message (str)
     laps = session.laps
@@ -3955,7 +3963,7 @@ def get_race_control_messages(round_number: int, session_type: str,
     try:
         session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=True)
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
     messages = getattr(session, "race_control_messages", None)
     if messages is None or getattr(messages, "empty", False):
         return {"event": session.event['EventName'], "session": session_type.upper(), "messages": []}
@@ -4002,7 +4010,7 @@ def get_track_position_comparison(round_number: int, session_type: str,
     try:
         session = _load_session(round_number, session_type, laps=True, telemetry=True, weather=False, messages=False)
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
 
     def _get_driver_lap(code: str, lap_num: int | None):
         laps = _pick_driver(session.laps, code.upper())
@@ -4078,7 +4086,7 @@ def get_session_weather(round_number: int, session_type: str) -> dict:
     try:
         session = _load_session(round_number, session_type, laps=False, telemetry=False, weather=True, messages=False)
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
 
     weather = session.weather_data
 
@@ -4793,7 +4801,7 @@ def extract_corner_profiles(
     try:
         session = _load_session(round_number, session_type, laps=True, telemetry=True, weather=False, messages=False)
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
 
     driver_laps = _pick_driver(session.laps, driver_code.upper())
     if driver_laps.empty:
@@ -4997,7 +5005,7 @@ def analyze_stint_degradation(round_number: int, driver_code: str, session_type:
     try:
         session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
 
     driver_laps = _pick_driver(session.laps, driver_code.upper())
     if driver_laps.empty:
@@ -5055,7 +5063,7 @@ def analyze_race_pace_battle(
     try:
         session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
 
     def _driver_data(code: str):
         laps = _pick_driver(session.laps, code.upper())
@@ -5578,7 +5586,7 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             messages=_session_needs_race_control_messages(session_type),
         )
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
 
     code_a = driver_a.upper()
     code_b = driver_b.upper()
@@ -5929,7 +5937,7 @@ def analyze_race_cornering_profile(
             messages=False,
         )
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": "R"}
+        return _unavailable_payload(round_number, "R")
 
     code_a = driver_a.upper()
     code_b = driver_b.upper()
@@ -6162,7 +6170,7 @@ def get_pit_stop_analysis(round_number: int) -> dict:
     try:
         session = _load_session(round_number, "R", laps=True)
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": "R"}
+        return _unavailable_payload(round_number, "R")
 
     session_results = get_session_results(round_number, "R")
     results_list = session_results.get("results", [])
@@ -6261,7 +6269,7 @@ def analyze_weather_pace_correlation(round_number: int, session_type: str = "Q")
     try:
         session = _load_session(round_number, session_type, laps=True, weather=True)
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
 
     if session.weather_data is None or session.weather_data.empty:
         raise ValueError(f"No weather data available for round {round_number} {session_type}.")
@@ -6369,7 +6377,7 @@ def get_fp_summary(round_number: int, fp_number: int) -> dict:
     try:
         session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
     driver_info = _driver_lookup(session)
 
     _SOFT_COMPOUNDS = {"SOFT", "SUPERSOFT", "ULTRASOFT", "HYPERSOFT"}
@@ -6465,7 +6473,7 @@ def get_speed_trap_leaderboard(round_number: int, session_type: str) -> dict:
     try:
         session = _load_session(round_number, session_type, laps=True, telemetry=False, weather=False, messages=False)
     except FastF1Error:
-        return {"available": False, "reason": "fastf1_unavailable", "round_number": round_number, "session_type": session_type}
+        return _unavailable_payload(round_number, session_type)
     driver_info = _driver_lookup(session)
 
     traps = {
