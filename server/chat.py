@@ -490,6 +490,18 @@ def _make_undercut_overcut_widget(result: dict) -> dict:
     }
 
 
+def _registry_widget(tool: str, result: dict) -> dict | None:
+    """Look up tool in FEATURE_REGISTRY. Return widget if registered AND
+    should_show_widget passes, else None. Caller falls through to legacy."""
+    from features.base import FEATURE_REGISTRY
+    feat = FEATURE_REGISTRY.get(tool)
+    if feat is None:
+        return None
+    if not feat.should_show_widget(result):
+        return None
+    return feat.make_widget(result)
+
+
 def _widgets_from_preloaded(preloaded: dict | None) -> list[dict]:
     if not preloaded or "result" not in preloaded:
         return []
@@ -501,11 +513,9 @@ def _widgets_from_preloaded(preloaded: dict | None) -> list[dict]:
     # Legacy if/elif below is the fallback for not-yet-migrated tools and
     # shrinks as Phase D progresses.
     from features.base import FEATURE_REGISTRY
-    feat = FEATURE_REGISTRY.get(tool)
-    if feat is not None:
-        if feat.should_show_widget(result):
-            return [feat.make_widget(result)]
-        return []
+    if tool in FEATURE_REGISTRY:
+        w = _registry_widget(tool, result)
+        return [w] if w is not None else []
 
     if tool == "get_driver_race_story":
         return [_make_race_story_widget(result)]
@@ -542,11 +552,35 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
         if track_map_result is not None and grip_commitment is not None:
             break
 
+    from features.base import FEATURE_REGISTRY
+
+    # Tools whose evidence branch has cross-feature orchestration. These
+    # MUST stay on the legacy path until the Feature contract supports
+    # cross-result composition / plan-context awareness.
+    _CROSS_FEATURE_TOOLS = (
+        "analyze_qualifying_battle",   # merges grip_commitment
+        "compare_corner_profiles",     # focus-based skip
+        "get_circuit_profile",         # track_map injection + emit_context_widget skip
+    )
+
     for item in evidence:
         if "result" not in item:
             continue
         tool = item.get("tool")
+
+        # Registry-first dispatch for per-tool branches with no
+        # cross-feature orchestration. If the tool is registered, the
+        # registry is authoritative: should_show_widget == False means
+        # no widget (no legacy fallback).
+        if tool in FEATURE_REGISTRY and tool not in _CROSS_FEATURE_TOOLS:
+            w = _registry_widget(tool, item["result"])
+            if w is not None:
+                widgets.append(w)
+            continue
+
         if tool == "analyze_qualifying_battle":
+            # Cross-feature merge with grip_commitment — kept on legacy path
+            # until Feature contract supports cross-result merging.
             result = dict(item["result"])
             if grip_commitment:
                 result["grip_commitment"] = grip_commitment
@@ -556,12 +590,16 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
         elif tool == "analyze_race_pace_battle":
             widgets.append(_make_race_pace_battle_widget(item["result"]))
         elif tool == "compare_corner_profiles":
+            # Focus-based skip rule — kept on legacy path until plan-context
+            # is part of the Feature contract.
             if plan.get("focus") == "qualifying" and has_primary_qualifying_widget:
                 continue
             widgets.append(_make_corner_comparison_widget(item["result"]))
         elif tool == "analyze_team_performance" and isinstance(item["result"].get("corner_comparison"), dict):
             widgets.append(_make_corner_comparison_widget(item["result"]["corner_comparison"]))
         elif tool == "get_circuit_profile":
+            # track_map is passed in from a sibling tool — kept on legacy path
+            # until Feature contract supports cross-result composition.
             if plan.get("analysis_mode") == "circuit_profile" and plan.get("emit_context_widget") is False:
                 continue
             widgets.append(_make_circuit_profile_widget(item["result"], track_map=track_map_result))
