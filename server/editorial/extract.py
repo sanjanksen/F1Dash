@@ -50,7 +50,9 @@ def classify_fia_doc(url: str) -> str:
     """Map an FIA PDF URL substring to a granular doc_type.
 
     Match against the basename so that the FIA's parent path `/decision-document/`
-    does not cause every PDF to fall into `fia_stewards`.
+    does not cause every PDF to fall into `fia_stewards`. Doc_type values are
+    constrained to the migrated CHECK constraint set; event-notes and sporting
+    information PDFs land in ``other`` until/unless a migration adds new types.
     """
     u = url.lower()
     basename = u.rsplit("/", 1)[-1]
@@ -60,12 +62,15 @@ def classify_fia_doc(url: str) -> str:
         return "fia_pirelli_preview"
     if ("post_race_checks" in basename or "post-race-checks" in basename
             or "post_race_check" in basename or "post-race_check" in basename
-            or "post-race_checks" in basename):
+            or "post-race_checks" in basename or "post race check" in basename
+            or "post-race check" in basename):
         return "fia_post_race_check"
-    if "competition_visa" in basename or "competition-visa" in basename:
+    if ("competition_visa" in basename or "competition-visa" in basename
+            or "competition visa" in basename):
         return "fia_competition_visa"
     if ("power_unit" in basename or "pu_elements" in basename
-            or "power-unit" in basename or "pu-elements" in basename):
+            or "power-unit" in basename or "pu-elements" in basename
+            or "power unit" in basename or "pu elements" in basename):
         return "fia_pu_info"
     if "stewards" in basename or "decision" in basename or "penalty" in basename:
         return "fia_stewards"
