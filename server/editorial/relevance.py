@@ -186,3 +186,94 @@ def log_gate_decision(
         _client.insert_gate_audit(row)
     except Exception as e:
         logger.warning("log_gate_decision audit insert failed: %s", type(e).__name__)
+
+
+from editorial.search import search_editorial_content as _search
+
+
+# Calibrate against a labelled set if you have one. 0.62 is a starting
+# guess for Gemini gemini-embedding-2 1536-dim cosine similarity.
+DEFAULT_SIMILARITY_THRESHOLD: float = 0.62
+
+# Top-K to retrieve from pgvector before filtering. Higher = more chunks
+# considered (better recall) but more downstream work. 10 is fine.
+RETRIEVAL_LIMIT: int = 10
+
+# After filtering, cap at this many surviving chunks. Don't flood the
+# analyzer's context — pick the best few.
+MAX_SURVIVORS: int = 3
+
+
+def gated_editorial_lookup(
+    *,
+    question: str,
+    resolved: dict | None,
+    analysis_mode: str | None,
+    similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
+) -> dict | None:
+    """Run editorial retrieval through the relevance gate.
+
+    Returns:
+        {"kind": "editorial", "chunks": [...]} when at least one chunk
+        passes all gates.
+        None when:
+          - analysis_mode is not in the whitelist (early exit, no search)
+          - pgvector returned zero candidates
+          - all candidates were dropped by the gate
+
+    Logs every non-early-exit decision to editorial_gate_audit.
+    """
+    if not should_retrieve_editorial(analysis_mode):
+        return None
+
+    resolver_subjects = build_resolver_subject_set(resolved)
+
+    # Run the underlying retrieval. We accept whatever it returns — empty,
+    # semantic, or FTS-mode results are all handled uniformly downstream.
+    try:
+        search_out = _search(query=question, limit=RETRIEVAL_LIMIT)
+    except Exception as e:
+        logger.warning("editorial _search crashed: %s", type(e).__name__)
+        return None
+
+    candidates: list[dict] = list(search_out.get("results") or [])
+
+    # Apply each filter; tag drops with a reason for the audit log.
+    survivors: list[dict] = []
+    for c in candidates:
+        sim = c.get("similarity")
+        if sim is None or sim < similarity_threshold:
+            c["_drop_reason"] = "below_threshold"
+            continue
+        if not chunk_passes_subject_filter(c, resolver_subjects):
+            c["_drop_reason"] = "subject_mismatch"
+            continue
+        # Recency-adjust the similarity. We use it to re-rank survivors but
+        # don't gate on it directly — high-similarity old articles still
+        # survive thanks to RECENCY_FLOOR.
+        c["_adjusted_score"] = apply_recency_multiplier(sim, c.get("published_at"))
+        survivors.append(c)
+
+    # Sort survivors by adjusted score, cap at MAX_SURVIVORS.
+    survivors.sort(key=lambda c: c.get("_adjusted_score", 0.0), reverse=True)
+    survivors = survivors[:MAX_SURVIVORS]
+
+    # Best-effort audit log. Failure here never propagates.
+    log_gate_decision(
+        question=question,
+        analysis_mode=analysis_mode,
+        resolver_subjects=resolver_subjects,
+        candidates=candidates,
+        survivors=survivors,
+        threshold_used=similarity_threshold,
+    )
+
+    if not survivors:
+        return None
+
+    # Strip internal-only fields before handing off to the analyzer.
+    clean_survivors = [
+        {k: v for k, v in c.items() if not k.startswith("_")}
+        for c in survivors
+    ]
+    return {"kind": "editorial", "chunks": clean_survivors}

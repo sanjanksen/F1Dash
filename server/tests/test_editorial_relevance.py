@@ -163,3 +163,128 @@ def test_log_gate_decision_does_not_crash_on_db_unavailable():
             survivors=[],
             threshold_used=0.62,
         )
+
+
+from editorial.relevance import gated_editorial_lookup
+
+
+def test_gated_lookup_skips_irrelevant_mode():
+    """circuit_profile mode shouldn't even attempt retrieval."""
+    with patch("editorial.relevance._search") as mock_search, \
+         patch("editorial.relevance.log_gate_decision") as mock_log:
+        result = gated_editorial_lookup(
+            question="what's the circuit profile for Monaco",
+            resolved={"drivers": [], "circuit_slug": "monaco"},
+            analysis_mode="circuit_profile",
+        )
+        assert result is None
+        mock_search.assert_not_called()
+        mock_log.assert_not_called()  # not even logged — early exit
+
+
+def test_gated_lookup_returns_none_when_no_candidates():
+    """If pgvector returns nothing, return None — caller knows to skip."""
+    with patch("editorial.relevance._search", return_value={"results": []}), \
+         patch("editorial.relevance.log_gate_decision") as mock_log:
+        result = gated_editorial_lookup(
+            question="why was norris faster",
+            resolved={"drivers": [{"code": "NOR"}, {"code": "PIA"}]},
+            analysis_mode="qualifying_battle",
+        )
+        assert result is None
+        mock_log.assert_called_once()  # logged the empty candidate set
+
+
+def test_gated_lookup_keeps_chunks_passing_all_gates():
+    """High-similarity, subject-matching, recent chunk survives."""
+    from datetime import datetime, timezone
+    recent = datetime.now(timezone.utc).isoformat()
+    fake_results = {
+        "search_mode": "semantic",
+        "results": [
+            {
+                "chunk_id": 101,
+                "similarity": 0.82,
+                "chunk_text": "Norris said McLaren brought a new floor...",
+                "title": "McLaren Imola upgrade",
+                "url": "https://the-race.com/x",
+                "source": "The Race",
+                "published_at": recent,
+                "article_subjects": [
+                    {"kind": "driver", "ref": "NOR"},
+                    {"kind": "team", "ref": "mclaren"},
+                ],
+            },
+        ],
+    }
+    with patch("editorial.relevance._search", return_value=fake_results), \
+         patch("editorial.relevance.log_gate_decision"):
+        result = gated_editorial_lookup(
+            question="why was norris faster at Imola",
+            resolved={
+                "drivers": [{"code": "NOR"}, {"code": "PIA"}],
+                "team": "McLaren",
+                "circuit_slug": "imola",
+            },
+            analysis_mode="qualifying_battle",
+        )
+        assert result is not None
+        assert result["kind"] == "editorial"
+        assert len(result["chunks"]) == 1
+        assert result["chunks"][0]["chunk_id"] == 101
+
+
+def test_gated_lookup_drops_chunk_failing_subject_intersection():
+    """High similarity but wrong driver/team → dropped."""
+    from datetime import datetime, timezone
+    recent = datetime.now(timezone.utc).isoformat()
+    fake_results = {
+        "search_mode": "semantic",
+        "results": [
+            {
+                "chunk_id": 202,
+                "similarity": 0.85,
+                "chunk_text": "Verstappen took pole in Bahrain...",
+                "url": "https://...",
+                "source": "...",
+                "published_at": recent,
+                "article_subjects": [{"kind": "driver", "ref": "VER"}],
+            },
+        ],
+    }
+    with patch("editorial.relevance._search", return_value=fake_results), \
+         patch("editorial.relevance.log_gate_decision"):
+        result = gated_editorial_lookup(
+            question="why was norris faster",
+            resolved={"drivers": [{"code": "NOR"}, {"code": "PIA"}]},
+            analysis_mode="qualifying_battle",
+        )
+        assert result is None  # everything dropped → return None
+
+
+def test_gated_lookup_drops_chunk_below_similarity_threshold():
+    """Subject-matching but low similarity → dropped."""
+    from datetime import datetime, timezone
+    recent = datetime.now(timezone.utc).isoformat()
+    fake_results = {
+        "search_mode": "semantic",
+        "results": [
+            {
+                "chunk_id": 303,
+                "similarity": 0.40,  # below 0.62 threshold
+                "chunk_text": "some borderline content...",
+                "url": "https://...",
+                "source": "...",
+                "published_at": recent,
+                "article_subjects": [{"kind": "driver", "ref": "NOR"}],
+            },
+        ],
+    }
+    with patch("editorial.relevance._search", return_value=fake_results), \
+         patch("editorial.relevance.log_gate_decision"):
+        result = gated_editorial_lookup(
+            question="why was norris faster",
+            resolved={"drivers": [{"code": "NOR"}]},
+            analysis_mode="qualifying_battle",
+        )
+        assert result is None
