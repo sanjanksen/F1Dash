@@ -827,6 +827,15 @@ def _require_args(args: dict, required: list[str], tool_name: str) -> None:
 
 
 def execute_tool(name: str, args: dict):
+    # Registry dispatch (Phase B): if the tool is in FEATURE_REGISTRY,
+    # validate the feature's declared required_args then call feature.execute().
+    if name in _FEATURE_REGISTRY:
+        feat = _FEATURE_REGISTRY[name]
+        required = list(getattr(feat, "required_args", ()) or ())
+        if required:
+            _require_args(args, required, name)
+        return feat.execute(**args)
+
     if name == "get_team_radio":
         _require_args(args, ["round_number", "session_type"], name)
         return get_team_radio(args["round_number"], args["session_type"], args.get("driver_ref"), args.get("limit", 10))
@@ -1172,3 +1181,53 @@ def execute_tool(name: str, args: dict):
             min_date=args.get("min_date"),
         )
     raise ValueError(f"Unknown tool: {name!r}")
+
+
+# ---------------------------------------------------------------------------
+# Feature-registry integration
+# ---------------------------------------------------------------------------
+#
+# At import time, walk server/features/ and extend TOOL_DEFINITIONS +
+# OPENAI_TOOL_DEFINITIONS with registered Feature classes. execute_tool
+# checks FEATURE_REGISTRY first; falls back to the legacy if/elif chain
+# for not-yet-migrated tools.
+
+from features.registry import discover_features as _discover_features
+from features.base import FEATURE_REGISTRY as _FEATURE_REGISTRY
+
+_discover_features()
+
+
+def _feature_to_anthropic_schema(feat) -> dict:
+    return {
+        "name": feat.name,
+        "description": feat.description or "",
+        "input_schema": feat.tool_schema or {"type": "object", "properties": {}},
+    }
+
+
+def _feature_to_openai_schema(feat) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": feat.name,
+            "description": feat.description or "",
+            "parameters": feat.tool_schema or {"type": "object", "properties": {}},
+        },
+    }
+
+
+# Replace static entries with their registry equivalents (registry wins),
+# and append any registry-only features.
+_existing_anthropic = {t["name"]: i for i, t in enumerate(TOOL_DEFINITIONS)}
+_existing_openai = {t["function"]["name"]: i for i, t in enumerate(OPENAI_TOOL_DEFINITIONS)}
+
+for _name, _feat in _FEATURE_REGISTRY.items():
+    if _name in _existing_anthropic:
+        TOOL_DEFINITIONS[_existing_anthropic[_name]] = _feature_to_anthropic_schema(_feat)
+    else:
+        TOOL_DEFINITIONS.append(_feature_to_anthropic_schema(_feat))
+    if _name in _existing_openai:
+        OPENAI_TOOL_DEFINITIONS[_existing_openai[_name]] = _feature_to_openai_schema(_feat)
+    else:
+        OPENAI_TOOL_DEFINITIONS.append(_feature_to_openai_schema(_feat))

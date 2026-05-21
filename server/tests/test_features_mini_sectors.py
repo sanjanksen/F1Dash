@@ -1,23 +1,6 @@
-import importlib
-import sys
-
 import pytest
 
-
-@pytest.fixture(autouse=True)
-def _reset_feature_module():
-    """Ensure the mini_sectors module re-runs its @register_feature decorator
-    every test. discover_features() uses import_module, which is a no-op when
-    the module is already in sys.modules — so clearing FEATURE_REGISTRY between
-    tests leaves the registry empty unless we drop the cached module too.
-    """
-    from features.base import FEATURE_REGISTRY
-    saved = dict(FEATURE_REGISTRY)
-    FEATURE_REGISTRY.clear()
-    sys.modules.pop("features.mini_sectors", None)
-    yield
-    FEATURE_REGISTRY.clear()
-    FEATURE_REGISTRY.update(saved)
+pytestmark = pytest.mark.usefixtures("reset_feature_registry")
 
 
 def test_mini_sectors_feature_registered_after_discover():

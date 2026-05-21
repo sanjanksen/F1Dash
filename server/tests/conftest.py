@@ -32,3 +32,25 @@ def reset_resolver_caches():
     circuits_cache._circuits_cache_time = 0.0
     resolver._drivers_cache = []
     resolver._drivers_cache_time = 0.0
+
+
+@pytest.fixture
+def reset_feature_registry():
+    """Snapshot FEATURE_REGISTRY + clear cached features.* modules, then restore.
+
+    discover_features() uses importlib.import_module which is a no-op when the
+    module is already in sys.modules. Tests that need discover_features() to
+    actually re-run @register_feature decorators must drop the cached module.
+    """
+    from features.base import FEATURE_REGISTRY
+    saved = dict(FEATURE_REGISTRY)
+    FEATURE_REGISTRY.clear()
+    cleared = [
+        m for m in list(sys.modules)
+        if m.startswith("features.") and m not in ("features.base", "features.registry")
+    ]
+    for m in cleared:
+        sys.modules.pop(m, None)
+    yield
+    FEATURE_REGISTRY.clear()
+    FEATURE_REGISTRY.update(saved)
