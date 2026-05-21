@@ -64,7 +64,7 @@ def _persist_article_with_chunks(
         }
         if vectors is not None and idx < len(vectors):
             row["embedding"] = vectors[idx]
-            row["embedding_model"] = "text-embedding-3-small"
+            row["embedding_model"] = "gemini-embedding-2"
         chunk_rows.append(row)
 
     try:
