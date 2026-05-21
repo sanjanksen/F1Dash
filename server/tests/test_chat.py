@@ -1126,3 +1126,59 @@ def test_system_prompt_mentions_analyze_undercut_overcut():
     import chat
 
     assert "analyze_undercut_overcut" in chat.SYSTEM_PROMPT
+
+
+def test_deterministic_path_includes_editorial_evidence_when_gate_passes():
+    """In a qualifying_battle mode, gated_editorial_lookup returns chunks;
+    _retrieve_analysis_evidence must include them as 'editorial' evidence."""
+    import chat
+    from unittest.mock import patch
+
+    fake_editorial = {
+        "kind": "editorial",
+        "chunks": [
+            {
+                "chunk_id": 99,
+                "chunk_text": "McLaren brought a new floor to Imola.",
+                "title": "Imola upgrades",
+                "url": "https://the-race.com/imola",
+                "source": "The Race",
+                "published_at": "2026-05-15",
+                "similarity": 0.78,
+            },
+        ],
+    }
+    plan: list = []
+    resolved = {
+        "drivers": [{"code": "NOR"}, {"code": "PIA"}],
+        "team": "McLaren",
+        "circuit_slug": "imola",
+        "analysis_mode": "qualifying_battle",
+    }
+    with patch("chat.gated_editorial_lookup", return_value=fake_editorial), \
+         patch("chat._execute_analysis_tool_calls", return_value=[]):
+        evidence = chat._retrieve_analysis_evidence(
+            plan, resolved, question="why was norris faster at Imola",
+        )
+    editorial_items = [e for e in evidence if e.get("kind") == "editorial"]
+    assert len(editorial_items) == 1
+    assert editorial_items[0]["chunks"][0]["url"] == "https://the-race.com/imola"
+
+
+def test_deterministic_path_omits_editorial_when_gate_returns_none():
+    """If the gate returns None, no editorial entry is appended."""
+    import chat
+    from unittest.mock import patch
+
+    plan: list = []
+    resolved = {
+        "drivers": [{"code": "NOR"}],
+        "analysis_mode": "circuit_profile",  # not in whitelist
+    }
+    with patch("chat.gated_editorial_lookup", return_value=None), \
+         patch("chat._execute_analysis_tool_calls", return_value=[]):
+        evidence = chat._retrieve_analysis_evidence(
+            plan, resolved, question="tell me about Monaco",
+        )
+    editorial_items = [e for e in evidence if e.get("kind") == "editorial"]
+    assert editorial_items == []

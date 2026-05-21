@@ -30,6 +30,7 @@ from evidence_shaping import (
     reject_data_table_for_cornering,
     strip_heavy_payload_fields,
 )
+from editorial.relevance import gated_editorial_lookup
 
 MAX_TOOL_ROUNDS = 8
 MAX_DETERMINISTIC_TOOL_WORKERS = 4
@@ -1680,11 +1681,12 @@ def _execute_analysis_tool_calls(tool_calls: list[tuple[str, dict]]) -> list[dic
         return [future.result() for future in futures]
 
 
-def _retrieve_analysis_evidence(plan: dict, resolved: dict | None = None) -> list[dict]:
-    evidence = _execute_analysis_tool_calls(plan.get("tool_calls", []))
+def _retrieve_analysis_evidence(plan: dict, resolved: dict | None = None, *, question: str = "") -> list[dict]:
+    plan_dict = plan if isinstance(plan, dict) else {}
+    evidence = _execute_analysis_tool_calls(plan_dict.get("tool_calls", []))
 
     # ── Auto-inject driver style context ────────────────────────────────────
-    drivers = plan.get("drivers") or []
+    drivers = plan_dict.get("drivers") or []
     if len(drivers) >= 2:
         try:
             style = get_comparison_framing(drivers[0]["code"], drivers[1]["code"])
@@ -1699,8 +1701,8 @@ def _retrieve_analysis_evidence(plan: dict, resolved: dict | None = None) -> lis
             logger.warning("Driver style context injection failed: %s", exc)
 
     # ── Auto-inject circuit profile ─────────────────────────────────────────
-    country = plan.get("country") or (resolved.get("country") if resolved else None)
-    event_name = plan.get("event_name") or (resolved.get("event_name") if resolved else None)
+    country = plan_dict.get("country") or (resolved.get("country") if resolved else None)
+    event_name = plan_dict.get("event_name") or (resolved.get("event_name") if resolved else None)
     if country:
         try:
             profile = get_circuit_profile(country, event_name or "")
@@ -1713,6 +1715,20 @@ def _retrieve_analysis_evidence(plan: dict, resolved: dict | None = None) -> lis
                 })
         except Exception as exc:
             logger.warning("Circuit profile context injection failed: %s", exc)
+
+    # Editorial RAG gate — only fires for interpretive analysis_modes.
+    # Returns None when the mode isn't relevant or no chunks pass the gate.
+    try:
+        editorial_result = gated_editorial_lookup(
+            question=question,
+            resolved=resolved,
+            analysis_mode=resolved.get("analysis_mode") if resolved else None,
+        )
+        if editorial_result is not None:
+            evidence.append(editorial_result)
+    except Exception as e:
+        logger.warning("gated_editorial_lookup crashed: %s", type(e).__name__)
+        # Failure must not block the deterministic path.
 
     return evidence
 
@@ -1802,6 +1818,27 @@ def _build_request_system_prompt(resolved: dict, preloaded: dict | None) -> str:
 
 
 def _build_analysis_user_prompt(question: str, resolved: dict, plan: dict, evidence: list[dict]) -> str:
+    editorial_blocks: list[str] = []
+    non_editorial_evidence: list[dict] = []
+    for entry in evidence:
+        if entry.get("kind") == "editorial":
+            chunks = entry.get("chunks") or []
+            if not chunks:
+                continue
+            block_lines = ["### Editorial context (use sparingly; cite source + date)"]
+            for c in chunks:
+                src = c.get("source") or "Unknown"
+                date = c.get("published_at") or "n.d."
+                title = c.get("title") or "(untitled)"
+                url = c.get("url") or ""
+                text = (c.get("chunk_text") or "").strip()
+                block_lines.append(
+                    f"\n— {src}, {date}: {title}\n  {url}\n  {text}"
+                )
+            editorial_blocks.append("\n".join(block_lines))
+            continue
+        non_editorial_evidence.append(entry)
+
     payload = {
         "question": question,
         "resolved_context": {
@@ -1814,9 +1851,12 @@ def _build_analysis_user_prompt(question: str, resolved: dict, plan: dict, evide
             "entity_codes": resolved.get("entity_codes"),
         },
         "plan": plan,
-        "evidence": evidence,
+        "evidence": non_editorial_evidence,
     }
-    return json.dumps(payload, default=str)
+    serialized = json.dumps(payload, default=str)
+    if editorial_blocks:
+        return serialized + "\n\n" + "\n\n".join(editorial_blocks)
+    return serialized
 
 
 def _build_answer_writer_prompt(question: str, analysis: dict) -> str:
@@ -1836,7 +1876,7 @@ def _try_deterministic_analysis(question: str, history: list[dict], *, provider:
     if not plan:
         return None
 
-    evidence = _retrieve_analysis_evidence(plan, resolved)
+    evidence = _retrieve_analysis_evidence(plan, resolved, question=question)
     if not evidence:
         return None
 
