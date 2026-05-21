@@ -37,7 +37,7 @@ def search_editorial_content(
         return {"available": False, "reason": "editorial_db_unavailable", "results": []}
 
     try:
-        vectors = embed_texts([query])
+        vectors = embed_texts([query], task="query")
     except Exception as e:
         logger.warning("embed_texts for query crashed: %s", type(e).__name__)
         vectors = None

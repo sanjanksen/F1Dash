@@ -1,8 +1,8 @@
 from unittest.mock import patch
 
 
-def test_search_editorial_content_semantic_mode_with_openai_key(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+def test_search_editorial_content_semantic_mode_with_gemini_key(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "ga-test")
     monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-srv")
 
@@ -31,8 +31,8 @@ def test_search_editorial_content_semantic_mode_with_openai_key(monkeypatch):
     m_rpc.assert_called_once()
 
 
-def test_search_editorial_content_fts_mode_without_openai_key(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+def test_search_editorial_content_fts_mode_without_gemini_key(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-srv")
 
