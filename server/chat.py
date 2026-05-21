@@ -1146,7 +1146,7 @@ If neither a `clipping_callout` nor non-empty `clipping_segments_*` are present,
 
 ## Editorial Observations (RAG integration)
 
-When the evidence contains a `search_editorial_content` tool result with `available: true` and at least one chunk in `results`, you MAY surface a single short `editorial_observation` field that paraphrases or briefly quotes the most relevant chunk and cites `source` + `published_at`. Never fabricate a quote — use only chunk text that came back in the result. If the result is empty, omit the field. If the tool returned `available: false`, omit the field — do not mention the editorial system at all.
+When the evidence contains a `search_editorial_content` tool result with `available: true` and at least one chunk in `results`, you MAY surface a single short `editorial_observation` field that paraphrases or briefly quotes the most relevant chunk and cites `source` + `published_at`. Never fabricate a quote — use only chunk text that came back in the result. If the result is empty, omit the field. If the tool returned `available: false`, omit the field — do not mention the editorial system at all. If a chunk in the editorial evidence has `grade: 'partial'`, mention it only as auxiliary support — never lead the answer with it, and explicitly hedge the citation (e.g. "related context from [source]").
 
 ## Required JSON Output
 - direct_answer: string — must include WHERE and HOW MUCH

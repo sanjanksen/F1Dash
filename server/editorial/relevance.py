@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 import math
+import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from editorial import client as _client
@@ -210,6 +212,7 @@ def gated_editorial_lookup(
     resolved: dict | None,
     analysis_mode: str | None,
     similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
+    use_haiku_grader: bool | None = None,
 ) -> dict | None:
     """Run editorial retrieval through the relevance gate.
 
@@ -258,6 +261,20 @@ def gated_editorial_lookup(
     survivors.sort(key=lambda c: c.get("_adjusted_score", 0.0), reverse=True)
     survivors = survivors[:MAX_SURVIVORS]
 
+    # CRAG-style Haiku grader. Drops "no" chunks; keeps "yes" verbatim;
+    # surfaces "partial" with a flag the analyzer can hedge on.
+    use_grader = use_haiku_grader if use_haiku_grader is not None else EDITORIAL_USE_HAIKU_GRADER
+    if use_grader and survivors:
+        graded = grade_chunks_with_haiku(question, survivors)
+        new_survivors = []
+        for c in graded:
+            grade = c.get("_grade", "no")
+            if grade == "no":
+                c["_drop_reason"] = "haiku_no"
+                continue
+            new_survivors.append(c)
+        survivors = new_survivors
+
     # Best-effort audit log. Failure here never propagates.
     log_gate_decision(
         question=question,
@@ -272,8 +289,111 @@ def gated_editorial_lookup(
         return None
 
     # Strip internal-only fields before handing off to the analyzer.
-    clean_survivors = [
-        {k: v for k, v in c.items() if not k.startswith("_")}
-        for c in survivors
-    ]
+    clean_survivors = []
+    for c in survivors:
+        clean = {k: v for k, v in c.items() if not k.startswith("_")}
+        if c.get("_grade") and c.get("_grade") != "yes":
+            # Surface partial-grade so the analyzer hedges (yes is the
+            # default — no flag needed).
+            clean["grade"] = c["_grade"]
+        clean_survivors.append(clean)
     return {"kind": "editorial", "chunks": clean_survivors}
+
+
+# Feature flag — set EDITORIAL_USE_HAIKU_GRADER=false in env to disable.
+# Default ON because the cost is trivial (~$0.001 per query) and the precision
+# upgrade over the cheap gate is real per CRAG (Yan et al. 2024).
+def _haiku_grader_enabled_by_env() -> bool:
+    return os.getenv("EDITORIAL_USE_HAIKU_GRADER", "true").lower() != "false"
+
+
+EDITORIAL_USE_HAIKU_GRADER: bool = _haiku_grader_enabled_by_env()
+
+# Model + token budget for the grader. Haiku is the right size — fast,
+# cheap, instruction-following well enough for a 3-class classifier.
+_GRADER_MODEL = "claude-haiku-4-5-20251001"
+_GRADER_MAX_TOKENS = 8
+_GRADER_MAX_WORKERS = 4
+
+_GRADER_PROMPT = (
+    "You judge whether an article snippet is relevant to answering an "
+    "F1 question.\n\n"
+    "Respond with exactly ONE word — yes, partial, or no — and nothing else.\n"
+    "- yes: the snippet directly addresses or strongly informs the question\n"
+    "- partial: the snippet is tangentially related but not the primary answer\n"
+    "- no: the snippet is off-topic or about a different driver/team/race\n\n"
+    "Question: {question}\n\n"
+    "Snippet: {snippet}"
+)
+
+
+def _get_anthropic_client():
+    """Return a cached anthropic.Anthropic client, or None if no key.
+    Separate function so tests can patch it."""
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        return None
+    try:
+        return anthropic.Anthropic()
+    except Exception:
+        return None
+
+
+def _parse_grade(response_text: str | None) -> str:
+    """Map a free-form Haiku response to 'yes' | 'partial' | 'no'.
+    Defaults to 'no' on anything we don't recognise — fail safe."""
+    if not response_text:
+        return "no"
+    t = response_text.strip().strip(".!?").lower()
+    if "partial" in t:
+        return "partial"
+    if "yes" in t:
+        return "yes"
+    return "no"
+
+
+def _grade_one_chunk(client, question: str, chunk: dict) -> dict:
+    """Run one Haiku call. Returns the chunk with _grade added."""
+    out = dict(chunk)
+    snippet = (chunk.get("chunk_text") or "")[:800]  # cap to keep prompt small
+    try:
+        response = client.messages.create(
+            model=_GRADER_MODEL,
+            max_tokens=_GRADER_MAX_TOKENS,
+            messages=[{
+                "role": "user",
+                "content": _GRADER_PROMPT.format(question=question, snippet=snippet),
+            }],
+        )
+        content = response.content
+        text = content[0].text if content else None
+        out["_grade"] = _parse_grade(text)
+    except Exception as e:
+        logger.warning("Haiku grader call failed: %s", type(e).__name__)
+        out["_grade"] = "no"  # fail safe
+    return out
+
+
+def grade_chunks_with_haiku(question: str, chunks: list[dict]) -> list[dict]:
+    """Grade each chunk's relevance to the question via Claude Haiku.
+
+    Returns the chunks with an added `_grade` field in {yes, partial, no}.
+    Calls run in parallel. On any per-chunk failure or missing API key,
+    the chunk's grade is 'no' — conservative default that keeps the cheap
+    gate as the floor when the LLM judge is unavailable.
+    """
+    if not chunks:
+        return []
+    client = _get_anthropic_client()
+    if client is None:
+        # No key / no SDK — degrade to dropping everything, the cheap gate
+        # already had its turn; without a judge we don't want to pass
+        # marginal chunks through to the analyzer.
+        return [{**c, "_grade": "no"} for c in chunks]
+
+    with ThreadPoolExecutor(max_workers=_GRADER_MAX_WORKERS) as ex:
+        futures = [ex.submit(_grade_one_chunk, client, question, c) for c in chunks]
+        return [f.result() for f in futures]
