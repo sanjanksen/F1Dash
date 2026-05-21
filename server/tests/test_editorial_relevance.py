@@ -227,6 +227,7 @@ def test_gated_lookup_keeps_chunks_passing_all_gates():
                 "circuit_slug": "imola",
             },
             analysis_mode="qualifying_battle",
+            use_haiku_grader=False,
         )
         assert result is not None
         assert result["kind"] == "editorial"
@@ -288,3 +289,200 @@ def test_gated_lookup_drops_chunk_below_similarity_threshold():
             analysis_mode="qualifying_battle",
         )
         assert result is None
+
+
+import os
+from unittest.mock import patch, MagicMock
+
+from editorial.relevance import (
+    EDITORIAL_USE_HAIKU_GRADER,
+    grade_chunks_with_haiku,
+)
+
+
+def _make_chunk(chunk_id: int, text: str = "snippet content here") -> dict:
+    return {
+        "chunk_id": chunk_id,
+        "chunk_text": text,
+        "url": "https://example.com",
+        "title": "t",
+        "source": "Test",
+        "published_at": "2026-05-15",
+        "similarity": 0.75,
+        "article_subjects": [{"kind": "driver", "ref": "NOR"}],
+    }
+
+
+def test_grader_returns_chunks_with_grade_field():
+    """Each surviving chunk should be returned with a _grade in {yes, partial, no}."""
+    chunks = [_make_chunk(1), _make_chunk(2)]
+    fake_messages = MagicMock()
+    fake_messages.create.return_value = MagicMock(
+        content=[MagicMock(text="yes")],
+    )
+    fake_client = MagicMock()
+    fake_client.messages = fake_messages
+
+    with patch("editorial.relevance._get_anthropic_client", return_value=fake_client):
+        graded = grade_chunks_with_haiku("why was norris faster", chunks)
+
+    assert len(graded) == 2
+    for c in graded:
+        assert c.get("_grade") in ("yes", "partial", "no")
+
+
+def test_grader_drops_no_graded_chunks_when_called_from_lookup():
+    """In gated_editorial_lookup, chunks graded 'no' should be removed
+    before the result is returned to the caller."""
+    from datetime import datetime, timezone
+    from editorial.relevance import gated_editorial_lookup
+
+    recent = datetime.now(timezone.utc).isoformat()
+    fake_results = {
+        "search_mode": "semantic",
+        "results": [
+            {
+                "chunk_id": 1, "similarity": 0.80,
+                "chunk_text": "relevant chunk",
+                "url": "https://x/1", "title": "t1", "source": "s",
+                "published_at": recent,
+                "article_subjects": [{"kind": "driver", "ref": "NOR"}],
+            },
+            {
+                "chunk_id": 2, "similarity": 0.78,
+                "chunk_text": "off-topic chunk",
+                "url": "https://x/2", "title": "t2", "source": "s",
+                "published_at": recent,
+                "article_subjects": [{"kind": "driver", "ref": "NOR"}],
+            },
+        ],
+    }
+
+    # Grader marks chunk 1 yes, chunk 2 no.
+    def _fake_grade(q, chunks):
+        out = []
+        for c in chunks:
+            cc = dict(c)
+            cc["_grade"] = "yes" if cc["chunk_id"] == 1 else "no"
+            out.append(cc)
+        return out
+
+    with patch("editorial.relevance._search", return_value=fake_results), \
+         patch("editorial.relevance.grade_chunks_with_haiku", side_effect=_fake_grade), \
+         patch("editorial.relevance.log_gate_decision"):
+        result = gated_editorial_lookup(
+            question="why was norris faster",
+            resolved={"drivers": [{"code": "NOR"}]},
+            analysis_mode="qualifying_battle",
+            use_haiku_grader=True,
+        )
+
+    assert result is not None
+    assert len(result["chunks"]) == 1
+    assert result["chunks"][0]["chunk_id"] == 1
+
+
+def test_grader_keeps_partial_graded_chunks_with_flag():
+    """Partial-graded chunks survive but carry a flag the analyzer can use."""
+    from datetime import datetime, timezone
+    from editorial.relevance import gated_editorial_lookup
+
+    recent = datetime.now(timezone.utc).isoformat()
+    fake_results = {
+        "search_mode": "semantic",
+        "results": [
+            {
+                "chunk_id": 5, "similarity": 0.80,
+                "chunk_text": "borderline chunk",
+                "url": "https://x", "title": "t", "source": "s",
+                "published_at": recent,
+                "article_subjects": [{"kind": "driver", "ref": "NOR"}],
+            },
+        ],
+    }
+
+    def _fake_grade(q, chunks):
+        return [{**c, "_grade": "partial"} for c in chunks]
+
+    with patch("editorial.relevance._search", return_value=fake_results), \
+         patch("editorial.relevance.grade_chunks_with_haiku", side_effect=_fake_grade), \
+         patch("editorial.relevance.log_gate_decision"):
+        result = gated_editorial_lookup(
+            question="why was norris faster",
+            resolved={"drivers": [{"code": "NOR"}]},
+            analysis_mode="qualifying_battle",
+            use_haiku_grader=True,
+        )
+
+    assert result is not None
+    assert len(result["chunks"]) == 1
+    assert result["chunks"][0].get("grade") == "partial"
+
+
+def test_grader_disabled_when_use_haiku_grader_false():
+    """When use_haiku_grader=False, the grader is never called."""
+    from datetime import datetime, timezone
+    from editorial.relevance import gated_editorial_lookup
+
+    recent = datetime.now(timezone.utc).isoformat()
+    fake_results = {
+        "search_mode": "semantic",
+        "results": [
+            {
+                "chunk_id": 7, "similarity": 0.80,
+                "chunk_text": "any",
+                "url": "https://x", "title": "t", "source": "s",
+                "published_at": recent,
+                "article_subjects": [{"kind": "driver", "ref": "NOR"}],
+            },
+        ],
+    }
+
+    with patch("editorial.relevance._search", return_value=fake_results), \
+         patch("editorial.relevance.grade_chunks_with_haiku") as mock_grader, \
+         patch("editorial.relevance.log_gate_decision"):
+        result = gated_editorial_lookup(
+            question="why was norris faster",
+            resolved={"drivers": [{"code": "NOR"}]},
+            analysis_mode="qualifying_battle",
+            use_haiku_grader=False,
+        )
+
+    assert result is not None
+    assert len(result["chunks"]) == 1
+    mock_grader.assert_not_called()
+
+
+def test_grader_returns_no_on_anthropic_failure():
+    """If Haiku call fails, conservative default: grade as 'no' (drop)."""
+    chunks = [_make_chunk(1)]
+    fake_client = MagicMock()
+    fake_client.messages.create.side_effect = Exception("anthropic down")
+
+    with patch("editorial.relevance._get_anthropic_client", return_value=fake_client):
+        graded = grade_chunks_with_haiku("q", chunks)
+
+    assert len(graded) == 1
+    assert graded[0]["_grade"] == "no"
+
+
+def test_grader_returns_no_when_no_anthropic_key():
+    """If the Anthropic client cannot be constructed, grader degrades to 'no'
+    so chunks are dropped — never silently pass through ungraded."""
+    chunks = [_make_chunk(1)]
+    with patch("editorial.relevance._get_anthropic_client", return_value=None):
+        graded = grade_chunks_with_haiku("q", chunks)
+    assert graded[0]["_grade"] == "no"
+
+
+def test_grader_parses_partial_response():
+    """A response of 'partial' (case-insensitive, with whitespace) should map
+    to grade='partial'."""
+    chunks = [_make_chunk(1)]
+    fake_client = MagicMock()
+    fake_client.messages.create.return_value = MagicMock(
+        content=[MagicMock(text=" Partial. ")],
+    )
+    with patch("editorial.relevance._get_anthropic_client", return_value=fake_client):
+        graded = grade_chunks_with_haiku("q", chunks)
+    assert graded[0]["_grade"] == "partial"
