@@ -11,6 +11,7 @@ import DegTrendChart from './chat-widgets/DegTrendChart.jsx'
 import EnergyManagementWidget from './chat-widgets/EnergyManagementWidget.jsx'
 import ActiveAeroWidget from './chat-widgets/ActiveAeroWidget.jsx'
 import UndercutOvercutWidget from './chat-widgets/UndercutOvercutWidget.jsx'
+import MiniSectorHeatmapWidget from './chat-widgets/MiniSectorHeatmapWidget.jsx'
 
 function splitBlocks(text) {
   return text
@@ -171,6 +172,9 @@ function WidgetRenderer({ widget }) {
   }
   if (widget.type === 'undercut_overcut') {
     return <UndercutOvercutWidget widget={widget} />
+  }
+  if (widget.type === 'mini_sector_heatmap') {
+    return <MiniSectorHeatmapWidget widget={widget} />
   }
   return null
 }

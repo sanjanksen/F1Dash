@@ -14,6 +14,7 @@ import logging
 from driver_styles import get_driver_style, get_comparison_framing
 from circuit_profiles import get_circuit_profile
 from team_car_profiles import get_team_car_profile
+import f1_data
 from f1_data import (
     analyze_cornering_loads,
     analyze_race_cornering_profile,
@@ -299,6 +300,27 @@ PRIMITIVE_TOOL_DEFINITIONS = [
             "driver_b": {"type": "string", "description": "Second driver's 3-letter code."},
         },
         ["round_number", "session_type", "driver_a", "driver_b"],
+    ),
+    _tool(
+        "compare_mini_sectors",
+        (
+            "PRIMITIVE TOOL. Compare two drivers across 25 equal-distance mini-sectors of a single lap. "
+            "Returns per-segment time delta (driver_a - driver_b), cumulative delta along "
+            "distance, segment-win counts, and a DRS-mix warning if one driver had DRS "
+            "open in a segment and the other didn't. Use for 'where on the lap was X "
+            "faster than Y' questions - mini-sectors localize gains to ~200m resolution "
+            "vs the 3-sector coarse default. Prefer over get_sector_comparison when the "
+            "user wants granular location-of-gain analysis."
+        ),
+        {
+            "driver_a": {"type": "string", "description": "3-letter code"},
+            "driver_b": {"type": "string", "description": "3-letter code"},
+            "lap_number": {"type": "integer", "description": "Lap number to compare."},
+            "round_number": {"type": "integer", "description": "The 2026 season round number."},
+            "session_type": {"type": "string", "description": "FastF1 session code: Q, R, FP1/2/3, SQ, S. Default Q."},
+            "n": {"type": "integer", "description": "Number of mini-sectors. Default 25."},
+        },
+        ["driver_a", "driver_b", "lap_number", "round_number"],
     ),
     _tool(
         "get_safety_car_periods",
@@ -883,6 +905,16 @@ def execute_tool(name: str, args: dict):
     if name == "get_sector_comparison":
         _require_args(args, ["round_number", "session_type", "driver_a", "driver_b"], name)
         return get_sector_comparison(args["round_number"], args["session_type"], args["driver_a"], args["driver_b"])
+    if name == "compare_mini_sectors":
+        _require_args(args, ["driver_a", "driver_b", "lap_number", "round_number"], name)
+        return f1_data.compare_mini_sectors(
+            driver_a=args["driver_a"],
+            driver_b=args["driver_b"],
+            lap_number=args["lap_number"],
+            round_number=args["round_number"],
+            session_type=args.get("session_type", "Q"),
+            n=args.get("n", 25),
+        )
     if name == "get_safety_car_periods":
         _require_args(args, ["round_number", "session_type"], name)
         return get_safety_car_periods(args["round_number"], args["session_type"])

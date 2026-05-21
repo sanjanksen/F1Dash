@@ -620,3 +620,36 @@ def test_search_editorial_content_tool_definition_registered():
     assert "search_editorial_content" in names
     openai_names = {t["function"]["name"] for t in tools.OPENAI_TOOL_DEFINITIONS}
     assert "search_editorial_content" in openai_names
+
+
+def test_execute_tool_compare_mini_sectors_validates_args():
+    """Missing required args raises ValueError."""
+    from tools import execute_tool
+    import pytest
+
+    with pytest.raises(ValueError) as exc:
+        execute_tool("compare_mini_sectors", {})
+    msg = str(exc.value)
+    assert "driver_a" in msg or "missing" in msg.lower()
+
+
+def test_execute_tool_compare_mini_sectors_dispatches(monkeypatch):
+    """execute_tool dispatches to f1_data.compare_mini_sectors with the right args."""
+    from tools import execute_tool
+    import f1_data
+
+    captured = {}
+    def _fake_compare(driver_a, driver_b, lap_number, round_number, session_type="Q", n=25):
+        captured["args"] = (driver_a, driver_b, lap_number, round_number, session_type, n)
+        return {"available": True, "segments": []}
+
+    monkeypatch.setattr(f1_data, "compare_mini_sectors", _fake_compare)
+    out = execute_tool("compare_mini_sectors", {
+        "driver_a": "VER", "driver_b": "NOR",
+        "lap_number": 21, "round_number": 11, "session_type": "Q",
+    })
+    assert out.get("available") is True
+    assert captured["args"][0] == "VER"
+    assert captured["args"][1] == "NOR"
+    assert captured["args"][2] == 21
+    assert captured["args"][3] == 11

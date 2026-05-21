@@ -1182,3 +1182,51 @@ def test_deterministic_path_omits_editorial_when_gate_returns_none():
         )
     editorial_items = [e for e in evidence if e.get("kind") == "editorial"]
     assert editorial_items == []
+
+
+def test_make_mini_sector_heatmap_widget_maps_all_fields():
+    import chat
+    result = {
+        "available": True,
+        "driver_a": "VER",
+        "driver_b": "NOR",
+        "lap_number": 21,
+        "round_number": 11,
+        "session_type": "Q",
+        "n_segments": 25,
+        "weather_state": "dry",
+        "segments": [
+            {"index": 0, "start_m": 0, "end_m": 200, "delta_s": -0.023,
+             "winner": "A", "drs_a_active": False, "drs_b_active": False},
+        ],
+        "cumulative_delta": [(0.0, 0.0), (200.0, -0.023)],
+        "total_delta_s": -0.213,
+        "segments_won_a": 15,
+        "segments_won_b": 10,
+        "segments_tied": 0,
+        "drs_mix_warning": False,
+    }
+    widget = chat._make_mini_sector_heatmap_widget(result)
+    assert widget["type"] == "mini_sector_heatmap"
+    assert widget["driver_a"] == "VER"
+    assert widget["driver_b"] == "NOR"
+    assert widget["lap_number"] == 21
+    assert widget["total_delta_s"] == -0.213
+    assert widget["drs_mix_warning"] is False
+    assert len(widget["segments"]) == 1
+    assert widget["cumulative_delta"] == [(0.0, 0.0), (200.0, -0.023)]
+
+
+def test_make_mini_sector_heatmap_widget_returns_unavailable_shape():
+    """When the tool returns available: False, the widget builder passes
+    that through with type=mini_sector_heatmap so the renderer can show
+    a friendly message."""
+    import chat
+    widget = chat._make_mini_sector_heatmap_widget({"available": False, "reason": "lap_not_found"})
+    assert widget["type"] == "mini_sector_heatmap"
+    assert widget.get("available") is False
+
+
+def test_system_prompt_mentions_compare_mini_sectors():
+    import chat
+    assert "compare_mini_sectors" in chat.SYSTEM_PROMPT

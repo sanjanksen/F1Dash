@@ -2322,6 +2322,215 @@ def get_clean_pace_summary(round_number: int, session_type: str,
     }
 
 
+def compute_mini_sectors(lap, n: int = 25) -> list[dict]:
+    """Split a lap into n equal cumulative-distance segments.
+
+    Returns a list of n dicts, each with:
+        - index: 0-based segment number
+        - start_m, end_m: distance bounds in meters
+        - time_s: seconds spent in this segment
+        - avg_speed_kmh, min_speed_kmh
+        - drs_active_pct: % of samples in segment where DRS was active
+                           (values 10/12/14 in FastF1's DRS column)
+
+    Returns [] if telemetry is missing, empty, or has < n*2 samples.
+    """
+    try:
+        tel = lap.get_car_data().add_distance()
+    except Exception:
+        return []
+
+    if tel is None or len(tel) < n * 2:
+        return []
+
+    required = ("Distance", "Time", "Speed")
+    if not all(col in tel.columns for col in required):
+        return []
+
+    distance = tel["Distance"].to_numpy(dtype=float)
+    total_distance = float(distance[-1])
+    if total_distance <= 0.0 or not np.isfinite(total_distance):
+        return []
+
+    # Time column may be timedelta — convert to seconds
+    time_col = tel["Time"]
+    if pd.api.types.is_timedelta64_dtype(time_col):
+        time_s = time_col.dt.total_seconds().to_numpy(dtype=float)
+    else:
+        time_s = time_col.to_numpy(dtype=float)
+
+    speed = tel["Speed"].to_numpy(dtype=float)
+    drs = tel["DRS"].to_numpy() if "DRS" in tel.columns else None
+
+    boundaries = np.linspace(0.0, total_distance, n + 1)
+    # Interpolate the lap time at each boundary so adjacent segments share an
+    # endpoint and segment times sum exactly to the total lap time.
+    boundary_times = np.interp(boundaries, distance, time_s)
+    segments: list[dict] = []
+
+    for i in range(n):
+        start_m = float(boundaries[i])
+        end_m = float(boundaries[i + 1])
+        # Inclusive on the lower bound, exclusive on the upper, except for the
+        # last segment which must include the final sample.
+        if i == n - 1:
+            mask = (distance >= start_m) & (distance <= end_m)
+        else:
+            mask = (distance >= start_m) & (distance < end_m)
+
+        if not mask.any():
+            segments.append({
+                "index": i,
+                "start_m": round(start_m, 2),
+                "end_m": round(end_m, 2),
+                "time_s": 0.0,
+                "avg_speed_kmh": 0.0,
+                "min_speed_kmh": 0.0,
+                "drs_active_pct": 0.0,
+            })
+            continue
+
+        seg_speeds = speed[mask]
+        seg_time = float(boundary_times[i + 1] - boundary_times[i])
+
+        if drs is not None:
+            seg_drs = drs[mask]
+            try:
+                drs_active = float(np.mean([int(v) in (10, 12, 14) for v in seg_drs]) * 100.0)
+            except Exception:
+                drs_active = 0.0
+        else:
+            drs_active = 0.0
+
+        segments.append({
+            "index": i,
+            "start_m": round(start_m, 2),
+            "end_m": round(end_m, 2),
+            "time_s": round(seg_time, 4),
+            "avg_speed_kmh": round(float(np.mean(seg_speeds)), 2),
+            "min_speed_kmh": round(float(np.min(seg_speeds)), 2),
+            "drs_active_pct": round(drs_active, 1),
+        })
+
+    return segments
+
+
+_DRS_ACTIVE_THRESHOLD_PCT = 30.0
+_MINI_SECTOR_TIE_THRESHOLD_S = 0.005
+
+
+def _build_mini_sector_comparison(
+    driver_a: str,
+    driver_b: str,
+    a_segments: list[dict],
+    b_segments: list[dict],
+) -> dict:
+    """Build the comparison dict from two equal-length segment lists.
+
+    Pure function — no telemetry I/O. Easy to unit test.
+    """
+    n = min(len(a_segments), len(b_segments))
+    out_segments: list[dict] = []
+    cumulative: list[tuple[float, float]] = [(0.0, 0.0)]
+    cum = 0.0
+    drs_mix = False
+
+    for i in range(n):
+        a = a_segments[i]
+        b = b_segments[i]
+        delta = round(a["time_s"] - b["time_s"], 4)
+        if abs(delta) < _MINI_SECTOR_TIE_THRESHOLD_S:
+            winner = "tie"
+        elif delta < 0:
+            winner = "A"
+        else:
+            winner = "B"
+
+        a_drs = a.get("drs_active_pct", 0.0) >= _DRS_ACTIVE_THRESHOLD_PCT
+        b_drs = b.get("drs_active_pct", 0.0) >= _DRS_ACTIVE_THRESHOLD_PCT
+        if a_drs != b_drs:
+            drs_mix = True
+
+        cum = round(cum + delta, 4)
+        cumulative.append((a["end_m"], cum))
+
+        out_segments.append({
+            "index": i,
+            "start_m": a["start_m"],
+            "end_m": a["end_m"],
+            "delta_s": delta,
+            "winner": winner,
+            "drs_a_active": a_drs,
+            "drs_b_active": b_drs,
+        })
+
+    return {
+        "driver_a": driver_a,
+        "driver_b": driver_b,
+        "segments": out_segments,
+        "cumulative_delta": cumulative,
+        "total_delta_s": round(cum, 4),
+        "segments_won_a": sum(1 for s in out_segments if s["winner"] == "A"),
+        "segments_won_b": sum(1 for s in out_segments if s["winner"] == "B"),
+        "segments_tied": sum(1 for s in out_segments if s["winner"] == "tie"),
+        "drs_mix_warning": drs_mix,
+    }
+
+
+def compare_mini_sectors(
+    driver_a: str,
+    driver_b: str,
+    lap_number: int,
+    round_number: int,
+    session_type: str = "Q",
+    n: int = 25,
+) -> dict:
+    """Compute per-driver mini-sectors and build the comparison."""
+    try:
+        session = _load_session(round_number, session_type)
+    except FastF1Error:
+        return _unavailable_payload(round_number, session_type)
+
+    try:
+        lap_a = session.laps.pick_drivers(driver_a).pick_laps(lap_number)
+        lap_b = session.laps.pick_drivers(driver_b).pick_laps(lap_number)
+    except Exception as e:
+        logger.warning("compare_mini_sectors lap pick failed: %s", type(e).__name__)
+        return {"available": False, "reason": "lap_not_found"}
+
+    if lap_a is None or lap_b is None or len(lap_a) == 0 or len(lap_b) == 0:
+        return {"available": False, "reason": "lap_not_found"}
+
+    lap_a_row = lap_a.iloc[0]
+    lap_b_row = lap_b.iloc[0]
+
+    a_segments = compute_mini_sectors(lap_a_row, n=n)
+    b_segments = compute_mini_sectors(lap_b_row, n=n)
+
+    if not a_segments or not b_segments:
+        return {"available": False, "reason": "telemetry_empty"}
+
+    weather_state = "unknown"
+    try:
+        if hasattr(session, "weather_data") and session.weather_data is not None:
+            rainfall = session.weather_data.get("Rainfall")
+            if rainfall is not None:
+                weather_state = "wet" if bool(rainfall.any()) else "dry"
+    except Exception:
+        pass
+
+    comparison = _build_mini_sector_comparison(driver_a, driver_b, a_segments, b_segments)
+    return {
+        "available": True,
+        "lap_number": lap_number,
+        "round_number": round_number,
+        "session_type": session_type,
+        "n_segments": n,
+        "weather_state": weather_state,
+        **comparison,
+    }
+
+
 def get_sector_comparison(round_number: int, session_type: str,
                           driver_a: str, driver_b: str) -> dict:
     """
