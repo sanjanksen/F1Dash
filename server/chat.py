@@ -117,6 +117,34 @@ def _make_qualifying_battle_widget(result: dict) -> dict:
     }
 
 
+def _make_mini_sector_heatmap_widget(result: dict) -> dict:
+    """Map compare_mini_sectors output to the mini_sector_heatmap widget shape."""
+    if not result.get("available", True):
+        return {
+            "type": "mini_sector_heatmap",
+            "available": False,
+            "reason": result.get("reason"),
+        }
+    return {
+        "type": "mini_sector_heatmap",
+        "available": True,
+        "driver_a": result.get("driver_a"),
+        "driver_b": result.get("driver_b"),
+        "lap_number": result.get("lap_number"),
+        "round_number": result.get("round_number"),
+        "session_type": result.get("session_type"),
+        "n_segments": result.get("n_segments"),
+        "weather_state": result.get("weather_state"),
+        "segments": result.get("segments") or [],
+        "cumulative_delta": result.get("cumulative_delta") or [],
+        "total_delta_s": result.get("total_delta_s"),
+        "segments_won_a": result.get("segments_won_a"),
+        "segments_won_b": result.get("segments_won_b"),
+        "segments_tied": result.get("segments_tied"),
+        "drs_mix_warning": result.get("drs_mix_warning", False),
+    }
+
+
 def _make_grip_commitment_summary(result: dict) -> dict | None:
     summary = result.get("summary") or {}
     driver_a = result.get("driver_a")
@@ -477,6 +505,8 @@ def _widgets_from_preloaded(preloaded: dict | None) -> list[dict]:
         return [_make_corner_comparison_widget(result)]
     if tool == "analyze_team_performance" and isinstance(result.get("corner_comparison"), dict):
         return [_make_corner_comparison_widget(result["corner_comparison"])]
+    if tool == "compare_mini_sectors":
+        return [_make_mini_sector_heatmap_widget(result)]
     return []
 
 
@@ -537,6 +567,8 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
             widgets.append(_make_active_aero_widget(item["result"]))
         elif tool == "analyze_undercut_overcut":
             widgets.append(_make_undercut_overcut_widget(item["result"]))
+        elif tool == "compare_mini_sectors":
+            widgets.append(_make_mini_sector_heatmap_widget(item["result"]))
 
     # Standalone corner_analysis widget: when cornering loads were run but there's no
     # qualifying_battle widget to embed grip_commitment into (pure grip comparison query).
@@ -879,6 +911,7 @@ Guidelines:
 - For qualifying storylines like who improved through Q1/Q2/Q3: use get_qualifying_progression
 - For trustworthy pace rankings, especially when traffic, deleted laps, or yellows matter: use get_clean_pace_summary
 - For sector-by-sector pace: use get_sector_comparison
+- For "where on the lap", "which mini-sector", or "localize the time gain" questions between two drivers, invoke `compare_mini_sectors` — it returns 25-segment time deltas at ~200 m resolution. Prefer over `get_sector_comparison` (which only has the 3 FIA sectors) when the user wants granular spatial localization of pace differences. If the tool returns `drs_mix_warning: true`, note that the gap in those segments is contaminated by DRS state, not just pace.
 - For causal qualifying battle questions like "why was Leclerc faster than Norris in quali?" use analyze_qualifying_battle
 - For lap-by-lap pace: use get_driver_lap_times
 - For corner-level analysis (braking points, gear shifts, throttle application): use get_lap_telemetry or get_telemetry_comparison. These include gear, RPM, throttle, and brake at every 100m — use them to make specific claims like "Norris was still in 4th gear at 1400m while Leclerc had already dropped to 3rd, braking 20m earlier"
