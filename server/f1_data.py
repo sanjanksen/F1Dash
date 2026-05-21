@@ -2322,6 +2322,99 @@ def get_clean_pace_summary(round_number: int, session_type: str,
     }
 
 
+def compute_mini_sectors(lap, n: int = 25) -> list[dict]:
+    """Split a lap into n equal cumulative-distance segments.
+
+    Returns a list of n dicts, each with:
+        - index: 0-based segment number
+        - start_m, end_m: distance bounds in meters
+        - time_s: seconds spent in this segment
+        - avg_speed_kmh, min_speed_kmh
+        - drs_active_pct: % of samples in segment where DRS was active
+                           (values 10/12/14 in FastF1's DRS column)
+
+    Returns [] if telemetry is missing, empty, or has < n*2 samples.
+    """
+    try:
+        tel = lap.get_car_data().add_distance()
+    except Exception:
+        return []
+
+    if tel is None or len(tel) < n * 2:
+        return []
+
+    required = ("Distance", "Time", "Speed")
+    if not all(col in tel.columns for col in required):
+        return []
+
+    distance = tel["Distance"].to_numpy(dtype=float)
+    total_distance = float(distance[-1])
+    if total_distance <= 0.0 or not np.isfinite(total_distance):
+        return []
+
+    # Time column may be timedelta — convert to seconds
+    time_col = tel["Time"]
+    if pd.api.types.is_timedelta64_dtype(time_col):
+        time_s = time_col.dt.total_seconds().to_numpy(dtype=float)
+    else:
+        time_s = time_col.to_numpy(dtype=float)
+
+    speed = tel["Speed"].to_numpy(dtype=float)
+    drs = tel["DRS"].to_numpy() if "DRS" in tel.columns else None
+
+    boundaries = np.linspace(0.0, total_distance, n + 1)
+    # Interpolate the lap time at each boundary so adjacent segments share an
+    # endpoint and segment times sum exactly to the total lap time.
+    boundary_times = np.interp(boundaries, distance, time_s)
+    segments: list[dict] = []
+
+    for i in range(n):
+        start_m = float(boundaries[i])
+        end_m = float(boundaries[i + 1])
+        # Inclusive on the lower bound, exclusive on the upper, except for the
+        # last segment which must include the final sample.
+        if i == n - 1:
+            mask = (distance >= start_m) & (distance <= end_m)
+        else:
+            mask = (distance >= start_m) & (distance < end_m)
+
+        if not mask.any():
+            segments.append({
+                "index": i,
+                "start_m": round(start_m, 2),
+                "end_m": round(end_m, 2),
+                "time_s": 0.0,
+                "avg_speed_kmh": 0.0,
+                "min_speed_kmh": 0.0,
+                "drs_active_pct": 0.0,
+            })
+            continue
+
+        seg_speeds = speed[mask]
+        seg_time = float(boundary_times[i + 1] - boundary_times[i])
+
+        if drs is not None:
+            seg_drs = drs[mask]
+            try:
+                drs_active = float(np.mean([int(v) in (10, 12, 14) for v in seg_drs]) * 100.0)
+            except Exception:
+                drs_active = 0.0
+        else:
+            drs_active = 0.0
+
+        segments.append({
+            "index": i,
+            "start_m": round(start_m, 2),
+            "end_m": round(end_m, 2),
+            "time_s": round(seg_time, 4),
+            "avg_speed_kmh": round(float(np.mean(seg_speeds)), 2),
+            "min_speed_kmh": round(float(np.min(seg_speeds)), 2),
+            "drs_active_pct": round(drs_active, 1),
+        })
+
+    return segments
+
+
 def get_sector_comparison(round_number: int, session_type: str,
                           driver_a: str, driver_b: str) -> dict:
     """

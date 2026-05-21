@@ -3824,3 +3824,122 @@ def test_analyze_undercut_overcut_runs_end_to_end_with_fallback(monkeypatch):
     assert result["session_type"] == "R"
     assert result["driver_code"] == "NOR"
     assert "rationale" in result and isinstance(result["rationale"], list)
+
+
+class TestMiniSectors:
+    def test_compute_mini_sectors_returns_n_segments(self):
+        """25 segments whose end_m - start_m sums within 1 m of total lap distance."""
+        from f1_data import compute_mini_sectors
+        import pandas as pd
+
+        # Synthesise a lap with 500 evenly-spaced samples covering 5000 m of distance
+        n_samples = 500
+        total_dist = 5000.0
+        distance = pd.Series([i * total_dist / (n_samples - 1) for i in range(n_samples)])
+        time_s = pd.Series([i * 90.0 / (n_samples - 1) for i in range(n_samples)])  # 90s lap
+        speed = pd.Series([200.0] * n_samples)
+        throttle = pd.Series([100.0] * n_samples)
+        drs = pd.Series([0] * n_samples)
+
+        # Lap stub: just needs .get_car_data().add_distance() to return a DataFrame
+        class _FakeTelemetry:
+            def __init__(self, df): self._df = df
+            def add_distance(self): return self._df
+
+        class _FakeLap:
+            def get_car_data(self_):
+                return _FakeTelemetry(pd.DataFrame({
+                    "Distance": distance, "Time": time_s, "Speed": speed,
+                    "Throttle": throttle, "DRS": drs,
+                }))
+
+        segments = compute_mini_sectors(_FakeLap(), n=25)
+        assert len(segments) == 25
+        # End_m of last segment within 1 m of total_dist
+        assert abs(segments[-1]["end_m"] - total_dist) < 1.0
+        # Start_m of segment 0 is 0
+        assert segments[0]["start_m"] == 0.0
+        # Sum of segment spans approx total
+        spans = sum(s["end_m"] - s["start_m"] for s in segments)
+        assert abs(spans - total_dist) < 1.0
+
+    def test_compute_mini_sectors_times_sum_to_lap_time(self):
+        """Segment time_s values sum within 5 ms of the lap's total time."""
+        from f1_data import compute_mini_sectors
+        import pandas as pd
+
+        n_samples = 500
+        total_dist = 5000.0
+        total_time = 90.0
+        distance = pd.Series([i * total_dist / (n_samples - 1) for i in range(n_samples)])
+        time_s = pd.Series([i * total_time / (n_samples - 1) for i in range(n_samples)])
+        speed = pd.Series([200.0] * n_samples)
+        throttle = pd.Series([100.0] * n_samples)
+        drs = pd.Series([0] * n_samples)
+
+        class _FakeTelemetry:
+            def __init__(self, df): self._df = df
+            def add_distance(self): return self._df
+
+        class _FakeLap:
+            def get_car_data(self_):
+                return _FakeTelemetry(pd.DataFrame({
+                    "Distance": distance, "Time": time_s, "Speed": speed,
+                    "Throttle": throttle, "DRS": drs,
+                }))
+
+        segments = compute_mini_sectors(_FakeLap(), n=25)
+        total = sum(s["time_s"] for s in segments)
+        assert abs(total - total_time) < 0.005
+
+    def test_compute_mini_sectors_returns_speed_aggregates(self):
+        """Each segment has avg_speed_kmh, min_speed_kmh, drs_active_pct."""
+        from f1_data import compute_mini_sectors
+        import pandas as pd
+
+        n_samples = 250
+        # Varying speeds so min < avg
+        speeds = [180.0 + 20.0 * ((i % 50) / 50.0) for i in range(n_samples)]
+        # DRS open on the first half, closed second half
+        drs_vals = [10 if i < n_samples // 2 else 0 for i in range(n_samples)]
+        df = pd.DataFrame({
+            "Distance": [i * 20.0 for i in range(n_samples)],
+            "Time": [i * 0.4 for i in range(n_samples)],
+            "Speed": speeds,
+            "Throttle": [100.0] * n_samples,
+            "DRS": drs_vals,
+        })
+
+        class _FakeTelemetry:
+            def __init__(self, df): self._df = df
+            def add_distance(self): return self._df
+
+        class _FakeLap:
+            def get_car_data(self_):
+                return _FakeTelemetry(df)
+
+        segments = compute_mini_sectors(_FakeLap(), n=25)
+        for s in segments:
+            assert "avg_speed_kmh" in s
+            assert "min_speed_kmh" in s
+            assert "drs_active_pct" in s
+            assert 0.0 <= s["drs_active_pct"] <= 100.0
+            assert s["min_speed_kmh"] <= s["avg_speed_kmh"]
+        # First few segments have DRS, last few don't
+        assert segments[0]["drs_active_pct"] > 50.0
+        assert segments[-1]["drs_active_pct"] < 50.0
+
+    def test_compute_mini_sectors_handles_empty_telemetry(self):
+        """Empty or too-short telemetry returns []."""
+        from f1_data import compute_mini_sectors
+        import pandas as pd
+
+        class _FakeTelemetry:
+            def __init__(self): self._df = pd.DataFrame({"Distance": [], "Time": [], "Speed": [], "Throttle": [], "DRS": []})
+            def add_distance(self): return self._df
+
+        class _FakeLap:
+            def get_car_data(self_):
+                return _FakeTelemetry()
+
+        assert compute_mini_sectors(_FakeLap(), n=25) == []
