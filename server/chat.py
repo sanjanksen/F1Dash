@@ -495,6 +495,18 @@ def _widgets_from_preloaded(preloaded: dict | None) -> list[dict]:
         return []
     tool = preloaded.get("tool")
     result = preloaded.get("result") or {}
+
+    # Registry-first dispatch: if the tool is a registered Feature, route
+    # the widget through feature.make_widget (respecting should_show_widget).
+    # Legacy if/elif below is the fallback for not-yet-migrated tools and
+    # shrinks as Phase D progresses.
+    from features.base import FEATURE_REGISTRY
+    feat = FEATURE_REGISTRY.get(tool)
+    if feat is not None:
+        if feat.should_show_widget(result):
+            return [feat.make_widget(result)]
+        return []
+
     if tool == "get_driver_race_story":
         return [_make_race_story_widget(result)]
     if tool == "analyze_qualifying_battle":
