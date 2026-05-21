@@ -32,3 +32,55 @@ def should_retrieve_editorial(analysis_mode: str | None) -> bool:
     if not analysis_mode:
         return False
     return analysis_mode in EDITORIAL_RELEVANT_MODES
+
+
+def build_resolver_subject_set(resolved: dict | None) -> frozenset[tuple[str, str]]:
+    """Convert resolver entities into a frozenset of (kind, ref) tuples that
+    can be intersected with article_subjects rows.
+
+    Drivers come as a list of dicts with a 'code' field (3-letter uppercase).
+    Team comes as a string (canonicalised to lowercase for matching).
+    Circuit comes as a slug (already lowercase).
+    """
+    if not resolved:
+        return frozenset()
+
+    subjects: set[tuple[str, str]] = set()
+
+    for driver in (resolved.get("drivers") or []):
+        code = (driver.get("code") or "").strip().upper()
+        if code:
+            subjects.add(("driver", code))
+
+    team = (resolved.get("team") or "").strip().lower()
+    if team:
+        # Normalise team name to slug-ish form to match article_subjects.ref.
+        # E.g. "Racing Bulls" -> "racing_bulls". The subject tagger uses the
+        # same normalisation.
+        subjects.add(("team", team.replace(" ", "_")))
+
+    circuit_slug = (resolved.get("circuit_slug") or "").strip().lower()
+    if circuit_slug:
+        subjects.add(("circuit", circuit_slug))
+
+    return frozenset(subjects)
+
+
+def chunk_passes_subject_filter(
+    chunk: dict,
+    resolver_subjects: frozenset[tuple[str, str]],
+) -> bool:
+    """A chunk passes when its parent article's subjects intersect the
+    resolver's. If the resolver produced no subjects (highly under-specified
+    question), the filter is a no-op — fall through to similarity-only.
+    """
+    if not resolver_subjects:
+        return True  # no resolver subjects → no filter, similarity must carry
+
+    raw_subjects = chunk.get("article_subjects") or []
+    chunk_subjects = {
+        (s.get("kind"), s.get("ref"))
+        for s in raw_subjects
+        if s.get("kind") and s.get("ref")
+    }
+    return bool(chunk_subjects & resolver_subjects)
