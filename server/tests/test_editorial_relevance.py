@@ -1,8 +1,15 @@
+import math
+from datetime import datetime, timedelta, timezone
+
 from editorial.relevance import (
     EDITORIAL_RELEVANT_MODES,
     should_retrieve_editorial,
 )
 from editorial.relevance import build_resolver_subject_set, chunk_passes_subject_filter
+from editorial.relevance import (
+    HALF_LIFE_DAYS,
+    apply_recency_multiplier,
+)
 
 
 def test_interpretive_modes_retrieve():
@@ -67,3 +74,44 @@ def test_chunk_passes_when_resolver_subjects_empty():
     drop every chunk on under-specified questions."""
     chunk = {"article_subjects": [{"kind": "driver", "ref": "NOR"}]}
     assert chunk_passes_subject_filter(chunk, frozenset())
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+def test_recency_multiplier_fresh_article_score_unchanged():
+    """An article published today gets multiplier ≈ 1.0."""
+    today = datetime.now(timezone.utc)
+    adjusted = apply_recency_multiplier(0.80, _iso(today), now=today)
+    assert abs(adjusted - 0.80) < 0.001
+
+
+def test_recency_multiplier_one_half_life_halves_score():
+    """At 21 days old, score should be ~exp(-1) of original."""
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=HALF_LIFE_DAYS)
+    adjusted = apply_recency_multiplier(0.80, _iso(old), now=now)
+    expected = 0.80 * math.exp(-1)
+    assert abs(adjusted - expected) < 0.001
+
+
+def test_recency_multiplier_handles_missing_date():
+    """Articles without published_at get a neutral 1.0 multiplier — no
+    information, no penalty."""
+    assert apply_recency_multiplier(0.80, None) == 0.80
+    assert apply_recency_multiplier(0.80, "") == 0.80
+
+
+def test_recency_multiplier_handles_unparseable_date():
+    """Garbage in shouldn't crash — fall back to neutral."""
+    assert apply_recency_multiplier(0.80, "not-a-date") == 0.80
+
+
+def test_recency_multiplier_never_below_floor():
+    """Very old articles still get a small positive multiplier so they can
+    surface if similarity is very high. Floor at 0.05 to avoid total zero."""
+    now = datetime.now(timezone.utc)
+    very_old = now - timedelta(days=400)
+    adjusted = apply_recency_multiplier(0.80, _iso(very_old), now=now)
+    assert adjusted >= 0.80 * 0.05 - 0.001

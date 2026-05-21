@@ -14,6 +14,9 @@ field. That's safer than confidently citing an irrelevant article.
 """
 from __future__ import annotations
 
+import math
+from datetime import datetime, timezone
+
 
 # Analysis modes where editorial context is consistently useful.
 # Modes NOT in this set will skip editorial retrieval entirely — saves an
@@ -84,3 +87,55 @@ def chunk_passes_subject_filter(
         if s.get("kind") and s.get("ref")
     }
     return bool(chunk_subjects & resolver_subjects)
+
+
+# Half-life for editorial relevance, in days. Tuned for the F1 race-weekend
+# cadence — an article is half as relevant 3 weeks after publication, which
+# matches the "every other weekend has a race" rhythm of the season.
+HALF_LIFE_DAYS: float = 21.0
+
+# Floor below which the recency multiplier is clamped. Prevents very old
+# articles from being totally zeroed out — keeps the gate from suppressing
+# a 5-year-old article that's still highly relevant by similarity.
+RECENCY_FLOOR: float = 0.05
+
+
+def _parse_published(published_at: str | None) -> datetime | None:
+    if not published_at:
+        return None
+    try:
+        if "T" in published_at:
+            dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+        else:
+            dt = datetime.fromisoformat(published_at)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
+def apply_recency_multiplier(
+    score: float,
+    published_at: str | None,
+    *,
+    now: datetime | None = None,
+) -> float:
+    """Multiply score by an exponential recency decay.
+
+    score × max(exp(-age_days / HALF_LIFE_DAYS), RECENCY_FLOOR)
+
+    Articles without published_at get a neutral 1.0 multiplier — no
+    information means no penalty.
+    """
+    dt = _parse_published(published_at)
+    if dt is None:
+        return score
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    age_days = max((now - dt).total_seconds() / 86400.0, 0.0)
+    multiplier = math.exp(-age_days / HALF_LIFE_DAYS)
+    multiplier = max(multiplier, RECENCY_FLOOR)
+    return score * multiplier
