@@ -828,13 +828,44 @@ def _require_args(args: dict, required: list[str], tool_name: str) -> None:
 
 def execute_tool(name: str, args: dict):
     # Registry dispatch (Phase B): if the tool is in FEATURE_REGISTRY,
-    # validate the feature's declared required_args then call feature.execute().
+    # validate required_args then call feature.execute(). Phase C3 adds
+    # audit logging around the call so live-production decisions show up
+    # in get_audit_log() (currently in-memory; JSONL flush is deferred).
     if name in _FEATURE_REGISTRY:
         feat = _FEATURE_REGISTRY[name]
         required = list(getattr(feat, "required_args", ()) or ())
         if required:
             _require_args(args, required, name)
-        return feat.execute(**args)
+        import time as _time
+        from features.base import audit_log as _audit_log
+        _t0 = _time.time()
+        try:
+            result = feat.execute(**args)
+        except Exception:
+            _audit_log(
+                feature_name=name,
+                question=None,
+                applies_to_passed=True,
+                relevance_score=None,
+                executed=True,
+                widget_emitted=False,
+                duration_ms=int((_time.time() - _t0) * 1000),
+                error=True,
+                source="execute_tool",
+            )
+            raise
+        _audit_log(
+            feature_name=name,
+            question=None,
+            applies_to_passed=True,
+            relevance_score=None,
+            executed=True,
+            widget_emitted=False,
+            duration_ms=int((_time.time() - _t0) * 1000),
+            error=False,
+            source="execute_tool",
+        )
+        return result
 
     if name == "get_team_radio":
         _require_args(args, ["round_number", "session_type"], name)
