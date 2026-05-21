@@ -13,7 +13,6 @@ Register with @register_feature; the registry is consulted by tools.py
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
 
 
 FEATURE_REGISTRY: dict[str, "Feature"] = {}
