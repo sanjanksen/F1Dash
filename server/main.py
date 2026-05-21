@@ -16,6 +16,60 @@ from chat import answer_f1_payload, answer_f1_question
 
 app = FastAPI(title="F1 Dashboard API", version="1.0.0")
 
+# ── Editorial ingestion scheduler ─────────────────────────────────────────────
+_scheduler = None
+
+
+def _safe_editorial_ingest():
+    try:
+        from editorial.rss import poll_rss_feeds, DEFAULT_FEEDS
+        from editorial.fia_poller import poll_fia_documents
+    except Exception as e:
+        logger.warning("Editorial modules unavailable: %s", type(e).__name__)
+        return
+    try:
+        poll_rss_feeds(DEFAULT_FEEDS)
+        poll_fia_documents()
+    except Exception as e:
+        logger.warning("Editorial ingestion run failed: %s", type(e).__name__, exc_info=True)
+
+
+def _build_scheduler():
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+    except ImportError:
+        logger.warning("APScheduler not installed — editorial ingestion disabled.")
+        return None
+    sched = BackgroundScheduler()
+    sched.add_job(_safe_editorial_ingest, "interval", hours=2, id="editorial_ingest")
+    return sched
+
+
+@app.on_event("startup")
+async def _start_editorial_scheduler():
+    global _scheduler
+    if os.getenv("EDITORIAL_INGEST_ENABLED", "true").lower() != "true":
+        logger.info("EDITORIAL_INGEST_ENABLED=false — scheduler not started.")
+        return
+    _scheduler = _build_scheduler()
+    if _scheduler is None:
+        return
+    try:
+        _scheduler.start()
+        logger.info("Editorial ingestion scheduler started — every 2 hours.")
+    except Exception as e:
+        logger.warning("Failed to start editorial scheduler: %s", type(e).__name__)
+
+
+@app.on_event("shutdown")
+async def _stop_editorial_scheduler():
+    global _scheduler
+    if _scheduler is not None and getattr(_scheduler, "running", False):
+        try:
+            _scheduler.shutdown(wait=False)
+        except Exception as e:
+            logger.warning("Editorial scheduler shutdown error: %s", type(e).__name__)
+
 _cors_env = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:4173")
 _cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
 
