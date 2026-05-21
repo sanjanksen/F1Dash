@@ -156,3 +156,35 @@ def test_rank_by_relevance_clamps_invalid_scores():
     scores = {f.name: s for f, s in ranked}
     assert scores["_bad"] == 1.0
     assert scores["_neg"] == 0.0
+
+
+from features.base import audit_log, get_audit_log, clear_audit_log
+
+
+def test_audit_log_records_feature_decisions():
+    """audit_log appends a decision record for inspection later."""
+    clear_audit_log()
+    audit_log(
+        feature_name="_dummy",
+        question="test q",
+        applies_to_passed=True,
+        relevance_score=0.8,
+        executed=True,
+        widget_emitted=True,
+        duration_ms=42,
+    )
+    records = get_audit_log()
+    assert len(records) == 1
+    r = records[0]
+    assert r["feature_name"] == "_dummy"
+    assert r["relevance_score"] == 0.8
+    assert r["executed"] is True
+    assert "ts" in r  # timestamp added automatically
+
+
+def test_clear_audit_log_resets_state():
+    audit_log(feature_name="_a", question="q", applies_to_passed=True,
+              relevance_score=1.0, executed=False, widget_emitted=False)
+    assert len(get_audit_log()) >= 1
+    clear_audit_log()
+    assert get_audit_log() == []

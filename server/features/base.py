@@ -12,6 +12,7 @@ Register with @register_feature; the registry is consulted by tools.py
 """
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 
 
@@ -73,3 +74,28 @@ def register_feature(cls):
 
     FEATURE_REGISTRY[cls.name] = cls()  # store instance
     return cls
+
+
+_AUDIT_LOG: list[dict] = []
+
+
+def audit_log(**fields) -> None:
+    """Append a feature-decision record. Best-effort, never raises.
+
+    Records are kept in-memory for the current process. In production,
+    a periodic flush to JSONL would persist them; for hobby-scale this
+    is fine.
+    """
+    try:
+        fields["ts"] = time.time()
+        _AUDIT_LOG.append(fields)
+    except Exception:
+        pass  # audit must never break the main flow
+
+
+def get_audit_log() -> list[dict]:
+    return list(_AUDIT_LOG)
+
+
+def clear_audit_log() -> None:
+    _AUDIT_LOG.clear()
