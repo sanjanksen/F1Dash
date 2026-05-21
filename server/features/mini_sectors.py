@@ -29,9 +29,13 @@ class MiniSectorsFeature(Feature):
     name = "compare_mini_sectors"
     applies_to = ("pair_of_drivers", "lap")
     description = (
-        "Compare two drivers across 25 equal-distance mini-sectors of a "
-        "single lap. Returns per-segment delta + cumulative delta along "
-        "distance, segments-won counts, DRS-mix warning."
+        "PRIMITIVE TOOL. Compare two drivers across 25 equal-distance mini-sectors of a single lap. "
+        "Returns per-segment time delta (driver_a - driver_b), cumulative delta along "
+        "distance, segment-win counts, and a DRS-mix warning if one driver had DRS "
+        "open in a segment and the other didn't. Use for 'where on the lap was X "
+        "faster than Y' questions - mini-sectors localize gains to ~200m resolution "
+        "vs the 3-sector coarse default. Prefer over get_sector_comparison when the "
+        "user wants granular location-of-gain analysis."
     )
     required_args = _REQUIRED_ARGS
     tool_schema = {
