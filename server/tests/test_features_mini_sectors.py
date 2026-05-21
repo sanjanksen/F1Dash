@@ -63,6 +63,35 @@ def test_mini_sectors_relevance_high_for_qualifying_battle_mode():
     assert score >= 0.5
 
 
+def test_mini_sectors_mode_only_does_not_fire():
+    """Mode match without keyword intent must score below the 0.5 fire
+    threshold. Otherwise every qualifying_battle conversation would fire
+    mini-sectors regardless of what the user actually asked."""
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    FEATURE_REGISTRY.clear()
+    discover_features()
+    feat = FEATURE_REGISTRY["compare_mini_sectors"]
+    score = feat.is_relevant_for(
+        "What is the weather forecast?",
+        {"analysis_mode": "qualifying_battle"},
+    )
+    assert score < 0.5
+
+
+def test_mini_sectors_keyword_alone_fires_without_mode():
+    """Keyword intent alone (no mode context) should still fire — the user
+    is explicitly asking about sector / lap-time differences."""
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    FEATURE_REGISTRY.clear()
+    discover_features()
+    feat = FEATURE_REGISTRY["compare_mini_sectors"]
+    score = feat.is_relevant_for("Where did Norris gain time?", {})
+    assert score >= 0.5
+    assert score < 0.85  # ranked below the keyword+mode case
+
+
 def test_mini_sectors_should_show_widget_suppresses_tiny_delta():
     from features.base import FEATURE_REGISTRY
     from features.registry import discover_features

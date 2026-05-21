@@ -16,8 +16,9 @@ _RELEVANT_KEYWORDS = (
     "gain time", "lost", "gained", "split", "lap-by-lap",
 )
 
-# Mode-based bonus — if the resolver puts us in qualifying_battle, mini-sectors
-# are usually useful even when the question doesn't say "where".
+# Compatible modes act as an eligibility gate only — they cap the score below
+# the fire threshold (0.5) when no keyword intent is present. Mode classifier
+# already narrowed scope upstream; this predicate confirms specific intent.
 _RELEVANT_MODES = frozenset({"qualifying_battle", "driver_comparison"})
 
 _REQUIRED_ARGS = ("driver_a", "driver_b", "lap_number", "round_number")
@@ -50,12 +51,16 @@ class MiniSectorsFeature(Feature):
         q = (question or "").lower()
         mode = (resolved or {}).get("analysis_mode")
 
-        score = 0.0
-        if mode in _RELEVANT_MODES:
-            score = max(score, 0.7)
-        if any(kw in q for kw in _RELEVANT_KEYWORDS):
-            score = max(score, 0.8)
-        return score
+        has_keyword = any(kw in q for kw in _RELEVANT_KEYWORDS)
+        has_mode = mode in _RELEVANT_MODES
+
+        if has_keyword and has_mode:
+            return 0.85
+        if has_keyword:
+            return 0.65
+        if has_mode:
+            return 0.45  # eligibility candidate but no explicit intent — below fire threshold
+        return 0.0
 
     def execute(self, **args) -> dict:
         return f1_data.compare_mini_sectors(
