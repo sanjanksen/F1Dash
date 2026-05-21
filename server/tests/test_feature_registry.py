@@ -188,3 +188,153 @@ def test_clear_audit_log_resets_state():
     assert len(get_audit_log()) >= 1
     clear_audit_log()
     assert get_audit_log() == []
+
+
+from features.registry import run_pipeline
+
+
+def test_run_pipeline_executes_only_features_above_threshold():
+    """Features with score >= 0.5 execute and produce results; below
+    threshold are NOT executed (raises in execute() if it ever runs)."""
+
+    @register_feature
+    class _Fires(_DummyFeature):
+        name = "_fires"
+        applies_to = ("pair_of_drivers",)
+        def is_relevant_for(self, q, r): return 0.9
+        def execute(self, **a): return {"ok": True, "value": 7}
+        def make_widget(self, r): return {"type": "fires_widget", "value": r["value"]}
+        def should_show_widget(self, r): return True
+
+    @register_feature
+    class _NotRelevant(_DummyFeature):
+        name = "_not_relevant"
+        applies_to = ("pair_of_drivers",)
+        def is_relevant_for(self, q, r): return 0.1
+        def execute(self, **a): raise AssertionError("must not execute")
+        def make_widget(self, r): return {}
+        def should_show_widget(self, r): return False
+
+    resolved = {"drivers": [{"code": "A"}, {"code": "B"}]}
+    results = run_pipeline("any q", resolved)
+    names = [f.name for f, _, _ in results]
+    assert "_fires" in names
+    assert "_not_relevant" not in names
+    fires_entry = next(r for r in results if r[0].name == "_fires")
+    assert fires_entry[1] == {"ok": True, "value": 7}
+    assert fires_entry[2] == {"type": "fires_widget", "value": 7}
+
+
+def test_run_pipeline_passes_args_by_feature_name_to_execute():
+    """args_by_feature is a dict keyed by feature name; each value is the kwargs
+    dict for that feature's execute() call."""
+
+    @register_feature
+    class _Echo(_DummyFeature):
+        name = "_echo"
+        applies_to = ("pair_of_drivers",)
+        def is_relevant_for(self, q, r): return 1.0
+        def execute(self, **a): return {"got": a}
+        def make_widget(self, r): return {"type": "echo"}
+        def should_show_widget(self, r): return True
+
+    resolved = {"drivers": [{"code": "A"}, {"code": "B"}]}
+    results = run_pipeline("q", resolved, args_by_feature={"_echo": {"x": 1, "y": 2}})
+    assert results[0][1] == {"got": {"x": 1, "y": 2}}
+
+
+def test_run_pipeline_suppresses_widget_when_should_show_returns_false():
+    """When should_show_widget returns False, the widget slot is None but the
+    execute result is still returned (so callers can still inspect it)."""
+
+    @register_feature
+    class _Quiet(_DummyFeature):
+        name = "_quiet"
+        applies_to = ("pair_of_drivers",)
+        def is_relevant_for(self, q, r): return 0.8
+        def execute(self, **a): return {"available": True, "noise": "yes"}
+        def make_widget(self, r): return {"type": "quiet"}
+        def should_show_widget(self, r): return False  # always suppress
+
+    resolved = {"drivers": [{"code": "A"}, {"code": "B"}]}
+    results = run_pipeline("q", resolved)
+    assert len(results) == 1
+    feat, result, widget = results[0]
+    assert feat.name == "_quiet"
+    assert result == {"available": True, "noise": "yes"}
+    assert widget is None
+
+
+def test_run_pipeline_catches_execute_exceptions():
+    """If feature.execute() raises, the pipeline records an error result
+    instead of propagating. Widget gate sees the error result."""
+
+    @register_feature
+    class _Broken(_DummyFeature):
+        name = "_broken"
+        applies_to = ("pair_of_drivers",)
+        def is_relevant_for(self, q, r): return 0.9
+        def execute(self, **a): raise RuntimeError("kaboom")
+        def make_widget(self, r): return {"type": "broken"}
+        def should_show_widget(self, r): return r.get("available", True)
+
+    resolved = {"drivers": [{"code": "A"}, {"code": "B"}]}
+    results = run_pipeline("q", resolved)
+    assert len(results) == 1
+    feat, result, widget = results[0]
+    assert feat.name == "_broken"
+    assert result == {"available": False, "error": "RuntimeError"}
+    # should_show_widget returns r.get("available", True) -> False, so widget is None
+    assert widget is None
+
+
+def test_run_pipeline_populates_audit_log():
+    """Every above-threshold feature gets an audit record with executed=True;
+    below-threshold ones get executed=False. ts is auto-added."""
+    from features.base import clear_audit_log, get_audit_log
+
+    @register_feature
+    class _A(_DummyFeature):
+        name = "_a"
+        applies_to = ("pair_of_drivers",)
+        def is_relevant_for(self, q, r): return 0.9
+        def execute(self, **a): return {"ok": True}
+        def make_widget(self, r): return {"type": "a"}
+        def should_show_widget(self, r): return True
+
+    @register_feature
+    class _B(_DummyFeature):
+        name = "_b"
+        applies_to = ("pair_of_drivers",)
+        def is_relevant_for(self, q, r): return 0.2
+        def execute(self, **a): return {}
+        def make_widget(self, r): return {}
+        def should_show_widget(self, r): return False
+
+    clear_audit_log()
+    resolved = {"drivers": [{"code": "A"}, {"code": "B"}]}
+    run_pipeline("q", resolved)
+    records = {r["feature_name"]: r for r in get_audit_log()}
+    assert records["_a"]["executed"] is True
+    assert records["_a"]["widget_emitted"] is True
+    assert records["_a"]["relevance_score"] == 0.9
+    assert "ts" in records["_a"]
+    assert records["_b"]["executed"] is False
+    assert records["_b"]["widget_emitted"] is False
+
+
+def test_run_pipeline_respects_custom_threshold():
+    """Passing threshold=0.7 means a 0.6 feature does NOT fire."""
+
+    @register_feature
+    class _Mid(_DummyFeature):
+        name = "_mid"
+        applies_to = ("pair_of_drivers",)
+        def is_relevant_for(self, q, r): return 0.6
+        def execute(self, **a): raise AssertionError("must not execute at threshold=0.7")
+        def make_widget(self, r): return {}
+        def should_show_widget(self, r): return False
+
+    resolved = {"drivers": [{"code": "A"}, {"code": "B"}]}
+    results = run_pipeline("q", resolved, threshold=0.7)
+    assert results == []

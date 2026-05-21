@@ -4,9 +4,10 @@ from __future__ import annotations
 import importlib
 import logging
 import pkgutil
+import time
 from typing import Iterable
 
-from features.base import Feature, FEATURE_REGISTRY
+from features.base import Feature, FEATURE_REGISTRY, audit_log
 
 logger = logging.getLogger(__name__)
 
@@ -111,3 +112,82 @@ def rank_by_relevance(
         scored.append((feat, score))
     scored.sort(key=lambda x: x[1], reverse=True)
     return scored
+
+
+def run_pipeline(
+    question: str,
+    resolved: dict | None,
+    args_by_feature: dict[str, dict] | None = None,
+    threshold: float = 0.5,
+) -> list[tuple[Feature, dict, dict | None]]:
+    """End-to-end registry pipeline: candidates → rank → execute → widget gate → audit.
+
+    Returns one (feature, execute_result, widget_or_none) per feature that
+    cleared applies_to AND scored at or above `threshold`. The audit log is
+    populated as a side effect for both fired and skipped features.
+
+    feature.execute() exceptions are caught — the entry's result becomes
+    {"available": False, "error": <ExceptionType>} and the widget gate
+    decides whether to emit a widget for it (usually False).
+    """
+    args_by_feature = args_by_feature or {}
+    out: list[tuple[Feature, dict, dict | None]] = []
+
+    cands = candidates_for(resolved)
+    for feat, score in rank_by_relevance(question, resolved, cands):
+        if score < threshold:
+            audit_log(
+                feature_name=feat.name,
+                question=question,
+                applies_to_passed=True,
+                relevance_score=score,
+                executed=False,
+                widget_emitted=False,
+                duration_ms=0,
+            )
+            continue
+
+        args = args_by_feature.get(feat.name, {})
+        t0 = time.time()
+        try:
+            result = feat.execute(**args)
+        except Exception as e:
+            logger.warning(
+                "run_pipeline: feature %s execute() raised %s",
+                feat.name, type(e).__name__,
+            )
+            result = {"available": False, "error": type(e).__name__}
+        duration_ms = int((time.time() - t0) * 1000)
+
+        try:
+            show = feat.should_show_widget(result)
+        except Exception as e:
+            logger.warning(
+                "run_pipeline: feature %s should_show_widget raised %s",
+                feat.name, type(e).__name__,
+            )
+            show = False
+
+        widget = None
+        if show:
+            try:
+                widget = feat.make_widget(result)
+            except Exception as e:
+                logger.warning(
+                    "run_pipeline: feature %s make_widget raised %s",
+                    feat.name, type(e).__name__,
+                )
+                widget = None
+
+        audit_log(
+            feature_name=feat.name,
+            question=question,
+            applies_to_passed=True,
+            relevance_score=score,
+            executed=True,
+            widget_emitted=widget is not None,
+            duration_ms=duration_ms,
+        )
+        out.append((feat, result, widget))
+
+    return out
