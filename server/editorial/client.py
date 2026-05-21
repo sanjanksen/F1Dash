@@ -108,6 +108,15 @@ def insert_subjects(subjects: list[dict[str, Any]]) -> int:
     return len(rows)
 
 
+def insert_gate_audit(row: dict[str, Any]) -> None:
+    """Best-effort insert into editorial_gate_audit. Never raises."""
+    try:
+        client = _get_supabase_client()
+        client.from_("editorial_gate_audit").insert(row).execute()
+    except Exception as e:
+        logger.warning("insert_gate_audit failed: %s", type(e).__name__)
+
+
 def call_match_chunks(
     query_embedding: list[float],
     query_text: str | None = None,

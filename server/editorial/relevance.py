@@ -14,8 +14,13 @@ field. That's safer than confidently citing an irrelevant article.
 """
 from __future__ import annotations
 
+import logging
 import math
 from datetime import datetime, timezone
+
+from editorial import client as _client
+
+logger = logging.getLogger(__name__)
 
 
 # Analysis modes where editorial context is consistently useful.
@@ -139,3 +144,45 @@ def apply_recency_multiplier(
     multiplier = math.exp(-age_days / HALF_LIFE_DAYS)
     multiplier = max(multiplier, RECENCY_FLOOR)
     return score * multiplier
+
+
+def log_gate_decision(
+    *,
+    question: str,
+    analysis_mode: str,
+    resolver_subjects: frozenset[tuple[str, str]],
+    candidates: list[dict],
+    survivors: list[dict],
+    threshold_used: float,
+) -> None:
+    """Record one gate decision for later auditing. Best-effort — failures
+    are logged but never raised."""
+    survivor_ids = {c.get("chunk_id") for c in survivors if c.get("chunk_id")}
+    dropped: list[dict] = []
+    for c in candidates:
+        cid = c.get("chunk_id")
+        if cid in survivor_ids:
+            continue
+        dropped.append({
+            "chunk_id": cid,
+            "similarity": c.get("similarity"),
+            "published_at": c.get("published_at"),
+            "reason": c.get("_drop_reason", "below_threshold"),
+        })
+
+    row = {
+        "question": question[:1000],
+        "analysis_mode": analysis_mode,
+        "resolver_subjects": [
+            {"kind": k, "ref": r} for (k, r) in resolver_subjects
+        ],
+        "candidate_count": len(candidates),
+        "kept_count": len(survivors),
+        "threshold_used": threshold_used,
+        "dropped": dropped,
+        "kept_chunk_ids": list(survivor_ids),
+    }
+    try:
+        _client.insert_gate_audit(row)
+    except Exception as e:
+        logger.warning("log_gate_decision audit insert failed: %s", type(e).__name__)

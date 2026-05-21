@@ -115,3 +115,51 @@ def test_recency_multiplier_never_below_floor():
     very_old = now - timedelta(days=400)
     adjusted = apply_recency_multiplier(0.80, _iso(very_old), now=now)
     assert adjusted >= 0.80 * 0.05 - 0.001
+
+
+from unittest.mock import patch
+
+from editorial.relevance import log_gate_decision
+
+
+def test_log_gate_decision_calls_supabase_insert():
+    """log_gate_decision should write one row to editorial_gate_audit via
+    the existing postgrest client wrapper."""
+    candidates = [
+        {"chunk_id": 1, "similarity": 0.72, "published_at": "2026-05-01"},
+        {"chunk_id": 2, "similarity": 0.55, "published_at": "2026-05-15"},
+    ]
+    survivors = [
+        {"chunk_id": 1, "similarity": 0.72, "published_at": "2026-05-01"},
+    ]
+
+    with patch("editorial.relevance._client") as mock_client:
+        log_gate_decision(
+            question="why was norris faster",
+            analysis_mode="qualifying_battle",
+            resolver_subjects=frozenset([("driver", "NOR")]),
+            candidates=candidates,
+            survivors=survivors,
+            threshold_used=0.62,
+        )
+        mock_client.insert_gate_audit.assert_called_once()
+        row = mock_client.insert_gate_audit.call_args.args[0]
+        assert row["question"] == "why was norris faster"
+        assert row["analysis_mode"] == "qualifying_battle"
+        assert row["candidate_count"] == 2
+        assert row["kept_count"] == 1
+
+
+def test_log_gate_decision_does_not_crash_on_db_unavailable():
+    """If the audit insert fails, the main path must continue. Audit is
+    best-effort, never blocking."""
+    with patch("editorial.relevance._client") as mock_client:
+        mock_client.insert_gate_audit.side_effect = Exception("supabase down")
+        log_gate_decision(
+            question="q",
+            analysis_mode="qualifying_battle",
+            resolver_subjects=frozenset(),
+            candidates=[],
+            survivors=[],
+            threshold_used=0.62,
+        )
