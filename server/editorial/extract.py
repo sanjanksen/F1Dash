@@ -37,12 +37,76 @@ SOURCE_FROM_HOST: dict[str, str] = {
     "www.fia.com": "FIA",
     "formula1.com": "Formula1.com",
     "www.formula1.com": "Formula1.com",
+    "crash.net": "Crash.net",
+    "www.crash.net": "Crash.net",
+    "total-motorsport.com": "Total Motorsport",
+    "www.total-motorsport.com": "Total Motorsport",
+    "f1technical.net": "F1Technical",
+    "www.f1technical.net": "F1Technical",
 }
+
+
+def classify_fia_doc(url: str) -> str:
+    """Map an FIA PDF URL substring to a granular doc_type.
+
+    Match against the basename so that the FIA's parent path `/decision-document/`
+    does not cause every PDF to fall into `fia_stewards`.
+    """
+    u = url.lower()
+    basename = u.rsplit("/", 1)[-1]
+    if "scrutineering" in basename:
+        return "fia_scrutineering"
+    if "pirelli" in basename:
+        return "fia_pirelli_preview"
+    if ("post_race_checks" in basename or "post-race-checks" in basename
+            or "post_race_check" in basename or "post-race_check" in basename
+            or "post-race_checks" in basename):
+        return "fia_post_race_check"
+    if "competition_visa" in basename or "competition-visa" in basename:
+        return "fia_competition_visa"
+    if ("power_unit" in basename or "pu_elements" in basename
+            or "power-unit" in basename or "pu-elements" in basename):
+        return "fia_pu_info"
+    if "stewards" in basename or "decision" in basename or "penalty" in basename:
+        return "fia_stewards"
+    return "other"
 
 
 def _source_from_url(url: str) -> str:
     host = urlparse(url).netloc.lower()
     return SOURCE_FROM_HOST.get(host, host or "unknown")
+
+
+def _f1technical_fallback(html: str) -> str | None:
+    """Per-host fallback for f1technical.net when trafilatura returns empty.
+
+    F1Technical uses <article class="a-body"> inside <div class="content article">,
+    which trafilatura's generic heuristics miss. Scoped narrowly to this host so
+    we don't pull nav/footer noise from other sites.
+    """
+    if not html:
+        return None
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        candidates = [
+            ("article", {"class": re.compile(r"a-body", re.I)}),
+            ("div", {"class": re.compile(r"content\s+article", re.I)}),
+            ("div", {"class": re.compile(r"news[\-_]?(text|body|content)", re.I)}),
+            ("div", {"id": re.compile(r"news[\-_]?(text|body|content)", re.I)}),
+            ("article", None),
+        ]
+        for tag, attrs in candidates:
+            el = soup.find(tag, attrs) if attrs else soup.find(tag)
+            if not el:
+                continue
+            text = el.get_text(separator="\n", strip=True)
+            if text and len(text) > 200:
+                return text
+    except Exception as e:
+        logger.warning("_f1technical_fallback crashed: %s", type(e).__name__)
+        return None
+    return None
 
 
 def extract_url(url: str) -> dict | None:
@@ -66,8 +130,12 @@ def extract_url(url: str) -> dict | None:
             include_tables=False,
         )
         if not body or not body.strip():
-            logger.warning("trafilatura.extract empty body for %s", url)
-            return None
+            host = urlparse(url).netloc.lower()
+            if "f1technical.net" in host:
+                body = _f1technical_fallback(downloaded)
+            if not body or not body.strip():
+                logger.warning("trafilatura.extract empty body for %s", url)
+                return None
 
         title = None
         author = None
@@ -160,5 +228,5 @@ def extract_fia_pdf(pdf_path_or_url: str) -> dict | None:
         "author": None,
         "published_at": _guess_pdf_date(pdf_path_or_url),
         "body": body.strip(),
-        "doc_type": "fia_scrutineering",
+        "doc_type": classify_fia_doc(pdf_path_or_url),
     }
