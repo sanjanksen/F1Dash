@@ -8,6 +8,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from dotenv import load_dotenv  # noqa: E402
+load_dotenv(dotenv_path=str(Path(__file__).resolve().parent.parent.parent / ".env"))
+
 from editorial.ingest import ingest_fia_pdf  # noqa: E402
 
 

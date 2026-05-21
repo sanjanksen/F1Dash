@@ -1,4 +1,10 @@
-"""Supabase client singleton + low-level table operations for editorial RAG."""
+"""PostgREST client + low-level table operations for editorial RAG.
+
+Uses the `postgrest` package directly instead of the umbrella `supabase` package
+because the latter pulls `pyiceberg` (Cython-built, doesn't compile cleanly on
+Windows + Python 3.14). We only need PostgREST for table queries and RPC — the
+storage / realtime / functions layers of supabase-py aren't used here.
+"""
 from __future__ import annotations
 
 import logging
@@ -13,7 +19,7 @@ _client = None
 
 
 def _get_supabase_client():
-    """Return a cached Supabase client. Raises EditorialUnavailable if env vars missing."""
+    """Return a cached PostgREST client. Raises EditorialUnavailable if env vars missing."""
     global _client
     if _client is not None:
         return _client
@@ -24,11 +30,19 @@ def _get_supabase_client():
         raise EditorialUnavailable("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set")
 
     try:
-        from supabase import create_client
+        from postgrest import SyncPostgrestClient
     except ImportError as e:
-        raise EditorialUnavailable(f"supabase-py not installed: {e}") from e
+        raise EditorialUnavailable(f"postgrest not installed: {e}") from e
 
-    _client = create_client(url, key)
+    # Supabase exposes PostgREST at /rest/v1; auth via apikey + Bearer headers.
+    base_url = url.rstrip("/") + "/rest/v1"
+    _client = SyncPostgrestClient(
+        base_url,
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+        },
+    )
     return _client
 
 
@@ -40,7 +54,7 @@ def reset_client_for_tests() -> None:
 def find_article_by_url(url: str) -> dict | None:
     client = _get_supabase_client()
     try:
-        res = client.table("articles").select("id, url").eq("url", url).limit(1).execute()
+        res = client.from_("articles").select("id, url").eq("url", url).limit(1).execute()
     except Exception as e:
         logger.warning("find_article_by_url failed: %s", type(e).__name__)
         return None
@@ -52,7 +66,11 @@ def upsert_article(article: dict[str, Any]) -> dict | None:
     """Insert an article row, returning the inserted row (with id). Idempotent on url."""
     client = _get_supabase_client()
     try:
-        res = client.table("articles").upsert(article, on_conflict="url").execute()
+        res = (
+            client.from_("articles")
+            .upsert(article, on_conflict="url", returning="representation")
+            .execute()
+        )
     except Exception as e:
         logger.warning("upsert_article failed for url=%s: %s", article.get("url"), type(e).__name__)
         return None
@@ -65,7 +83,7 @@ def insert_chunks(chunks: list[dict[str, Any]]) -> int:
         return 0
     client = _get_supabase_client()
     try:
-        res = client.table("article_chunks").insert(chunks).execute()
+        res = client.from_("article_chunks").insert(chunks, returning="representation").execute()
     except Exception as e:
         logger.warning("insert_chunks failed: %s", type(e).__name__)
         return 0
@@ -78,9 +96,11 @@ def insert_subjects(subjects: list[dict[str, Any]]) -> int:
         return 0
     client = _get_supabase_client()
     try:
-        res = client.table("article_subjects").upsert(
-            subjects, on_conflict="article_id,kind,ref"
-        ).execute()
+        res = (
+            client.from_("article_subjects")
+            .upsert(subjects, on_conflict="article_id,kind,ref", returning="representation")
+            .execute()
+        )
     except Exception as e:
         logger.warning("insert_subjects failed: %s", type(e).__name__)
         return 0
@@ -113,9 +133,12 @@ def fts_search_articles(query: str, limit: int = 5, min_date: str | None = None)
     """Fallback when no embeddings: rank articles by Postgres FTS on body_tsv."""
     client = _get_supabase_client()
     try:
-        q = client.table("articles").select(
-            "id, url, title, source, published_at, raw_body"
-        ).text_search("body_tsv", query, options={"type": "websearch"}).limit(limit)
+        q = (
+            client.from_("articles")
+            .select("id, url, title, source, published_at, raw_body")
+            .text_search("body_tsv", query, options={"type": "websearch"})
+            .limit(limit)
+        )
         if min_date:
             q = q.gte("published_at", min_date)
         res = q.execute()

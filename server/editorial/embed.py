@@ -61,18 +61,21 @@ def embed_texts(
         logger.warning("Gemini client init failed: %s", type(e).__name__)
         return None
 
+    # Gemini's embed_content treats contents=[...] as ONE content (concatenated),
+    # not a batch. Loop one text per call to get one embedding per input.
     vectors: list[list[float]] = []
-    for i in range(0, len(prepared), _BATCH_SIZE):
-        batch = prepared[i : i + _BATCH_SIZE]
+    for text in prepared:
         try:
             resp = client.models.embed_content(
                 model=_MODEL,
-                contents=batch,
+                contents=text,
                 config=types.EmbedContentConfig(output_dimensionality=output_dim),
             )
         except Exception as e:
             logger.warning("Gemini embedding call failed: %s", type(e).__name__)
             return None
-        for emb in resp.embeddings:
-            vectors.append(list(emb.values))
+        if not resp.embeddings:
+            logger.warning("Gemini returned no embeddings for input.")
+            return None
+        vectors.append(list(resp.embeddings[0].values))
     return vectors

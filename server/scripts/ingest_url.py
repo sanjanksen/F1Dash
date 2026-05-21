@@ -9,6 +9,10 @@ from pathlib import Path
 # Make sibling modules importable when run as `python -m scripts.ingest_url`
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Load .env from project root the same way main.py does.
+from dotenv import load_dotenv  # noqa: E402
+load_dotenv(dotenv_path=str(Path(__file__).resolve().parent.parent.parent / ".env"))
+
 from editorial.ingest import ingest_url  # noqa: E402
 
 
