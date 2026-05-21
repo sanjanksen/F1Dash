@@ -3943,3 +3943,91 @@ class TestMiniSectors:
                 return _FakeTelemetry()
 
         assert compute_mini_sectors(_FakeLap(), n=25) == []
+
+    def test_compare_mini_sectors_returns_per_segment_delta(self):
+        """Each segment has delta_s (a - b) and a winner."""
+        from f1_data import compute_mini_sectors, _build_mini_sector_comparison
+
+        a_segments = [
+            {"index": i, "start_m": i * 200, "end_m": (i + 1) * 200,
+             "time_s": 4.0, "avg_speed_kmh": 200.0, "min_speed_kmh": 180.0,
+             "drs_active_pct": 0.0}
+            for i in range(25)
+        ]
+        b_segments = [
+            {"index": i, "start_m": i * 200, "end_m": (i + 1) * 200,
+             "time_s": 4.05 if i < 12 else 3.95,
+             "avg_speed_kmh": 198.0, "min_speed_kmh": 178.0, "drs_active_pct": 0.0}
+            for i in range(25)
+        ]
+
+        out = _build_mini_sector_comparison("VER", "NOR", a_segments, b_segments)
+        assert len(out["segments"]) == 25
+        assert out["segments"][0]["delta_s"] == -0.05
+        assert out["segments"][0]["winner"] == "A"
+        assert out["segments"][12]["winner"] == "B"
+
+    def test_compare_mini_sectors_cumulative_delta_grows(self):
+        """Cumulative delta = sum of per-segment deltas along distance."""
+        from f1_data import _build_mini_sector_comparison
+
+        a_segments = [{"index": i, "start_m": i * 200, "end_m": (i + 1) * 200,
+                       "time_s": 4.0, "avg_speed_kmh": 200.0, "min_speed_kmh": 180.0,
+                       "drs_active_pct": 0.0} for i in range(5)]
+        b_segments = [{"index": i, "start_m": i * 200, "end_m": (i + 1) * 200,
+                       "time_s": 4.1, "avg_speed_kmh": 200.0, "min_speed_kmh": 180.0,
+                       "drs_active_pct": 0.0} for i in range(5)]
+
+        out = _build_mini_sector_comparison("VER", "NOR", a_segments, b_segments)
+        cum = out["cumulative_delta"]
+        assert abs(cum[-1][1] - (-0.5)) < 1e-6
+        for i in range(1, len(cum)):
+            assert cum[i][1] <= cum[i - 1][1] + 1e-9
+
+    def test_compare_mini_sectors_flags_drs_mix(self):
+        """When A had DRS open in a segment and B did not (or vice versa),
+        drs_mix_warning is True."""
+        from f1_data import _build_mini_sector_comparison
+
+        a_segments = [{"index": 0, "start_m": 0, "end_m": 200, "time_s": 4.0,
+                       "avg_speed_kmh": 200.0, "min_speed_kmh": 180.0,
+                       "drs_active_pct": 80.0}]
+        b_segments = [{"index": 0, "start_m": 0, "end_m": 200, "time_s": 4.05,
+                       "avg_speed_kmh": 200.0, "min_speed_kmh": 180.0,
+                       "drs_active_pct": 0.0}]
+
+        out = _build_mini_sector_comparison("VER", "NOR", a_segments, b_segments)
+        assert out["drs_mix_warning"] is True
+
+    def test_compare_mini_sectors_no_drs_mix_when_both_open_or_closed(self):
+        from f1_data import _build_mini_sector_comparison
+
+        a_segments = [
+            {"index": 0, "start_m": 0, "end_m": 200, "time_s": 4.0,
+             "avg_speed_kmh": 200.0, "min_speed_kmh": 180.0, "drs_active_pct": 90.0},
+            {"index": 1, "start_m": 200, "end_m": 400, "time_s": 4.0,
+             "avg_speed_kmh": 200.0, "min_speed_kmh": 180.0, "drs_active_pct": 0.0},
+        ]
+        b_segments = [
+            {"index": 0, "start_m": 0, "end_m": 200, "time_s": 4.0,
+             "avg_speed_kmh": 200.0, "min_speed_kmh": 180.0, "drs_active_pct": 85.0},
+            {"index": 1, "start_m": 200, "end_m": 400, "time_s": 4.0,
+             "avg_speed_kmh": 200.0, "min_speed_kmh": 180.0, "drs_active_pct": 0.0},
+        ]
+
+        out = _build_mini_sector_comparison("VER", "NOR", a_segments, b_segments)
+        assert out["drs_mix_warning"] is False
+
+    def test_compare_mini_sectors_assigns_tie_for_tiny_deltas(self):
+        """Per-segment winner is 'tie' when |delta_s| < 0.005."""
+        from f1_data import _build_mini_sector_comparison
+
+        a_segments = [{"index": 0, "start_m": 0, "end_m": 200, "time_s": 4.000,
+                       "avg_speed_kmh": 200.0, "min_speed_kmh": 180.0,
+                       "drs_active_pct": 0.0}]
+        b_segments = [{"index": 0, "start_m": 0, "end_m": 200, "time_s": 4.003,
+                       "avg_speed_kmh": 200.0, "min_speed_kmh": 180.0,
+                       "drs_active_pct": 0.0}]
+
+        out = _build_mini_sector_comparison("VER", "NOR", a_segments, b_segments)
+        assert out["segments"][0]["winner"] == "tie"
