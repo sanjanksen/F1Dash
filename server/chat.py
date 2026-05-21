@@ -912,6 +912,7 @@ Guidelines:
 - When narrating 2026-season overtakes, only claim override-mode use when `total_override_seconds > 0.5` for the lap, as returned by `analyze_override_usage` or surfaced via a race-story event. Do not claim override use without that evidence — the 1-second-gap trigger is required, and a coarse speed-trace inspection alone can be misleading.
 - When summarising active-aero (Z-mode) usage from `analyze_active_aero_usage` results, always state whether `inferred=True`. If inferred, prefix with "Estimated from speed-trace shape" or "Likely" rather than asserting Z-mode use. Only quote `total_z_mode_seconds` when `circuit_in_coverage=True`. If `circuit_in_coverage=False`, say the circuit isn't yet in the aero-zone coverage.
 - When the user asks whether a driver should have pitted, or whether the undercut/overcut was available, invoke `analyze_undercut_overcut` before answering. Never estimate undercut viability from race-pace data alone. If the tool reports `recommendation == "marginal"` or `confidence == "low"`, explicitly say so in the answer. If `active_sc_state` is `vsc` or `sc`, mention that pit-loss is reduced. Forbidden: invoking this tool for general pace comparisons or for races where the user has not raised a strategy decision — use `analyze_race_pace_battle` instead.
+- When the user asks about context that goes beyond raw race data — driver/team interviews, what was said at a press conference, technical upgrades brought to a weekend, FIA technical bulletins, or any "why did X say Y" question — invoke `search_editorial_content` and quote the relevant chunk with an inline link to the URL. Never fabricate quotes; only use text that came back in a tool result. Cite source + date alongside each quote (e.g. "The Race, 2026-04-12"). If the tool returns `available: false`, say the editorial knowledge base isn't connected and answer from telemetry/results alone.
 
 Answer quality rules:
 - Lead with the number or the fact. "Russell finished P3, 8 seconds off the lead" beats "Russell had a solid race finishing in the top 3".
@@ -1142,6 +1143,10 @@ When `clipping_segments_a` or `clipping_segments_b` are non-empty (or appear ins
 
 If neither a `clipping_callout` nor non-empty `clipping_segments_*` are present, omit `clipping_observation` entirely (do not emit an empty string or null).
 
+## Editorial Observations (RAG integration)
+
+When the evidence contains a `search_editorial_content` tool result with `available: true` and at least one chunk in `results`, you MAY surface a single short `editorial_observation` field that paraphrases or briefly quotes the most relevant chunk and cites `source` + `published_at`. Never fabricate a quote — use only chunk text that came back in the result. If the result is empty, omit the field. If the tool returned `available: false`, omit the field — do not mention the editorial system at all.
+
 ## Required JSON Output
 - direct_answer: string — must include WHERE and HOW MUCH
 - primary_reason: string
@@ -1150,6 +1155,7 @@ If neither a `clipping_callout` nor non-empty `clipping_segments_*` are present,
 - caveats: array of strings
 - confidence: one of high, medium, low
 - clipping_observation: string (optional — present only when clipping_callout or clipping_segments_* evidence exists)
+- editorial_observation: string (optional — present only when search_editorial_content returned at least one chunk with available=true; cite source + date)
 """
 
 ANALYSIS_SYSTEM_PROMPT = _build_analysis_system_prompt()

@@ -588,3 +588,35 @@ def test_analyze_undercut_overcut_validates_args():
         tools.execute_tool("analyze_undercut_overcut", {"driver_code": "NOR"})
     msg = str(exc_info.value)
     assert "lap_number" in msg
+
+
+def test_execute_tool_search_editorial_content_dispatches_to_search_module():
+    mock_payload = {
+        "available": True,
+        "search_mode": "semantic",
+        "results": [
+            {"chunk_text": "snippet", "url": "https://x", "title": "T",
+             "source": "The Race", "published_at": "2026-05-01", "similarity": 0.9},
+        ],
+    }
+    with patch.object(tools, "_search_editorial_content_safe", return_value=mock_payload) as m:
+        result = tools.execute_tool(
+            "search_editorial_content",
+            {"query": "McLaren upgrade Imola", "limit": 3, "min_date": "2026-04-01"},
+        )
+
+    assert result == mock_payload
+    m.assert_called_once_with("McLaren upgrade Imola", limit=3, min_date="2026-04-01")
+
+
+def test_execute_tool_search_editorial_content_validates_query():
+    with pytest.raises(ValueError) as exc_info:
+        tools.execute_tool("search_editorial_content", {})
+    assert "query" in str(exc_info.value)
+
+
+def test_search_editorial_content_tool_definition_registered():
+    names = {t["name"] for t in tools.TOOL_DEFINITIONS}
+    assert "search_editorial_content" in names
+    openai_names = {t["function"]["name"] for t in tools.OPENAI_TOOL_DEFINITIONS}
+    assert "search_editorial_content" in openai_names

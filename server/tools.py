@@ -69,6 +69,16 @@ from openf1 import get_intervals, get_live_position_timeline, get_team_radio
 logger = logging.getLogger(__name__)
 
 
+def _search_editorial_content_safe(query: str, limit: int = 5, min_date: str | None = None):
+    """Lazy import so test environments without supabase installed don't break tool import."""
+    try:
+        from editorial.search import search_editorial_content
+    except Exception as e:  # pragma: no cover — defensive only
+        logger.warning("editorial.search import failed: %s", type(e).__name__)
+        return {"available": False, "reason": "editorial_db_unavailable", "results": []}
+    return search_editorial_content(query, limit=limit, min_date=min_date)
+
+
 def _tool(name: str, description: str, properties: dict, required: list[str]) -> dict:
     return {
         "name": name,
@@ -439,6 +449,26 @@ PRIMITIVE_TOOL_DEFINITIONS = [
             "session_type": {"type": "string", "description": "Defaults to R."},
         },
         ["driver_code", "lap_number"],
+    ),
+    _tool(
+        "search_editorial_content",
+        (
+            "PRIMITIVE TOOL. Retrieve relevant excerpts from F1Dash's editorial knowledge base "
+            "(articles from The Race, Motorsport.com, FIA technical docs, press-conference "
+            "transcripts, etc.) for a question. Use when the user asks about: "
+            "context behind a result, what teams said in interviews, technical upgrades "
+            "brought to a weekend, FIA technical bulletins, or any 'why' question that "
+            "benefits from published reporting. Returns up to 5 article chunks with URL, "
+            "source, date, and the chunk text. Always quote sparingly and cite the URL. "
+            "If the tool returns available=False, the editorial knowledge base is not "
+            "connected — answer from telemetry/results alone."
+        ),
+        {
+            "query":    {"type": "string", "description": "Natural-language query for editorial retrieval."},
+            "limit":    {"type": "integer", "description": "Max chunks to return. Defaults to 5."},
+            "min_date": {"type": "string",  "description": "Optional ISO date (YYYY-MM-DD); only articles published on or after this date are returned."},
+        },
+        ["query"],
     ),
     _tool(
         "get_speed_trap_leaderboard",
@@ -1101,5 +1131,12 @@ def execute_tool(name: str, args: dict):
             args["round_number"],
             args["session_type"],
             bool(args.get("allow_mixed_drs", False)),
+        )
+    if name == "search_editorial_content":
+        _require_args(args, ["query"], name)
+        return _search_editorial_content_safe(
+            args["query"],
+            limit=int(args.get("limit", 5)),
+            min_date=args.get("min_date"),
         )
     raise ValueError(f"Unknown tool: {name!r}")
