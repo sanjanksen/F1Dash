@@ -70,7 +70,7 @@ def test_execute_tool_get_season_schedule():
 def test_execute_tool_get_head_to_head():
     mock = {"driver_a": "Max Verstappen", "driver_b": "Lando Norris",
             "points_gap": 30.0, "races_a_ahead": 5, "races_b_ahead": 3}
-    with patch('tools.get_head_to_head', return_value=mock):
+    with patch('f1_data.get_head_to_head', return_value=mock):
         result = tools.execute_tool("get_head_to_head",
                                     {"driver_a": "verstappen", "driver_b": "norris"})
     assert result["driver_a"] == "Max Verstappen"
@@ -352,8 +352,8 @@ def test_get_driver_style_profile_logs_warning_on_missing_driver(caplog):
 
 
 def test_get_driver_style_profile_logs_warning_on_missing_comparison_pair(caplog):
-    with patch('tools.get_comparison_framing', return_value=None), \
-         patch('tools.get_driver_style', return_value=None):
+    with patch('driver_styles.get_comparison_framing', return_value=None), \
+         patch('driver_styles.get_driver_style', return_value=None):
         with caplog.at_level("WARNING", logger="tools"):
             result = tools.execute_tool(
                 "get_driver_style_profile",
@@ -366,7 +366,7 @@ def test_get_driver_style_profile_logs_warning_on_missing_comparison_pair(caplog
 
 def test_execute_tool_analyze_team_circuit_fit():
     mock = {"team_query": "Mercedes", "strongest_fit": {"character": "stop_and_go"}}
-    with patch('tools.analyze_team_circuit_fit', return_value=mock):
+    with patch('f1_data.analyze_team_circuit_fit', return_value=mock):
         result = tools.execute_tool("analyze_team_circuit_fit", {
             "team_name": "Mercedes",
             "years": [2023, 2024],
@@ -377,7 +377,7 @@ def test_execute_tool_analyze_team_circuit_fit():
 
 def test_execute_tool_analyze_team_telemetry_traits():
     mock = {"team": "Mercedes", "trait_flags": ["straight_line_speed"]}
-    with patch('tools.analyze_team_telemetry_traits', return_value=mock):
+    with patch('f1_data.analyze_team_telemetry_traits', return_value=mock):
         result = tools.execute_tool("analyze_team_telemetry_traits", {
             "round_number": 3,
             "team_name": "Mercedes",
