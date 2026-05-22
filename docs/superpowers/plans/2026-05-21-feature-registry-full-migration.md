@@ -111,32 +111,55 @@ client/src/components/
 
 ---
 
-## Migration Phases — PROGRESS
+## Migration Phases — ALL COMPLETE
 
 ```
 ✅ Phase A   Pilot + 1 feature + predicate tuning            DONE
-✅ Phase B   Wire registry into live path                    DONE (4 commits)
-✅ Phase C   Unify orchestration                             DONE (3 commits)
-✅ Phase D1  Pure lookups (21 features, 7 sub-modules)       DONE (8 commits)
-⏳ Phase D2  Widget-bearing analyses (8 features)            NEXT
-📋 Phase D3  Context & style (6 features)                    pending
-📋 Phase D4  Cornering variants (2 features)                 pending
-📋 Phase D5  Composites (4 features)                         pending
-📋 Phase D6  Remaining (~5 features)                         pending
-📋 Phase E   Cutover                                         pending
-📋 Phase F   Frontend widgetRegistry                         pending
+✅ Phase B   Wire registry into live path                    DONE
+✅ Phase C   Unify orchestration                             DONE
+✅ Phase D1  Pure lookups (21 features, 7 sub-modules)       DONE
+✅ Phase D2  Widget-bearing analyses (8 features)            DONE
+✅ Phase D3  Context & style (6 features)                    DONE
+✅ Phase D4  Cornering variants (2 features)                 DONE
+✅ Phase D5  Composites (5 features)                         DONE
+✅ Phase D6  Remaining (4 features)                          DONE
+✅ Phase E1  Inline widget builders                          DONE
+✅ Phase E2  Delete dead executor branches                   DONE
+✅ Phase E3  Clean ANALYSIS_SYSTEM_PROMPT                    DONE
+✅ Phase F   Frontend widgetRegistry                         DONE
 ```
+
+**Final state (2026-05-21):**
+- Branch: `features/2026-05-21-feature-registry-refactor` (55 commits, not pushed)
+- Suite: **653 passing**
+- 47 features migrated to `server/features/` (single source of truth)
+- `tools.py`: 2150 → **355 lines** (-84%)
+- `chat.py`: 2100 → **1915 lines** (-185 lines; widget builders gone)
+- `AnswerRenderer.jsx`: 258 → **213 lines** (widgetRegistry map)
+- 7 agentic-only helpers stay in `tools.py` (no Feature wrapper — they're internal, no widgets)
+
+Adding a new feature = 1 new file in `server/features/` + 1 widget component + 1 row in `widgetRegistry.js`.
 
 **Resume state (2026-05-21 checkpoint):**
 - Branch: `features/2026-05-21-feature-registry-refactor` (not pushed)
-- Latest commit: `130353f`
-- Suite: **555 passing**
-- Already-registered features (22): `compare_mini_sectors` + 21 lookups under `server/features/lookups/`
-- Total commits on branch: 22
+- Latest commit: see `git log -1` (most recent is `analyze_undercut_overcut` migration)
+- Suite: **560 passing** (after 7/8 D2 + the 21 lookups + pilot)
+- Already-registered features (29):
+  - Pilot: `compare_mini_sectors`
+  - Lookups (21): under `server/features/lookups/`
+  - D2 done (7): `analyze_qualifying_battle`, `analyze_race_pace_battle`, `compare_corner_profiles`, `analyze_stint_degradation`, `analyze_energy_management`, `analyze_active_aero_usage`, `analyze_undercut_overcut`
+- Total commits on branch: 23
 
-**To resume:** Read this plan doc top-to-bottom, then dispatch Phase D2 subagent following the migration template. The 8 features to migrate in D2 are documented in the "Phase D — Migrate the 25 Features in 6 Batches" section. Two of them (`analyze_qualifying_battle`, `compare_corner_profiles`) are CROSS-FEATURE and stay dormant — `chat.py`'s `_CROSS_FEATURE_TOOLS` set keeps the legacy composer handling them. The other 6 take the registry path automatically as soon as they're registered.
+**Next step on resume:** Finish Phase D2 by migrating the LAST D2 feature:
+- `get_pit_stop_analysis` → `server/features/pit_stop_analysis.py`
+- Widget builder: `chat._make_pit_stop_strategy_widget` (delegate)
+- Predicate keywords: pit stop, pit lane, pit time, tyre change
+- applies_to: `("race_session",)`
+- Not cross-feature; will take the registry path automatically once registered.
 
-Total post-Phase-A original estimate: ~17 tasks, ~27 hours. Completed so far: 10 tasks (~9 hours). Remaining: ~7 tasks (~18 hours).
+Then proceed to **Phase D3** (Context & style, 6 features), D4 (Cornering variants, 2), D5 (Composites, 4), D6 (Remaining, ~5), then E1-E3 cutover and F1-F2 frontend.
+
+Original post-Phase-A estimate: ~17 tasks, ~27 hours. Completed: 11 tasks (~10 hours). Remaining: ~6 tasks (~17 hours).
 
 ---
 
