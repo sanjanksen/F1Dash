@@ -29,3 +29,11 @@ def test_team_circuit_fit_no_widget():
     feat = _load_feat()
     assert feat.make_widget({"any": "thing"}) == {}
     assert feat.should_show_widget({"any": "thing"}) is False
+
+
+def test_team_circuit_fit_declares_triggered_by_modes():
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    discover_features()
+    feat = FEATURE_REGISTRY["analyze_team_circuit_fit"]
+    assert feat.triggered_by_modes == frozenset({"team_circuit_fit"})

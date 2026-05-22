@@ -16,6 +16,7 @@ _RELEVANT_KEYWORDS = (
 class TeamCircuitFitFeature(Feature):
     name = "analyze_team_circuit_fit"
     applies_to = ("team",)
+    triggered_by_modes = frozenset({"team_circuit_fit"})
     description = (
         "PRIMITIVE TOOL. Derives a team's historical circuit-fit tendencies from real qualifying or race classifications. "
         "It compares the team's average result at each circuit archetype against that team's own season baseline, "

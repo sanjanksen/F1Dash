@@ -15,6 +15,7 @@ _RELEVANT_KEYWORDS = (
 class TeamTelemetryTraitsFeature(Feature):
     name = "analyze_team_telemetry_traits"
     applies_to = ("team",)
+    triggered_by_modes = frozenset({"team_circuit_fit"})
     description = (
         "PRIMITIVE TOOL. Session-specific telemetry characterization for a team's current car behavior. "
         "Compares the team's fastest-lap corner/straight traits against the field median: apex speed, exit speed, "

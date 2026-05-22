@@ -46,3 +46,11 @@ def test_team_performance_should_show_widget_requires_corner_comparison_dict():
     assert feat.should_show_widget({"corner_comparison": {"x": "y"}}) is True
     assert feat.should_show_widget({"corner_comparison": None}) is False
     assert feat.should_show_widget({}) is False
+
+
+def test_team_performance_declares_triggered_by_modes():
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    discover_features()
+    feat = FEATURE_REGISTRY["analyze_team_performance"]
+    assert feat.triggered_by_modes == frozenset({"team_performance"})

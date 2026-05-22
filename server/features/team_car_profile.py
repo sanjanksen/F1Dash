@@ -18,6 +18,7 @@ _RELEVANT_KEYWORDS = (
 class TeamCarProfileFeature(Feature):
     name = "get_team_car_profile"
     applies_to = ("team",)
+    triggered_by_modes = frozenset({"team_circuit_fit"})
     description = (
         "PRIMITIVE TOOL. Dated, sourced public-reporting context about a team's car strengths or weaknesses. "
         "This is editorial context, not deterministic telemetry; use it only after or alongside data tools."

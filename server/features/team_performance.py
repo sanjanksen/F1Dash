@@ -24,6 +24,7 @@ _REQUIRED_ARGS = ("round_number", "team_name", "session_type")
 class TeamPerformanceFeature(Feature):
     name = "analyze_team_performance"
     applies_to = ("team", "session")
+    triggered_by_modes = frozenset({"team_performance"})
     description = (
         "DEEP ANALYSIS PRIMITIVE. Compare both teammates' corner profiles and (in race sessions) degradation for a team. "
         "Returns setup_direction_inference, gain_location_summary, and per-driver stint degradation. "
