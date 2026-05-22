@@ -5,12 +5,6 @@ import f1_data
 from features.base import Feature, register_feature
 
 
-_SCHEDULE_KEYWORDS = (
-    "schedule", "calendar", "round", "race", "when", "next race",
-    "last race", "latest race", "upcoming",
-)
-
-
 @register_feature
 class SeasonScheduleFeature(Feature):
     name = "get_season_schedule"
@@ -27,8 +21,10 @@ class SeasonScheduleFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _SCHEDULE_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_circuits()

@@ -5,10 +5,6 @@ import f1_data
 from features.base import Feature, register_feature
 
 
-_STANDINGS_KEYWORDS = ("standing", "championship", "leader", "points")
-_DRIVER_STATS_KEYWORDS = ("season", "stats", "statistics", "form", "record")
-
-
 @register_feature
 class DriverStandingsFeature(Feature):
     name = "get_driver_standings"
@@ -24,8 +20,10 @@ class DriverStandingsFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _STANDINGS_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_drivers()[:args.get("limit", 20)]
@@ -50,8 +48,10 @@ class ConstructorStandingsFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _STANDINGS_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_constructor_standings()
@@ -78,8 +78,10 @@ class DriverSeasonStatsFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _DRIVER_STATS_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         stats = f1_data.get_driver_stats(args["driver_name"])

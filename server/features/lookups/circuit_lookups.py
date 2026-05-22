@@ -5,10 +5,6 @@ import f1_data
 from features.base import Feature, register_feature
 
 
-_CIRCUIT_KEYWORDS = ("circuit", "track", "corner", "turn", "layout")
-_HISTORICAL_KEYWORDS = ("historical", "history", "previous", "past", "winners", "last year")
-
-
 @register_feature
 class CircuitDetailsFeature(Feature):
     name = "get_circuit_details"
@@ -27,8 +23,10 @@ class CircuitDetailsFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.55 if any(kw in q for kw in _CIRCUIT_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_circuit_details(args["round_number"])
@@ -55,8 +53,10 @@ class CircuitCornersFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.6 if any(kw in q for kw in _CIRCUIT_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_circuit_corners(args["round_number"])
@@ -87,8 +87,10 @@ class CircuitTrackMapFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.55 if any(kw in q for kw in _CIRCUIT_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_circuit_track_map(args["round_number"])
@@ -119,8 +121,10 @@ class HistoricalCircuitPerformanceFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _HISTORICAL_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_historical_circuit_performance(args["round_number"], args.get("years"))

@@ -5,11 +5,6 @@ import f1_data
 from features.base import Feature, register_feature
 
 
-_LAPTIME_KEYWORDS = ("lap time", "lap times", "lap-by-lap", "lap by lap", "stint", "pace")
-_TELEMETRY_KEYWORDS = ("telemetry", "throttle", "brake", "gear", "rpm", "drs", "speed trace")
-_SECTOR_KEYWORDS = ("sector", "s1", "s2", "s3")
-
-
 @register_feature
 class DriverLapTimesFeature(Feature):
     name = "get_driver_lap_times"
@@ -30,8 +25,10 @@ class DriverLapTimesFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.6 if any(kw in q for kw in _LAPTIME_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_driver_lap_times(args["round_number"], args["session_type"], args["driver_code"])
@@ -65,8 +62,10 @@ class LapTelemetryFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _TELEMETRY_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_lap_telemetry(
@@ -101,8 +100,10 @@ class SectorComparisonFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _SECTOR_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_sector_comparison(
@@ -140,8 +141,10 @@ class TelemetryComparisonFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _TELEMETRY_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_telemetry_comparison(

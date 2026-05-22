@@ -5,11 +5,6 @@ import f1_data
 from features.base import Feature, register_feature
 
 
-_STRATEGY_KEYWORDS = (
-    "strategy", "stint", "tyre", "tire", "pit", "compound", "undercut", "overcut",
-)
-
-
 @register_feature
 class DriverStrategyFeature(Feature):
     name = "get_driver_strategy"
@@ -31,8 +26,10 @@ class DriverStrategyFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _STRATEGY_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_driver_strategy(

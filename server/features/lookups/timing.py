@@ -5,13 +5,6 @@ import f1_data
 from features.base import Feature, register_feature
 
 
-_PACE_KEYWORDS = ("pace", "clean", "green", "consistent")
-_POSITION_KEYWORDS = ("position", "where on track", "racing line", "track position")
-_QUALI_PROGRESSION_KEYWORDS = ("q1", "q2", "q3", "progression", "improved", "improvement")
-_FASTEST_KEYWORDS = ("fastest", "fastest lap", "leaderboard")
-_SPEED_TRAP_KEYWORDS = ("speed trap", "top speed", "straight", "drag", "speed_st")
-
-
 @register_feature
 class CleanPaceSummaryFeature(Feature):
     name = "get_clean_pace_summary"
@@ -33,8 +26,10 @@ class CleanPaceSummaryFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _PACE_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_clean_pace_summary(
@@ -74,8 +69,10 @@ class TrackPositionComparisonFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.6 if any(kw in q for kw in _POSITION_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_track_position_comparison(
@@ -109,8 +106,10 @@ class QualifyingProgressionFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _QUALI_PROGRESSION_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_qualifying_progression(args["round_number"])
@@ -138,8 +137,10 @@ class SessionFastestLapsFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.6 if any(kw in q for kw in _FASTEST_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_session_fastest_laps(args["round_number"], args["session_type"])
@@ -181,8 +182,10 @@ class SpeedTrapLeaderboardFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.7 if any(kw in q for kw in _SPEED_TRAP_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_speed_trap_leaderboard(

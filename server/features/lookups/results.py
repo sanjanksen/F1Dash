@@ -5,12 +5,6 @@ import f1_data
 from features.base import Feature, register_feature
 
 
-_RACE_KEYWORDS = ("result", "finish", "classification", "winner", "won", "podium")
-_QUALI_KEYWORDS = ("qualifying", "quali", "pole", "q1", "q2", "q3", "grid")
-_SPRINT_KEYWORDS = ("sprint",)
-_SESSION_KEYWORDS = ("session", "result", "classification")
-
-
 @register_feature
 class RaceResultsFeature(Feature):
     name = "get_race_results"
@@ -29,8 +23,10 @@ class RaceResultsFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _RACE_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_race_results(args["round_number"])
@@ -58,8 +54,10 @@ class QualifyingResultsFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _QUALI_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_qualifying_results(args["round_number"])
@@ -86,8 +84,10 @@ class SprintResultsFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _SPRINT_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_sprint_results(args["round_number"])
@@ -118,11 +118,9 @@ class SprintQualifyingResultsFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        has_sprint = any(kw in q for kw in _SPRINT_KEYWORDS)
-        has_quali = any(kw in q for kw in _QUALI_KEYWORDS)
-        if has_sprint and has_quali:
-            return 0.75
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
         return 0.0
 
     def execute(self, **args):
@@ -155,8 +153,10 @@ class SessionResultsFeature(Feature):
     }
 
     def is_relevant_for(self, question, resolved):
-        q = (question or "").lower()
-        return 0.55 if any(kw in q for kw in _SESSION_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args):
         return f1_data.get_session_results(args["round_number"], args["session_type"])
