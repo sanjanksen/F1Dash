@@ -1,0 +1,31 @@
+import pytest
+
+pytestmark = pytest.mark.usefixtures("reset_feature_registry")
+
+
+def _load_feat():
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    FEATURE_REGISTRY.clear()
+    discover_features()
+    return FEATURE_REGISTRY["analyze_team_telemetry_traits"]
+
+
+def test_team_telemetry_traits_registered_after_discover():
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    FEATURE_REGISTRY.clear()
+    discover_features()
+    assert "analyze_team_telemetry_traits" in FEATURE_REGISTRY
+
+
+def test_team_telemetry_traits_relevance_high_for_team_trait_keyword():
+    feat = _load_feat()
+    assert feat.is_relevant_for("What's the Ferrari team trait this year?", {}) >= 0.5
+    assert feat.is_relevant_for("Who won the race?", {}) < 0.5
+
+
+def test_team_telemetry_traits_no_widget():
+    feat = _load_feat()
+    assert feat.make_widget({"any": "thing"}) == {}
+    assert feat.should_show_widget({"any": "thing"}) is False
