@@ -69,4 +69,11 @@ class DriverRaceStoryFeature(Feature):
         return _build_race_story_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
-        return bool(result) and result.get("available", True) is not False
+        if not result.get("available", True):
+            return False
+        if not (result.get("finish_position") or result.get("status")):
+            return False
+        storyful = ("story_points", "pit_stops", "interval_summary",
+                    "radio_highlights", "position_timeline_summary")
+        present = sum(1 for k in storyful if result.get(k))
+        return present >= 2
