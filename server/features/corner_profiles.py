@@ -82,6 +82,13 @@ class CornerProfilesFeature(Feature):
     def should_show_widget(self, result: dict) -> bool:
         if not result.get("available", True):
             return False
-        # Legacy branch always appended (focus-skip is handled by the legacy
-        # cross-feature path, not by this gate).
-        return True
+        gain_locations = result.get("gain_location_summary") or []
+        if len(gain_locations) < 1:
+            return False
+        speed_a = result.get("avg_straight_speed_a")
+        speed_b = result.get("avg_straight_speed_b")
+        brake_delta = result.get("braking_point_delta_m")
+        speed_material = (speed_a is not None and speed_b is not None
+                          and abs(speed_a - speed_b) >= 2)
+        brake_material = brake_delta is not None and abs(brake_delta) >= 5
+        return speed_material or brake_material

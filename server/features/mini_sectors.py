@@ -91,7 +91,14 @@ class MiniSectorsFeature(Feature):
     def should_show_widget(self, result: dict) -> bool:
         if not result.get("available", True):
             return False
-        total = result.get("total_delta_s")
-        if total is None:
+        segments = result.get("segments") or []
+        if len(segments) < 10:
             return False
-        return abs(total) >= 0.05
+        won_a = result.get("segments_won_a") or 0
+        won_b = result.get("segments_won_b") or 0
+        if (won_a + won_b) < 3:
+            return False
+        total = result.get("total_delta_s")
+        if total is None or abs(total) < 0.05:
+            return False
+        return True

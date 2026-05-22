@@ -570,10 +570,13 @@ def test_widgets_from_preloaded_supports_race_pace_battle():
     widgets = chat._widgets_from_preloaded({
         "tool": "analyze_race_pace_battle",
         "result": {
+            "available": True,
             "driver_a": "VER",
             "driver_b": "NOR",
             "event": "Japanese Grand Prix",
             "session": "R",
+            "lap_overlap": 15,
+            "overall_pace_delta_s": 0.32,
         },
     })
 
@@ -587,10 +590,13 @@ def test_widgets_from_preloaded_supports_corner_comparison():
     widgets = chat._widgets_from_preloaded({
         "tool": "compare_corner_profiles",
         "result": {
+            "available": True,
             "driver_a": "LEC",
             "driver_b": "NOR",
             "event": "Japanese Grand Prix",
             "session": "Q",
+            "gain_location_summary": [{"corner": "T3"}],
+            "braking_point_delta_m": 8.0,
         },
     })
 

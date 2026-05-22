@@ -96,5 +96,13 @@ class RacePaceBattleFeature(Feature):
     def should_show_widget(self, result: dict) -> bool:
         if not result.get("available", True):
             return False
-        # Legacy branch always appended this widget when present.
-        return True
+        lap_overlap = result.get("lap_overlap")
+        if lap_overlap is not None and lap_overlap < 3:
+            return False
+        overall = result.get("overall_pace_delta_s")
+        deg = result.get("deg_rate_delta")
+        if overall is None and deg is None:
+            return False
+        overall_material = overall is not None and abs(overall) >= 0.15
+        deg_material = deg is not None and abs(deg) >= 0.05
+        return overall_material or deg_material

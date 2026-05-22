@@ -33,7 +33,7 @@ def test_preloaded_registered_feature_uses_registry():
             "driver_a": "NOR", "driver_b": "PIA",
             "lap_number": 21, "round_number": 7, "session_type": "Q",
             "n_segments": 25, "weather_state": "dry",
-            "segments": [],
+            "segments": [{} for _ in range(25)],
             "cumulative_delta": [(0, 0)],
             "total_delta_s": 0.187,
             "segments_won_a": 14, "segments_won_b": 8, "segments_tied": 3,
@@ -49,15 +49,16 @@ def test_preloaded_registered_feature_uses_registry():
 
 
 def test_preloaded_unregistered_tool_uses_legacy_branch():
-    """analyze_qualifying_battle isn't migrated yet — it should still produce
-    a widget via the legacy _make_qualifying_battle_widget branch."""
+    """analyze_qualifying_battle is now registry-routed; with a meaningful
+    overall_gap_s it should still produce a qualifying_battle widget."""
     from features.registry import discover_features
     discover_features()
     import chat
     sample_result = {
+        "available": True,
         "round_number": 7, "session_type": "Q",
         "driver_a": "NOR", "driver_b": "PIA",
-        # minimal — _make_qualifying_battle_widget should still emit type=qualifying_battle
+        "overall_gap_s": 0.15,
     }
     widgets = chat._widgets_from_preloaded({"tool": "analyze_qualifying_battle", "result": sample_result})
     assert len(widgets) == 1

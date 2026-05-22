@@ -94,6 +94,11 @@ class QualifyingBattleFeature(Feature):
     def should_show_widget(self, result: dict) -> bool:
         if not result.get("available", True):
             return False
-        # Match legacy chat.py branch: it always appended the widget when a
-        # result existed (no quality gate beyond availability).
+        overall = result.get("overall_gap_s")
+        if overall is None or abs(overall) < 0.03:
+            return False
+        decisive = result.get("decisive_sector_gap_s")
+        # If decisive_sector_gap_s isn't present, fall back to the overall gap check passing
+        if decisive is not None and abs(decisive) < 0.02:
+            return False
         return True

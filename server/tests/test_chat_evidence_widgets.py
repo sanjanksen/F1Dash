@@ -15,7 +15,7 @@ def _mini_sectors_sample(total_delta=0.187):
         "driver_a": "NOR", "driver_b": "PIA",
         "lap_number": 21, "round_number": 7, "session_type": "Q",
         "n_segments": 25, "weather_state": "dry",
-        "segments": [],
+        "segments": [{} for _ in range(25)],
         "cumulative_delta": [(0, 0)],
         "total_delta_s": total_delta,
         "segments_won_a": 14, "segments_won_b": 8, "segments_tied": 3,
