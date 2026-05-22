@@ -90,6 +90,28 @@ def candidates_for(resolved: dict | None) -> list[Feature]:
     return out
 
 
+def features_for_mode(mode: str | None, resolved: dict | None) -> list[Feature]:
+    """Registry-driven mode->features lookup.
+
+    Returns features whose triggered_by_modes contains `mode` AND whose
+    applies_to is satisfied by the resolved entity types. Replaces the
+    hardcoded mode->tools dict in chat.py's _build_analysis_plan.
+
+    Returns empty list if mode is None/falsy, unknown, or no features match.
+    """
+    if not mode:
+        return []
+    types = _resolved_entity_types(resolved)
+    out: list[Feature] = []
+    for feat in FEATURE_REGISTRY.values():
+        if mode not in feat.triggered_by_modes:
+            continue
+        if feat.applies_to and not all(req in types for req in feat.applies_to):
+            continue
+        out.append(feat)
+    return out
+
+
 def rank_by_relevance(
     question: str,
     resolved: dict | None,

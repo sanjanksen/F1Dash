@@ -355,3 +355,48 @@ def test_feature_subclass_can_declare_triggered_by_modes():
         triggered_by_modes = frozenset({"qualifying_battle", "driver_comparison"})
     f = _WithModes()
     assert f.triggered_by_modes == frozenset({"qualifying_battle", "driver_comparison"})
+
+
+from features.registry import features_for_mode
+
+
+def test_features_for_mode_filters_by_triggered_by_modes():
+    @register_feature
+    class _Quali(_DummyFeature):
+        name = "_quali_feat"
+        applies_to = ("pair_of_drivers",)
+        triggered_by_modes = frozenset({"qualifying_battle"})
+
+    @register_feature
+    class _Race(_DummyFeature):
+        name = "_race_feat"
+        applies_to = ("pair_of_drivers",)
+        triggered_by_modes = frozenset({"race_pace_comparison"})
+
+    resolved = {"drivers": [{"code": "A"}, {"code": "B"}]}
+    feats = features_for_mode("qualifying_battle", resolved)
+    names = {f.name for f in feats}
+    assert "_quali_feat" in names
+    assert "_race_feat" not in names
+
+
+def test_features_for_mode_also_filters_by_applies_to():
+    @register_feature
+    class _NeedsTeam(_DummyFeature):
+        name = "_needs_team"
+        applies_to = ("team",)
+        triggered_by_modes = frozenset({"qualifying_battle"})
+
+    resolved = {"drivers": [{"code": "A"}, {"code": "B"}]}  # no team
+    feats = features_for_mode("qualifying_battle", resolved)
+    assert all(f.name != "_needs_team" for f in feats)
+
+
+def test_features_for_mode_returns_empty_when_no_mode_matches():
+    feats = features_for_mode("nonexistent_mode", {"drivers": []})
+    assert feats == []
+
+
+def test_features_for_mode_with_none_resolved_treats_empty_entities():
+    feats = features_for_mode("qualifying_battle", None)
+    assert isinstance(feats, list)
