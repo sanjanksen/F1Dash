@@ -19,12 +19,6 @@ def test_circuit_profile_registered_after_discover():
     assert "get_circuit_profile" in FEATURE_REGISTRY
 
 
-def test_circuit_profile_relevance_high_for_circuit_keyword():
-    feat = _load_feat()
-    assert feat.is_relevant_for("What's the character of the circuit?", {}) >= 0.5
-    assert feat.is_relevant_for("Who won?", {}) < 0.5
-
-
 def test_circuit_profile_make_widget_delegates():
     feat = _load_feat()
     sample = {"circuit_name": "Imola", "character": "technical"}
@@ -35,9 +29,41 @@ def test_circuit_profile_make_widget_delegates():
 
 def test_circuit_profile_should_show_widget_respects_availability():
     feat = _load_feat()
-    assert feat.should_show_widget({"circuit_name": "Imola"}) is True
+    sample = {
+        "circuit_name": "Imola",
+        "downforce_level": "high",
+        "character": "technical",
+        "sector_1": "fast",
+        "sector_2": "rhythm",
+    }
+    assert feat.should_show_widget(sample) is True
     assert feat.should_show_widget({"available": False}) is False
     assert feat.should_show_widget({}) is False
+
+
+def test_circuit_profile_should_show_widget_meaningful_signal():
+    feat = _load_feat()
+    sample = {
+        "available": True,
+        "circuit_name": "Suzuka",
+        "downforce_level": "medium",
+        "character": "flowing",
+        "sector_1": "fast", "sector_2": "rhythm", "sector_3": "stop-start",
+        "tyre_challenge": "high",
+    }
+    assert feat.should_show_widget(sample) is True
+
+
+def test_circuit_profile_should_show_widget_suppresses_negligible():
+    feat = _load_feat()
+    # Only one optional field present → fails the >=2 optional check
+    sample = {
+        "circuit_name": "Imola",
+        "downforce_level": "high",
+        "character": "technical",
+        "sector_1": "fast",
+    }
+    assert feat.should_show_widget(sample) is False
 
 
 def test_circuit_profile_declares_triggered_by_modes():

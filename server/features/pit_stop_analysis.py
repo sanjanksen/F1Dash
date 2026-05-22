@@ -52,4 +52,17 @@ class PitStopAnalysisFeature(Feature):
         return _build_pit_stop_strategy_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
-        return bool(result) and result.get("available", True) is not False
+        if not result.get("available", True):
+            return False
+        total_laps = result.get("total_laps") or 0
+        if total_laps < 10:
+            return False
+        drivers = result.get("drivers") or []
+        if len(drivers) < 3:
+            return False
+        compounds = {d.get("compound") for d in drivers if isinstance(d, dict)}
+        stop_counts = {d.get("stop_count") for d in drivers if isinstance(d, dict)}
+        # at least 2 drivers differ in compound OR stop_count
+        if len(compounds) >= 2 or len(stop_counts) >= 2:
+            return True
+        return False

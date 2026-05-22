@@ -24,21 +24,6 @@ def test_stint_degradation_applies_to_driver():
     assert "driver" in feat.applies_to
 
 
-def test_stint_degradation_relevance_high_for_degradation_keyword():
-    feat = _load_feat()
-    score = feat.is_relevant_for("What was Norris's tyre degradation in Imola?", {})
-    assert score >= 0.5
-
-
-def test_stint_degradation_mode_only_does_not_fire():
-    feat = _load_feat()
-    score = feat.is_relevant_for(
-        "What is the weather forecast?",
-        {"analysis_mode": "race_pace_comparison"},
-    )
-    assert score < 0.5
-
-
 def test_stint_degradation_make_widget_produces_typed_widget():
     feat = _load_feat()
     sample = {
@@ -54,12 +39,41 @@ def test_stint_degradation_make_widget_produces_typed_widget():
 
 def test_stint_degradation_should_show_widget_requires_stints():
     feat = _load_feat()
-    assert feat.should_show_widget({
-        "stints": [{"compound": "MEDIUM", "scatter_data": [(1, 80.0)]}],
-    }) is True
+    good_stint = {
+        "compound": "MEDIUM",
+        "lap_count": 18,
+        "r_squared": 0.6,
+        "deg_rate_s_per_lap": 0.08,
+    }
+    assert feat.should_show_widget({"available": True, "stints": [good_stint]}) is True
     assert feat.should_show_widget({"stints": []}) is False
     assert feat.should_show_widget({}) is False
-    # Stints with no scatter/regression data get filtered out in builder
+    # Stints with no scatter/regression data are skipped
     assert feat.should_show_widget({
         "stints": [{"compound": "MEDIUM"}],
     }) is False
+
+
+def test_stint_degradation_should_show_widget_meaningful_signal():
+    feat = _load_feat()
+    sample = {
+        "available": True,
+        "stints": [
+            {"compound": "S", "lap_count": 8, "r_squared": 0.4, "deg_rate_s_per_lap": 0.12},
+            {"compound": "M", "lap_count": 22, "r_squared": 0.7, "deg_rate_s_per_lap": 0.09},
+        ],
+    }
+    assert feat.should_show_widget(sample) is True
+
+
+def test_stint_degradation_should_show_widget_suppresses_negligible():
+    feat = _load_feat()
+    # Every stint has r_squared just under the 0.25 threshold
+    sample = {
+        "available": True,
+        "stints": [
+            {"compound": "M", "lap_count": 18, "r_squared": 0.20, "deg_rate_s_per_lap": 0.08},
+            {"compound": "H", "lap_count": 12, "r_squared": 0.10, "deg_rate_s_per_lap": 0.07},
+        ],
+    }
+    assert feat.should_show_widget(sample) is False

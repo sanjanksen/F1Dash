@@ -85,8 +85,17 @@ class StintDegradationFeature(Feature):
         return _build_deg_trend_chart_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
-        # Legacy gate: `if w.get("stints"): widgets.append(w)`. Stints in the
-        # built widget are filtered to only those with scatter or regression
-        # data, so check the same after-build shape via the builder.
-        w = _build_deg_trend_chart_widget(result)
-        return bool(w.get("stints"))
+        if not result.get("available", True):
+            return False
+        stints = result.get("stints") or []
+        for stint in stints:
+            if not isinstance(stint, dict):
+                continue
+            lap_count = stint.get("lap_count") or 0
+            r2 = stint.get("r_squared")
+            deg = stint.get("deg_rate_s_per_lap")
+            if (lap_count >= 5
+                    and r2 is not None and r2 >= 0.25
+                    and deg is not None and abs(deg) >= 0.05):
+                return True
+        return False

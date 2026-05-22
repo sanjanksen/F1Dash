@@ -74,4 +74,11 @@ class CircuitProfileFeature(Feature):
         return _build_circuit_profile_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
-        return bool(result) and result.get("available", True) is not False
+        if not result.get("available", True):
+            return False
+        required_top = ("circuit_name", "downforce_level", "character")
+        if any(not result.get(k) for k in required_top):
+            return False
+        optional = ("sector_1", "sector_2", "sector_3", "tyre_challenge", "style_verdict")
+        present = sum(1 for k in optional if result.get(k))
+        return present >= 2

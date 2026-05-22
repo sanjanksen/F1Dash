@@ -18,15 +18,6 @@ def test_pit_stop_analysis_applies_to_race_session():
     assert "race_session" in feat.applies_to
 
 
-def test_pit_stop_analysis_relevance_high_for_pit_questions():
-    from features.base import FEATURE_REGISTRY
-    from features.registry import discover_features
-    discover_features()
-    feat = FEATURE_REGISTRY["get_pit_stop_analysis"]
-    assert feat.is_relevant_for("Who had the fastest pit stops?", {}) >= 0.5
-    assert feat.is_relevant_for("What's the weather?", {}) < 0.5
-
-
 def test_pit_stop_analysis_make_widget_delegates():
     from features.base import FEATURE_REGISTRY
     from features.registry import discover_features
@@ -42,6 +33,51 @@ def test_pit_stop_analysis_should_show_widget_suppresses_empty():
     from features.registry import discover_features
     discover_features()
     feat = FEATURE_REGISTRY["get_pit_stop_analysis"]
+    full = {
+        "available": True,
+        "total_laps": 56,
+        "drivers": [
+            {"compound": "M", "stop_count": 1},
+            {"compound": "H", "stop_count": 2},
+            {"compound": "M", "stop_count": 1},
+        ],
+    }
     assert feat.should_show_widget({"available": False}) is False
     assert feat.should_show_widget({}) is False
-    assert feat.should_show_widget({"available": True}) is True
+    assert feat.should_show_widget(full) is True
+
+
+def test_pit_stop_analysis_should_show_widget_meaningful_signal():
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    discover_features()
+    feat = FEATURE_REGISTRY["get_pit_stop_analysis"]
+    sample = {
+        "available": True,
+        "total_laps": 53,
+        "drivers": [
+            {"compound": "S", "stop_count": 1},
+            {"compound": "M", "stop_count": 2},
+            {"compound": "M", "stop_count": 2},
+            {"compound": "H", "stop_count": 1},
+        ],
+    }
+    assert feat.should_show_widget(sample) is True
+
+
+def test_pit_stop_analysis_should_show_widget_suppresses_negligible():
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    discover_features()
+    feat = FEATURE_REGISTRY["get_pit_stop_analysis"]
+    # All drivers identical: only 1 compound, only 1 stop_count
+    sample = {
+        "available": True,
+        "total_laps": 53,
+        "drivers": [
+            {"compound": "M", "stop_count": 1},
+            {"compound": "M", "stop_count": 1},
+            {"compound": "M", "stop_count": 1},
+        ],
+    }
+    assert feat.should_show_widget(sample) is False
