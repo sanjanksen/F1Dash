@@ -24,6 +24,34 @@ _RELEVANT_MODES = frozenset({"qualifying_battle", "driver_comparison"})
 _REQUIRED_ARGS = ("driver_a", "driver_b", "lap_number", "round_number")
 
 
+def _build_mini_sector_heatmap_widget(result: dict) -> dict:
+    """Map compare_mini_sectors output to the mini_sector_heatmap widget shape."""
+    if not result.get("available", True):
+        return {
+            "type": "mini_sector_heatmap",
+            "available": False,
+            "reason": result.get("reason"),
+        }
+    return {
+        "type": "mini_sector_heatmap",
+        "available": True,
+        "driver_a": result.get("driver_a"),
+        "driver_b": result.get("driver_b"),
+        "lap_number": result.get("lap_number"),
+        "round_number": result.get("round_number"),
+        "session_type": result.get("session_type"),
+        "n_segments": result.get("n_segments"),
+        "weather_state": result.get("weather_state"),
+        "segments": result.get("segments") or [],
+        "cumulative_delta": result.get("cumulative_delta") or [],
+        "total_delta_s": result.get("total_delta_s"),
+        "segments_won_a": result.get("segments_won_a"),
+        "segments_won_b": result.get("segments_won_b"),
+        "segments_tied": result.get("segments_tied"),
+        "drs_mix_warning": result.get("drs_mix_warning", False),
+    }
+
+
 @register_feature
 class MiniSectorsFeature(Feature):
     name = "compare_mini_sectors"
@@ -77,11 +105,7 @@ class MiniSectorsFeature(Feature):
         )
 
     def make_widget(self, result: dict) -> dict:
-        # Delegate to the existing chat.py builder to keep widget shape
-        # identical. Once all features are migrated, the builder will move
-        # here and the chat.py function will be removed.
-        import chat
-        return chat._make_mini_sector_heatmap_widget(result)
+        return _build_mini_sector_heatmap_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
         if not result.get("available", True):

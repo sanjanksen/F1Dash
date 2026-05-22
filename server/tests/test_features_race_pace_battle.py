@@ -39,14 +39,13 @@ def test_race_pace_battle_mode_only_does_not_fire():
     assert score < 0.5
 
 
-def test_race_pace_battle_make_widget_delegates_to_chat_builder():
+def test_race_pace_battle_make_widget_produces_typed_widget():
     feat = _load_feat()
-    import chat
     sample = {"driver_a": "VER", "driver_b": "HAM", "event": "Imola"}
     w = feat.make_widget(sample)
-    legacy = chat._make_race_pace_battle_widget(sample)
     assert w["type"] == "race_pace_battle"
-    assert w["type"] == legacy["type"]
+    assert w["driver_a"] == "VER"
+    assert w["driver_b"] == "HAM"
 
 
 def test_race_pace_battle_should_show_widget_respects_availability():

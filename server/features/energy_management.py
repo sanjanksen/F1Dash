@@ -16,6 +16,37 @@ _RELEVANT_MODES: frozenset[str] = frozenset()
 _REQUIRED_ARGS = ("round_number", "session_type", "driver_a")
 
 
+def _build_energy_management_widget(result: dict) -> dict:
+    drivers = result.get("drivers") or []
+    driver_a = drivers[0].get("driver") if drivers else None
+    driver_b = drivers[1].get("driver") if len(drivers) > 1 else None
+    label = driver_a or "Energy"
+    if driver_b:
+        label = f"{driver_a} vs {driver_b}"
+    return {
+        "type": "energy_management",
+        "title": f"{label} — {result.get('event')} energy management",
+        "driver_a": driver_a,
+        "driver_b": driver_b,
+        "event": result.get("event"),
+        "session": result.get("session"),
+        "drivers": drivers,
+        "speed_trace_a": result.get("speed_trace_a") or [],
+        "speed_trace_b": result.get("speed_trace_b"),
+        "energy_metrics_a": result.get("energy_metrics_a") or {},
+        "energy_metrics_b": result.get("energy_metrics_b"),
+        "straight_breakdown": result.get("straight_breakdown") or [],
+        "confidence": result.get("confidence"),
+        "inference_summary": result.get("inference_summary") or [],
+        "clipping_segments_a": (result.get("clipping_signature_a") or {}).get("segments") or [],
+        "clipping_segments_b": (result.get("clipping_signature_b") or {}).get("segments") or [],
+        "total_clipping_seconds_a": (result.get("clipping_signature_a") or {}).get("total_clipping_seconds"),
+        "total_clipping_seconds_b": (result.get("clipping_signature_b") or {}).get("total_clipping_seconds"),
+        "clipping_budget_status_a": (result.get("clipping_signature_a") or {}).get("budget_status"),
+        "clipping_budget_status_b": (result.get("clipping_signature_b") or {}).get("budget_status"),
+    }
+
+
 @register_feature
 class EnergyManagementFeature(Feature):
     name = "analyze_energy_management"
@@ -62,8 +93,7 @@ class EnergyManagementFeature(Feature):
         )
 
     def make_widget(self, result: dict) -> dict:
-        import chat
-        return chat._make_energy_management_widget(result)
+        return _build_energy_management_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
         # Legacy gate: `if w.get("speed_trace_a"): widgets.append(w)`

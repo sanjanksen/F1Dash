@@ -30,18 +30,17 @@ def test_energy_management_relevance_high_for_energy_keyword():
     assert score >= 0.5
 
 
-def test_energy_management_make_widget_delegates_to_chat_builder():
+def test_energy_management_make_widget_produces_typed_widget():
     feat = _load_feat()
-    import chat
     sample = {
         "drivers": [{"driver": "NOR"}],
         "event": "Imola",
         "speed_trace_a": [{"d": 0.0, "v": 280}],
     }
     w = feat.make_widget(sample)
-    legacy = chat._make_energy_management_widget(sample)
     assert w["type"] == "energy_management"
-    assert w["type"] == legacy["type"]
+    assert w["driver_a"] == "NOR"
+    assert w["event"] == "Imola"
 
 
 def test_energy_management_should_show_widget_requires_speed_trace():

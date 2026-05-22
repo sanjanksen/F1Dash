@@ -39,17 +39,17 @@ def test_stint_degradation_mode_only_does_not_fire():
     assert score < 0.5
 
 
-def test_stint_degradation_make_widget_delegates_to_chat_builder():
+def test_stint_degradation_make_widget_produces_typed_widget():
     feat = _load_feat()
-    import chat
     sample = {
         "driver": "NOR", "event": "Imola",
         "stints": [{"compound": "MEDIUM", "scatter_data": [(1, 80.0)]}],
     }
     w = feat.make_widget(sample)
-    legacy = chat._make_deg_trend_chart_widget(sample)
     assert w["type"] == "deg_trend_chart"
-    assert w["type"] == legacy["type"]
+    assert w["driver"] == "NOR"
+    assert w["event"] == "Imola"
+    assert len(w["stints"]) == 1
 
 
 def test_stint_degradation_should_show_widget_requires_stints():

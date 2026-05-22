@@ -21,6 +21,24 @@ _RELEVANT_MODES = frozenset({"grip_comparison", "driver_comparison"})
 _REQUIRED_ARGS = ("round_number", "session_type", "driver_a", "driver_b")
 
 
+def _build_corner_comparison_widget(result: dict) -> dict:
+    return {
+        "type": "corner_comparison",
+        "title": f"{result.get('driver_a')} vs {result.get('driver_b')}",
+        "event": result.get("event"),
+        "session": result.get("session"),
+        "driver_a": result.get("driver_a"),
+        "driver_b": result.get("driver_b"),
+        "faster_driver": result.get("faster_driver"),
+        "overall_gap_s": result.get("overall_gap_s"),
+        "setup_direction_inference": result.get("setup_direction_inference"),
+        "gain_location_summary": result.get("gain_location_summary") or [],
+        "cause_breakdown": result.get("cause_breakdown") or {},
+        "avg_straight_speed_a_kph": result.get("avg_straight_speed_a_kph"),
+        "avg_straight_speed_b_kph": result.get("avg_straight_speed_b_kph"),
+    }
+
+
 @register_feature
 class CornerProfilesFeature(Feature):
     name = "compare_corner_profiles"
@@ -71,8 +89,7 @@ class CornerProfilesFeature(Feature):
         )
 
     def make_widget(self, result: dict) -> dict:
-        import chat
-        return chat._make_corner_comparison_widget(result)
+        return _build_corner_comparison_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
         if not result.get("available", True):

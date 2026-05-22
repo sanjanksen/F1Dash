@@ -460,9 +460,9 @@ def test_qualifying_widget_includes_grip_commitment_from_cornering_loads():
 
 
 def test_make_qualifying_battle_widget_preserves_location_context():
-    import chat
+    from features.qualifying_battle import _build_qualifying_battle_widget
 
-    widget = chat._make_qualifying_battle_widget({
+    widget = _build_qualifying_battle_widget({
         "driver_a": "NOR",
         "driver_b": "PIA",
         "cause_explanations": [{
@@ -487,9 +487,9 @@ def test_make_qualifying_battle_widget_preserves_location_context():
 
 
 def test_make_qualifying_battle_widget_includes_driver_a_b_fields():
-    import chat
+    from features.qualifying_battle import _build_qualifying_battle_widget
 
-    widget = chat._make_qualifying_battle_widget({"driver_a": "NOR", "driver_b": "PIA"})
+    widget = _build_qualifying_battle_widget({"driver_a": "NOR", "driver_b": "PIA"})
     assert widget.get("driver_a")
     assert widget.get("driver_b")
 
@@ -766,8 +766,8 @@ def test_build_analysis_plan_team_circuit_fit_uses_all_evidence_layers_when_roun
 
 
 def test_make_circuit_profile_widget_maps_all_fields():
-    """_make_circuit_profile_widget passes through all profile fields with type=circuit_profile."""
-    import chat as chat_module
+    """_build_circuit_profile_widget passes through all profile fields with type=circuit_profile."""
+    from features.circuit_profile import _build_circuit_profile_widget
     profile = {
         "circuit_key": "miami",
         "circuit_name": "Miami International Autodrome",
@@ -805,7 +805,7 @@ def test_make_circuit_profile_widget_maps_all_fields():
         "tyre_challenge": "Heavy rear wear from aggressive traction zones.",
         "narrative": "Miami is a stop-and-go street-like circuit.",
     }
-    widget = chat_module._make_circuit_profile_widget(profile)
+    widget = _build_circuit_profile_widget(profile)
 
     assert widget["type"] == "circuit_profile"
     assert widget["circuit_name"] == "Miami International Autodrome"
@@ -1039,7 +1039,7 @@ def test_widget_builder_suppresses_data_table_for_cornering_tool():
 
 def test_make_race_pace_battle_widget_passes_clipping_fields():
     """Race pace battle widget must surface clipping_callout, segments, and totals."""
-    import chat
+    from features.race_pace_battle import _build_race_pace_battle_widget
 
     clipping_comparison = {
         "clipping_driver": "NOR",
@@ -1056,7 +1056,7 @@ def test_make_race_pace_battle_widget_passes_clipping_fields():
         "total_clipping_seconds": 0.0,
     }
 
-    widget = chat._make_race_pace_battle_widget({
+    widget = _build_race_pace_battle_widget({
         "driver_a": "NOR",
         "driver_b": "PIA",
         "clipping_comparison": clipping_comparison,
@@ -1080,8 +1080,8 @@ def test_system_prompt_mentions_clipping_callout_handling():
 
 
 def test_make_undercut_overcut_widget_maps_all_fields():
-    """_make_undercut_overcut_widget passes strategy_math output to a typed widget dict."""
-    import chat as chat_module
+    """_build_undercut_overcut_widget passes strategy_math output to a typed widget dict."""
+    from features.undercut_overcut import _build_undercut_overcut_widget
     result = {
         "driver_code": "NOR",
         "current_lap": 25,
@@ -1103,7 +1103,7 @@ def test_make_undercut_overcut_widget_maps_all_fields():
         "session_type": "R",
         "event": "Singapore Grand Prix",
     }
-    widget = chat_module._make_undercut_overcut_widget(result)
+    widget = _build_undercut_overcut_widget(result)
     assert widget["type"] == "undercut_overcut"
     assert widget["driver_code"] == "NOR"
     assert widget["target_driver_code"] == "VER"
@@ -1185,7 +1185,7 @@ def test_deterministic_path_omits_editorial_when_gate_returns_none():
 
 
 def test_make_mini_sector_heatmap_widget_maps_all_fields():
-    import chat
+    from features.mini_sectors import _build_mini_sector_heatmap_widget
     result = {
         "available": True,
         "driver_a": "VER",
@@ -1206,7 +1206,7 @@ def test_make_mini_sector_heatmap_widget_maps_all_fields():
         "segments_tied": 0,
         "drs_mix_warning": False,
     }
-    widget = chat._make_mini_sector_heatmap_widget(result)
+    widget = _build_mini_sector_heatmap_widget(result)
     assert widget["type"] == "mini_sector_heatmap"
     assert widget["driver_a"] == "VER"
     assert widget["driver_b"] == "NOR"
@@ -1221,8 +1221,8 @@ def test_make_mini_sector_heatmap_widget_returns_unavailable_shape():
     """When the tool returns available: False, the widget builder passes
     that through with type=mini_sector_heatmap so the renderer can show
     a friendly message."""
-    import chat
-    widget = chat._make_mini_sector_heatmap_widget({"available": False, "reason": "lap_not_found"})
+    from features.mini_sectors import _build_mini_sector_heatmap_widget
+    widget = _build_mini_sector_heatmap_widget({"available": False, "reason": "lap_not_found"})
     assert widget["type"] == "mini_sector_heatmap"
     assert widget.get("available") is False
 

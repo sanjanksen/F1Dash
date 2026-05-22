@@ -15,6 +15,32 @@ _RELEVANT_MODES: frozenset[str] = frozenset()
 _REQUIRED_ARGS = ("driver_code", "lap_number")
 
 
+def _build_undercut_overcut_widget(result: dict) -> dict:
+    """Map an analyze_undercut_overcut tool result to a UI widget dict."""
+    return {
+        "type": "undercut_overcut",
+        "driver_code": result.get("driver_code"),
+        "target_driver_code": result.get("target_driver_code"),
+        "current_lap": result.get("current_lap"),
+        "event": result.get("event"),
+        "round_number": result.get("round_number"),
+        "session_type": result.get("session_type"),
+        "advantage_s": result.get("advantage_s"),
+        "crossover_lap": result.get("crossover_lap"),
+        "recommendation": result.get("recommendation"),
+        "confidence": result.get("confidence"),
+        "active_sc_state": result.get("active_sc_state"),
+        "pit_loss_s": result.get("pit_loss_s"),
+        "pit_loss_green_s": result.get("pit_loss_green_s"),
+        "delta_fresh_pace_s_per_lap": result.get("delta_fresh_pace_s_per_lap"),
+        "out_lap_warmup_s": result.get("out_lap_warmup_s"),
+        "traffic_cost_s": result.get("traffic_cost_s"),
+        "advantage_by_rejoin_lap": result.get("advantage_by_rejoin_lap") or [],
+        "rationale": result.get("rationale") or [],
+        "inputs_summary": result.get("inputs_summary") or {},
+    }
+
+
 @register_feature
 class UndercutOvercutFeature(Feature):
     name = "analyze_undercut_overcut"
@@ -70,8 +96,7 @@ class UndercutOvercutFeature(Feature):
         )
 
     def make_widget(self, result: dict) -> dict:
-        import chat
-        return chat._make_undercut_overcut_widget(result)
+        return _build_undercut_overcut_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
         # Legacy branch always appended the widget unconditionally.

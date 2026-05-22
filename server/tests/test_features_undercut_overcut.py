@@ -31,17 +31,16 @@ def test_undercut_overcut_relevance_high_for_undercut_keyword():
     assert score >= 0.5
 
 
-def test_undercut_overcut_make_widget_delegates_to_chat_builder():
+def test_undercut_overcut_make_widget_produces_typed_widget():
     feat = _load_feat()
-    import chat
     sample = {
         "driver_code": "NOR", "current_lap": 14, "event": "Imola",
         "round_number": 7, "advantage_s": 0.4, "recommendation": "pit_now",
     }
     w = feat.make_widget(sample)
-    legacy = chat._make_undercut_overcut_widget(sample)
     assert w["type"] == "undercut_overcut"
-    assert w["type"] == legacy["type"]
+    assert w["driver_code"] == "NOR"
+    assert w["recommendation"] == "pit_now"
 
 
 def test_undercut_overcut_should_show_widget_respects_availability():

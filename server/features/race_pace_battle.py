@@ -14,6 +14,49 @@ _RELEVANT_MODES = frozenset({"race_pace_comparison"})
 _REQUIRED_ARGS = ("round_number", "driver_a", "driver_b")
 
 
+def _build_race_pace_battle_widget(result: dict) -> dict:
+    aligned_stints = []
+    for stint in result.get("aligned_stints") or []:
+        stint_a = stint.get("driver_a") or stint.get("stint_a") or {}
+        stint_b = stint.get("driver_b") or stint.get("stint_b") or {}
+        laps_a = set(stint_a.get("lap_numbers") or [])
+        laps_b = set(stint_b.get("lap_numbers") or [])
+        overlap = len(laps_a & laps_b) if laps_a and laps_b else None
+        aligned_stints.append({
+            "compound": stint.get("compound"),
+            "driver_a": stint_a,
+            "driver_b": stint_b,
+            "pace_delta_s": stint.get("pace_delta_s"),
+            "deg_rate_delta": stint.get("deg_rate_delta"),
+            "lap_overlap": overlap,
+        })
+
+    return {
+        "type": "race_pace_battle",
+        "title": f"{result.get('driver_a')} vs {result.get('driver_b')}",
+        "event": result.get("event"),
+        "session": result.get("session"),
+        "driver_a": result.get("driver_a"),
+        "driver_b": result.get("driver_b"),
+        "fuel_corrected_pace_a_s": result.get("fuel_corrected_pace_a_s"),
+        "fuel_corrected_pace_b_s": result.get("fuel_corrected_pace_b_s"),
+        "overall_pace_delta_s": result.get("overall_pace_delta_s"),
+        "avg_deg_rate_a_s_per_lap": result.get("avg_deg_rate_a_s_per_lap"),
+        "avg_deg_rate_b_s_per_lap": result.get("avg_deg_rate_b_s_per_lap"),
+        "tyre_management_a": result.get("tyre_management_a"),
+        "tyre_management_b": result.get("tyre_management_b"),
+        "deg_rate_delta": result.get("deg_rate_delta"),
+        "decisive_factor": result.get("decisive_factor"),
+        "aligned_stints": aligned_stints,
+        "undercut_opportunity": result.get("undercut_opportunity"),
+        "clipping_callout": result.get("clipping_comparison"),
+        "clipping_segments_a": (result.get("clipping_signature_a") or {}).get("segments") or [],
+        "clipping_segments_b": (result.get("clipping_signature_b") or {}).get("segments") or [],
+        "total_clipping_seconds_a": (result.get("clipping_signature_a") or {}).get("total_clipping_seconds"),
+        "total_clipping_seconds_b": (result.get("clipping_signature_b") or {}).get("total_clipping_seconds"),
+    }
+
+
 @register_feature
 class RacePaceBattleFeature(Feature):
     name = "analyze_race_pace_battle"
@@ -60,8 +103,7 @@ class RacePaceBattleFeature(Feature):
         )
 
     def make_widget(self, result: dict) -> dict:
-        import chat
-        return chat._make_race_pace_battle_widget(result)
+        return _build_race_pace_battle_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
         if not result.get("available", True):

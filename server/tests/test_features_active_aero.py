@@ -31,18 +31,17 @@ def test_active_aero_relevance_high_for_aero_keyword():
     assert score >= 0.5
 
 
-def test_active_aero_make_widget_delegates_to_chat_builder():
+def test_active_aero_make_widget_produces_typed_widget():
     feat = _load_feat()
-    import chat
     sample = {
         "driver_code": "NOR", "round_number": 7, "session_type": "Q",
         "lap_number": 12, "circuit_slug": "imola",
         "segments": [], "total_z_mode_seconds": 0.0,
     }
     w = feat.make_widget(sample)
-    legacy = chat._make_active_aero_widget(sample)
     assert w["type"] == "active_aero"
-    assert w["type"] == legacy["type"]
+    assert w["driver_code"] == "NOR"
+    assert w["lap_number"] == 12
 
 
 def test_active_aero_should_show_widget_respects_availability():

@@ -39,19 +39,18 @@ def test_qualifying_battle_mode_only_does_not_fire():
     assert score < 0.5
 
 
-def test_qualifying_battle_make_widget_delegates_to_chat_builder():
+def test_qualifying_battle_make_widget_produces_typed_widget():
     feat = _load_feat()
-    import chat
     sample = {
         "driver_a": "NOR", "driver_b": "PIA",
         "faster_driver": "NOR", "overall_gap_s": 0.12,
         "event": "Imola", "compared_segment": "Q3",
     }
     w = feat.make_widget(sample)
-    legacy = chat._make_qualifying_battle_widget(sample)
     assert w["type"] == "qualifying_battle"
-    assert w["type"] == legacy["type"]
-    assert w["driver_a"] == legacy["driver_a"]
+    assert w["driver_a"] == "NOR"
+    assert w["driver_b"] == "PIA"
+    assert w["faster_driver"] == "NOR"
 
 
 def test_qualifying_battle_should_show_widget_respects_availability():

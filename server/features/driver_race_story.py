@@ -16,6 +16,29 @@ _RELEVANT_MODES: frozenset[str] = frozenset()
 _REQUIRED_ARGS = ("round_number", "driver_name")
 
 
+def _build_race_story_widget(result: dict) -> dict:
+    race = result.get("race") or {}
+    qualifying = result.get("qualifying") or {}
+    radio = result.get("radio_highlights") or []
+    return {
+        "type": "race_story",
+        "title": result.get("driver"),
+        "subtitle": result.get("event"),
+        "driver_code": result.get("code"),
+        "team": result.get("team"),
+        "grid_position": race.get("grid_position") or qualifying.get("position"),
+        "finish_position": race.get("finish_position"),
+        "points": race.get("points"),
+        "status": race.get("status"),
+        "pit_stops": result.get("pit_stops") or [],
+        "story_points": result.get("story_points") or [],
+        "interval_summary": result.get("interval_summary"),
+        "position_timeline_summary": result.get("position_timeline_summary"),
+        "radio_highlights": radio[:3],
+        "rivalry_story": result.get("rivalry_story") or [],
+    }
+
+
 @register_feature
 class DriverRaceStoryFeature(Feature):
     name = "get_driver_race_story"
@@ -57,8 +80,7 @@ class DriverRaceStoryFeature(Feature):
         )
 
     def make_widget(self, result: dict) -> dict:
-        import chat
-        return chat._make_race_story_widget(result)
+        return _build_race_story_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
         return bool(result) and result.get("available", True) is not False

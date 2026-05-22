@@ -16,6 +16,30 @@ _RELEVANT_KEYWORDS = (
 )
 
 
+def _build_circuit_profile_widget(result: dict) -> dict:
+    """Builds a circuit_profile widget. If `result` carries a `track_map`
+    key (cross-feature injection from get_circuit_track_map), it is attached
+    to the widget."""
+    widget = {
+        "type": "circuit_profile",
+        "circuit_name": result.get("circuit_name"),
+        "circuit_key": result.get("circuit_key"),
+        "character": result.get("character"),
+        "downforce_level": result.get("downforce_level"),
+        "sector_1": result.get("sector_1"),
+        "sector_2": result.get("sector_2"),
+        "sector_3": result.get("sector_3"),
+        "energy_profile": result.get("energy_profile"),
+        "style_verdict": result.get("style_verdict"),
+        "tyre_challenge": result.get("tyre_challenge"),
+        "narrative": result.get("narrative"),
+    }
+    track_map = result.get("track_map")
+    if track_map:
+        widget["track_map"] = track_map
+    return widget
+
+
 @register_feature
 class CircuitProfileFeature(Feature):
     name = "get_circuit_profile"
@@ -50,8 +74,7 @@ class CircuitProfileFeature(Feature):
         return profile
 
     def make_widget(self, result: dict) -> dict:
-        import chat
-        return chat._make_circuit_profile_widget(result)
+        return _build_circuit_profile_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
         return bool(result) and result.get("available", True) is not False

@@ -86,12 +86,10 @@ def test_mini_sectors_should_show_widget_suppresses_tiny_delta():
     assert feat.should_show_widget({}) is False
 
 
-def test_mini_sectors_make_widget_passes_through_to_existing_builder():
-    """The Feature's make_widget should produce the same widget shape
-    as the existing _make_mini_sector_heatmap_widget in chat.py."""
+def test_mini_sectors_make_widget_produces_typed_widget():
+    """The Feature's make_widget should produce a typed mini_sector_heatmap widget."""
     from features.base import FEATURE_REGISTRY
     from features.registry import discover_features
-    import chat
     FEATURE_REGISTRY.clear()
     discover_features()
     feat = FEATURE_REGISTRY["compare_mini_sectors"]
@@ -106,9 +104,8 @@ def test_mini_sectors_make_widget_passes_through_to_existing_builder():
         "segments_won_a": 14, "segments_won_b": 8, "segments_tied": 3,
         "drs_mix_warning": False,
     }
-    via_feature = feat.make_widget(sample_result)
-    via_chat = chat._make_mini_sector_heatmap_widget(sample_result)
-    assert via_feature["type"] == "mini_sector_heatmap"
-    assert via_feature["type"] == via_chat["type"]
-    assert via_feature["driver_a"] == via_chat["driver_a"]
-    assert via_feature["total_delta_s"] == via_chat["total_delta_s"]
+    widget = feat.make_widget(sample_result)
+    assert widget["type"] == "mini_sector_heatmap"
+    assert widget["driver_a"] == "NOR"
+    assert widget["total_delta_s"] == 0.187
+    assert widget["lap_number"] == 21

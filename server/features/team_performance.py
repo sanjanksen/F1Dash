@@ -61,8 +61,8 @@ class TeamPerformanceFeature(Feature):
         )
 
     def make_widget(self, result: dict) -> dict:
-        import chat
-        return chat._make_corner_comparison_widget(result["corner_comparison"])
+        from features.corner_profiles import _build_corner_comparison_widget
+        return _build_corner_comparison_widget(result["corner_comparison"])
 
     def should_show_widget(self, result: dict) -> bool:
         return isinstance(result.get("corner_comparison"), dict)

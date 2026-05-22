@@ -15,6 +15,17 @@ _RELEVANT_MODES: frozenset[str] = frozenset()
 _REQUIRED_ARGS = ("round_number",)
 
 
+def _build_pit_stop_strategy_widget(result: dict) -> dict:
+    return {
+        "type": "pit_stop_strategy",
+        "title": f"{result.get('event')} strategy",
+        "event": result.get("event"),
+        "session": result.get("session"),
+        "total_laps": result.get("total_laps"),
+        "drivers": result.get("drivers") or [],
+    }
+
+
 @register_feature
 class PitStopAnalysisFeature(Feature):
     name = "get_pit_stop_analysis"
@@ -52,8 +63,7 @@ class PitStopAnalysisFeature(Feature):
         return f1_data.get_pit_stop_analysis(args["round_number"])
 
     def make_widget(self, result: dict) -> dict:
-        import chat
-        return chat._make_pit_stop_strategy_widget(result)
+        return _build_pit_stop_strategy_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
         return bool(result) and result.get("available", True) is not False

@@ -15,6 +15,23 @@ _RELEVANT_MODES: frozenset[str] = frozenset()
 _REQUIRED_ARGS = ("driver_code", "round_number", "session_type", "lap_number")
 
 
+def _build_active_aero_widget(result: dict) -> dict:
+    return {
+        "type": "active_aero",
+        "driver_code": result.get("driver_code"),
+        "round_number": result.get("round_number"),
+        "session_type": result.get("session_type"),
+        "lap_number": result.get("lap_number"),
+        "circuit_slug": result.get("circuit_slug"),
+        "circuit_in_coverage": result.get("circuit_in_coverage", False),
+        "segments": result.get("segments") or [],
+        "total_z_mode_seconds": result.get("total_z_mode_seconds", 0.0),
+        "estimated_lap_time_delta_s": result.get("estimated_lap_time_delta_s", 0.0),
+        "inferred": result.get("inferred", True),
+        "note": result.get("note"),
+    }
+
+
 @register_feature
 class ActiveAeroFeature(Feature):
     name = "analyze_active_aero_usage"
@@ -61,8 +78,7 @@ class ActiveAeroFeature(Feature):
         )
 
     def make_widget(self, result: dict) -> dict:
-        import chat
-        return chat._make_active_aero_widget(result)
+        return _build_active_aero_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
         # Legacy branch always appended the widget unconditionally.

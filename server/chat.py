@@ -80,71 +80,6 @@ import datetime
 CURRENT_YEAR = datetime.date.today().year
 
 
-def _make_qualifying_battle_widget(result: dict) -> dict:
-    energy_analysis = result.get("energy_analysis") or {}
-    clipping_callout = energy_analysis.get("clipping_comparison")
-    return {
-        "type": "qualifying_battle",
-        "title": f"{result.get('driver_a')} vs {result.get('driver_b')}",
-        "event": result.get("event"),
-        "session": result.get("compared_segment") or result.get("session"),
-        "driver_a": result.get("driver_a"),
-        "driver_b": result.get("driver_b"),
-        "faster_driver": result.get("faster_driver"),
-        "overall_gap_s": result.get("overall_gap_s"),
-        "decisive_sector": result.get("decisive_sector"),
-        "decisive_sector_gap_s": result.get("decisive_sector_gap_s"),
-        "decisive_corner": result.get("decisive_corner"),
-        "cause_type": result.get("cause_type"),
-        "cause_explanation": result.get("cause_explanation"),
-        "cause_explanations": result.get("cause_explanations") or [],
-        "zone_summary": result.get("zone_summary"),
-        "energy_relevant": result.get("energy_relevant"),
-        "energy_reason": result.get("energy_reason"),
-        "is_teammate_comparison": result.get("is_teammate_comparison") or False,
-        "teammate_context": result.get("teammate_context"),
-        "sector_comparison": result.get("sector_comparison"),
-        "style_comparison": result.get("style_comparison"),
-        "speed_trace": result.get("speed_trace") or [],
-        "drs_states": [
-            bool(p.get("drs_a_active") or p.get("drs_b_active"))
-            for p in (result.get("speed_trace") or [])
-        ],
-        "track_map": result.get("track_map") or [],
-        "focus_window_trace": result.get("focus_window_trace") or [],
-        "grip_commitment": result.get("grip_commitment"),
-        "clipping_callout": clipping_callout,
-    }
-
-
-def _make_mini_sector_heatmap_widget(result: dict) -> dict:
-    """Map compare_mini_sectors output to the mini_sector_heatmap widget shape."""
-    if not result.get("available", True):
-        return {
-            "type": "mini_sector_heatmap",
-            "available": False,
-            "reason": result.get("reason"),
-        }
-    return {
-        "type": "mini_sector_heatmap",
-        "available": True,
-        "driver_a": result.get("driver_a"),
-        "driver_b": result.get("driver_b"),
-        "lap_number": result.get("lap_number"),
-        "round_number": result.get("round_number"),
-        "session_type": result.get("session_type"),
-        "n_segments": result.get("n_segments"),
-        "weather_state": result.get("weather_state"),
-        "segments": result.get("segments") or [],
-        "cumulative_delta": result.get("cumulative_delta") or [],
-        "total_delta_s": result.get("total_delta_s"),
-        "segments_won_a": result.get("segments_won_a"),
-        "segments_won_b": result.get("segments_won_b"),
-        "segments_tied": result.get("segments_tied"),
-        "drs_mix_warning": result.get("drs_mix_warning", False),
-    }
-
-
 def _make_grip_commitment_summary(result: dict) -> dict | None:
     summary = result.get("summary") or {}
     driver_a = result.get("driver_a")
@@ -271,225 +206,6 @@ def _make_grip_commitment_summary(result: dict) -> dict | None:
     }
 
 
-def _make_race_story_widget(result: dict) -> dict:
-    race = result.get("race") or {}
-    qualifying = result.get("qualifying") or {}
-    radio = result.get("radio_highlights") or []
-    return {
-        "type": "race_story",
-        "title": result.get("driver"),
-        "subtitle": result.get("event"),
-        "driver_code": result.get("code"),
-        "team": result.get("team"),
-        "grid_position": race.get("grid_position") or qualifying.get("position"),
-        "finish_position": race.get("finish_position"),
-        "points": race.get("points"),
-        "status": race.get("status"),
-        "pit_stops": result.get("pit_stops") or [],
-        "story_points": result.get("story_points") or [],
-        "interval_summary": result.get("interval_summary"),
-        "position_timeline_summary": result.get("position_timeline_summary"),
-        "radio_highlights": radio[:3],
-        "rivalry_story": result.get("rivalry_story") or [],
-    }
-
-
-def _make_race_pace_battle_widget(result: dict) -> dict:
-    aligned_stints = []
-    for stint in result.get("aligned_stints") or []:
-        stint_a = stint.get("driver_a") or stint.get("stint_a") or {}
-        stint_b = stint.get("driver_b") or stint.get("stint_b") or {}
-        laps_a = set(stint_a.get("lap_numbers") or [])
-        laps_b = set(stint_b.get("lap_numbers") or [])
-        overlap = len(laps_a & laps_b) if laps_a and laps_b else None
-        aligned_stints.append({
-            "compound": stint.get("compound"),
-            "driver_a": stint_a,
-            "driver_b": stint_b,
-            "pace_delta_s": stint.get("pace_delta_s"),
-            "deg_rate_delta": stint.get("deg_rate_delta"),
-            "lap_overlap": overlap,
-        })
-
-    return {
-        "type": "race_pace_battle",
-        "title": f"{result.get('driver_a')} vs {result.get('driver_b')}",
-        "event": result.get("event"),
-        "session": result.get("session"),
-        "driver_a": result.get("driver_a"),
-        "driver_b": result.get("driver_b"),
-        "fuel_corrected_pace_a_s": result.get("fuel_corrected_pace_a_s"),
-        "fuel_corrected_pace_b_s": result.get("fuel_corrected_pace_b_s"),
-        "overall_pace_delta_s": result.get("overall_pace_delta_s"),
-        "avg_deg_rate_a_s_per_lap": result.get("avg_deg_rate_a_s_per_lap"),
-        "avg_deg_rate_b_s_per_lap": result.get("avg_deg_rate_b_s_per_lap"),
-        "tyre_management_a": result.get("tyre_management_a"),
-        "tyre_management_b": result.get("tyre_management_b"),
-        "deg_rate_delta": result.get("deg_rate_delta"),
-        "decisive_factor": result.get("decisive_factor"),
-        "aligned_stints": aligned_stints,
-        "undercut_opportunity": result.get("undercut_opportunity"),
-        "clipping_callout": result.get("clipping_comparison"),
-        "clipping_segments_a": (result.get("clipping_signature_a") or {}).get("segments") or [],
-        "clipping_segments_b": (result.get("clipping_signature_b") or {}).get("segments") or [],
-        "total_clipping_seconds_a": (result.get("clipping_signature_a") or {}).get("total_clipping_seconds"),
-        "total_clipping_seconds_b": (result.get("clipping_signature_b") or {}).get("total_clipping_seconds"),
-    }
-
-
-def _make_corner_comparison_widget(result: dict) -> dict:
-    return {
-        "type": "corner_comparison",
-        "title": f"{result.get('driver_a')} vs {result.get('driver_b')}",
-        "event": result.get("event"),
-        "session": result.get("session"),
-        "driver_a": result.get("driver_a"),
-        "driver_b": result.get("driver_b"),
-        "faster_driver": result.get("faster_driver"),
-        "overall_gap_s": result.get("overall_gap_s"),
-        "setup_direction_inference": result.get("setup_direction_inference"),
-        "gain_location_summary": result.get("gain_location_summary") or [],
-        "cause_breakdown": result.get("cause_breakdown") or {},
-        "avg_straight_speed_a_kph": result.get("avg_straight_speed_a_kph"),
-        "avg_straight_speed_b_kph": result.get("avg_straight_speed_b_kph"),
-    }
-
-
-def _make_circuit_profile_widget(result: dict, track_map: dict | None = None) -> dict:
-    widget = {
-        "type": "circuit_profile",
-        "circuit_name": result.get("circuit_name"),
-        "circuit_key": result.get("circuit_key"),
-        "character": result.get("character"),
-        "downforce_level": result.get("downforce_level"),
-        "sector_1": result.get("sector_1"),
-        "sector_2": result.get("sector_2"),
-        "sector_3": result.get("sector_3"),
-        "energy_profile": result.get("energy_profile"),
-        "style_verdict": result.get("style_verdict"),
-        "tyre_challenge": result.get("tyre_challenge"),
-        "narrative": result.get("narrative"),
-    }
-    if track_map:
-        widget["track_map"] = track_map
-    return widget
-
-
-def _make_pit_stop_strategy_widget(result: dict) -> dict:
-    return {
-        "type": "pit_stop_strategy",
-        "title": f"{result.get('event')} strategy",
-        "event": result.get("event"),
-        "session": result.get("session"),
-        "total_laps": result.get("total_laps"),
-        "drivers": result.get("drivers") or [],
-    }
-
-
-def _make_deg_trend_chart_widget(result: dict) -> dict:
-    return {
-        "type": "deg_trend_chart",
-        "title": f"{result.get('driver')} — {result.get('event')} tyre degradation",
-        "driver": result.get("driver"),
-        "event": result.get("event"),
-        "stints": [
-            {
-                "compound": s.get("compound"),
-                "lap_count": s.get("lap_count"),
-                "deg_rate_s_per_lap": s.get("deg_rate_s_per_lap"),
-                "r_squared": s.get("r_squared"),
-                "scatter_data": s.get("scatter_data") or [],
-                "regression_line": s.get("regression_line") or [],
-                "cliff_detected": s.get("cliff_detected", False),
-                "cliff_tyre_age": s.get("cliff_tyre_age"),
-                "cliff_slope_increase_s_per_lap": s.get("cliff_slope_increase_s_per_lap"),
-                "cliff_severity_ratio": s.get("cliff_severity_ratio"),
-                "pre_cliff_deg_rate_s_per_lap": s.get("pre_cliff_deg_rate_s_per_lap"),
-                "post_cliff_deg_rate_s_per_lap": s.get("post_cliff_deg_rate_s_per_lap"),
-                "pre_cliff_regression_line": s.get("pre_cliff_regression_line") or [],
-                "post_cliff_regression_line": s.get("post_cliff_regression_line") or [],
-                "cliff_confidence": s.get("cliff_confidence"),
-            }
-            for s in (result.get("stints") or [])
-            if s.get("scatter_data") or s.get("regression_line")
-        ],
-    }
-
-
-def _make_energy_management_widget(result: dict) -> dict:
-    drivers = result.get("drivers") or []
-    driver_a = drivers[0].get("driver") if drivers else None
-    driver_b = drivers[1].get("driver") if len(drivers) > 1 else None
-    label = driver_a or "Energy"
-    if driver_b:
-        label = f"{driver_a} vs {driver_b}"
-    return {
-        "type": "energy_management",
-        "title": f"{label} — {result.get('event')} energy management",
-        "driver_a": driver_a,
-        "driver_b": driver_b,
-        "event": result.get("event"),
-        "session": result.get("session"),
-        "drivers": drivers,
-        "speed_trace_a": result.get("speed_trace_a") or [],
-        "speed_trace_b": result.get("speed_trace_b"),
-        "energy_metrics_a": result.get("energy_metrics_a") or {},
-        "energy_metrics_b": result.get("energy_metrics_b"),
-        "straight_breakdown": result.get("straight_breakdown") or [],
-        "confidence": result.get("confidence"),
-        "inference_summary": result.get("inference_summary") or [],
-        "clipping_segments_a": (result.get("clipping_signature_a") or {}).get("segments") or [],
-        "clipping_segments_b": (result.get("clipping_signature_b") or {}).get("segments") or [],
-        "total_clipping_seconds_a": (result.get("clipping_signature_a") or {}).get("total_clipping_seconds"),
-        "total_clipping_seconds_b": (result.get("clipping_signature_b") or {}).get("total_clipping_seconds"),
-        "clipping_budget_status_a": (result.get("clipping_signature_a") or {}).get("budget_status"),
-        "clipping_budget_status_b": (result.get("clipping_signature_b") or {}).get("budget_status"),
-    }
-
-
-def _make_active_aero_widget(result: dict) -> dict:
-    return {
-        "type": "active_aero",
-        "driver_code": result.get("driver_code"),
-        "round_number": result.get("round_number"),
-        "session_type": result.get("session_type"),
-        "lap_number": result.get("lap_number"),
-        "circuit_slug": result.get("circuit_slug"),
-        "circuit_in_coverage": result.get("circuit_in_coverage", False),
-        "segments": result.get("segments") or [],
-        "total_z_mode_seconds": result.get("total_z_mode_seconds", 0.0),
-        "estimated_lap_time_delta_s": result.get("estimated_lap_time_delta_s", 0.0),
-        "inferred": result.get("inferred", True),
-        "note": result.get("note"),
-    }
-
-
-def _make_undercut_overcut_widget(result: dict) -> dict:
-    """Map an analyze_undercut_overcut tool result to a UI widget dict."""
-    return {
-        "type": "undercut_overcut",
-        "driver_code": result.get("driver_code"),
-        "target_driver_code": result.get("target_driver_code"),
-        "current_lap": result.get("current_lap"),
-        "event": result.get("event"),
-        "round_number": result.get("round_number"),
-        "session_type": result.get("session_type"),
-        "advantage_s": result.get("advantage_s"),
-        "crossover_lap": result.get("crossover_lap"),
-        "recommendation": result.get("recommendation"),
-        "confidence": result.get("confidence"),
-        "active_sc_state": result.get("active_sc_state"),
-        "pit_loss_s": result.get("pit_loss_s"),
-        "pit_loss_green_s": result.get("pit_loss_green_s"),
-        "delta_fresh_pace_s_per_lap": result.get("delta_fresh_pace_s_per_lap"),
-        "out_lap_warmup_s": result.get("out_lap_warmup_s"),
-        "traffic_cost_s": result.get("traffic_cost_s"),
-        "advantage_by_rejoin_lap": result.get("advantage_by_rejoin_lap") or [],
-        "rationale": result.get("rationale") or [],
-        "inputs_summary": result.get("inputs_summary") or {},
-    }
-
-
 def _registry_widget(tool: str, result: dict) -> dict | None:
     """Look up tool in FEATURE_REGISTRY. Return widget if registered AND
     should_show_widget passes, else None. Caller falls through to legacy."""
@@ -510,25 +226,12 @@ def _widgets_from_preloaded(preloaded: dict | None) -> list[dict]:
 
     # Registry-first dispatch: if the tool is a registered Feature, route
     # the widget through feature.make_widget (respecting should_show_widget).
-    # Legacy if/elif below is the fallback for not-yet-migrated tools and
-    # shrinks as Phase D progresses.
+    # All widget-bearing preload tools have been migrated to the registry; no
+    # legacy fallback remains here.
     from features.base import FEATURE_REGISTRY
     if tool in FEATURE_REGISTRY:
         w = _registry_widget(tool, result)
         return [w] if w is not None else []
-
-    if tool == "get_driver_race_story":
-        return [_make_race_story_widget(result)]
-    if tool == "analyze_qualifying_battle":
-        return [_make_qualifying_battle_widget(result)]
-    if tool == "analyze_race_pace_battle":
-        return [_make_race_pace_battle_widget(result)]
-    if tool == "compare_corner_profiles":
-        return [_make_corner_comparison_widget(result)]
-    if tool == "analyze_team_performance" and isinstance(result.get("corner_comparison"), dict):
-        return [_make_corner_comparison_widget(result["corner_comparison"])]
-    if tool == "compare_mini_sectors":
-        return [_make_mini_sector_heatmap_widget(result)]
     return []
 
 
@@ -584,41 +287,25 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
             result = dict(item["result"])
             if grip_commitment:
                 result["grip_commitment"] = grip_commitment
-            widgets.append(_make_qualifying_battle_widget(result))
-        elif tool == "get_driver_race_story":
-            widgets.append(_make_race_story_widget(item["result"]))
-        elif tool == "analyze_race_pace_battle":
-            widgets.append(_make_race_pace_battle_widget(item["result"]))
+            feat = FEATURE_REGISTRY["analyze_qualifying_battle"]
+            widgets.append(feat.make_widget(result))
         elif tool == "compare_corner_profiles":
             # Focus-based skip rule — kept on legacy path until plan-context
             # is part of the Feature contract.
             if plan.get("focus") == "qualifying" and has_primary_qualifying_widget:
                 continue
-            widgets.append(_make_corner_comparison_widget(item["result"]))
-        elif tool == "analyze_team_performance" and isinstance(item["result"].get("corner_comparison"), dict):
-            widgets.append(_make_corner_comparison_widget(item["result"]["corner_comparison"]))
+            feat = FEATURE_REGISTRY["compare_corner_profiles"]
+            widgets.append(feat.make_widget(item["result"]))
         elif tool == "get_circuit_profile":
             # track_map is passed in from a sibling tool — kept on legacy path
             # until Feature contract supports cross-result composition.
             if plan.get("analysis_mode") == "circuit_profile" and plan.get("emit_context_widget") is False:
                 continue
-            widgets.append(_make_circuit_profile_widget(item["result"], track_map=track_map_result))
-        elif tool == "get_pit_stop_analysis":
-            widgets.append(_make_pit_stop_strategy_widget(item["result"]))
-        elif tool == "analyze_stint_degradation":
-            w = _make_deg_trend_chart_widget(item["result"])
-            if w.get("stints"):
-                widgets.append(w)
-        elif tool == "analyze_energy_management":
-            w = _make_energy_management_widget(item["result"])
-            if w.get("speed_trace_a"):
-                widgets.append(w)
-        elif tool == "analyze_active_aero_usage":
-            widgets.append(_make_active_aero_widget(item["result"]))
-        elif tool == "analyze_undercut_overcut":
-            widgets.append(_make_undercut_overcut_widget(item["result"]))
-        elif tool == "compare_mini_sectors":
-            widgets.append(_make_mini_sector_heatmap_widget(item["result"]))
+            result = dict(item["result"])
+            if track_map_result:
+                result["track_map"] = track_map_result
+            feat = FEATURE_REGISTRY["get_circuit_profile"]
+            widgets.append(feat.make_widget(result))
 
     # Standalone corner_analysis widget: when cornering loads were run but there's no
     # qualifying_battle widget to embed grip_commitment into (pure grip comparison query).

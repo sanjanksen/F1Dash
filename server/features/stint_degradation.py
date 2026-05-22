@@ -15,6 +15,36 @@ _RELEVANT_MODES = frozenset({"race_pace_comparison"})
 _REQUIRED_ARGS = ("round_number", "driver_code")
 
 
+def _build_deg_trend_chart_widget(result: dict) -> dict:
+    return {
+        "type": "deg_trend_chart",
+        "title": f"{result.get('driver')} — {result.get('event')} tyre degradation",
+        "driver": result.get("driver"),
+        "event": result.get("event"),
+        "stints": [
+            {
+                "compound": s.get("compound"),
+                "lap_count": s.get("lap_count"),
+                "deg_rate_s_per_lap": s.get("deg_rate_s_per_lap"),
+                "r_squared": s.get("r_squared"),
+                "scatter_data": s.get("scatter_data") or [],
+                "regression_line": s.get("regression_line") or [],
+                "cliff_detected": s.get("cliff_detected", False),
+                "cliff_tyre_age": s.get("cliff_tyre_age"),
+                "cliff_slope_increase_s_per_lap": s.get("cliff_slope_increase_s_per_lap"),
+                "cliff_severity_ratio": s.get("cliff_severity_ratio"),
+                "pre_cliff_deg_rate_s_per_lap": s.get("pre_cliff_deg_rate_s_per_lap"),
+                "post_cliff_deg_rate_s_per_lap": s.get("post_cliff_deg_rate_s_per_lap"),
+                "pre_cliff_regression_line": s.get("pre_cliff_regression_line") or [],
+                "post_cliff_regression_line": s.get("post_cliff_regression_line") or [],
+                "cliff_confidence": s.get("cliff_confidence"),
+            }
+            for s in (result.get("stints") or [])
+            if s.get("scatter_data") or s.get("regression_line")
+        ],
+    }
+
+
 @register_feature
 class StintDegradationFeature(Feature):
     name = "analyze_stint_degradation"
@@ -66,13 +96,11 @@ class StintDegradationFeature(Feature):
         )
 
     def make_widget(self, result: dict) -> dict:
-        import chat
-        return chat._make_deg_trend_chart_widget(result)
+        return _build_deg_trend_chart_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
         # Legacy gate: `if w.get("stints"): widgets.append(w)`. Stints in the
         # built widget are filtered to only those with scatter or regression
         # data, so check the same after-build shape via the builder.
-        import chat
-        w = chat._make_deg_trend_chart_widget(result)
+        w = _build_deg_trend_chart_widget(result)
         return bool(w.get("stints"))

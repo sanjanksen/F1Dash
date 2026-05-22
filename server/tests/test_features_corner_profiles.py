@@ -39,14 +39,13 @@ def test_corner_profiles_mode_only_does_not_fire():
     assert score < 0.5
 
 
-def test_corner_profiles_make_widget_delegates_to_chat_builder():
+def test_corner_profiles_make_widget_produces_typed_widget():
     feat = _load_feat()
-    import chat
     sample = {"driver_a": "NOR", "driver_b": "LEC", "event": "Imola"}
     w = feat.make_widget(sample)
-    legacy = chat._make_corner_comparison_widget(sample)
     assert w["type"] == "corner_comparison"
-    assert w["type"] == legacy["type"]
+    assert w["driver_a"] == "NOR"
+    assert w["driver_b"] == "LEC"
 
 
 def test_corner_profiles_should_show_widget_respects_availability():
