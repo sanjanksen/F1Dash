@@ -62,4 +62,8 @@ class CorneringLoadsFeature(Feature):
         return {}
 
     def should_show_widget(self, result: dict) -> bool:
+        # cornering_loads contributes grip_commitment to qualifying_battle widget
+        # via cross-feature merge in chat.py. The standalone corner_analysis widget
+        # is also emitted by chat.py's composer (only when no qualifying widget
+        # is present). This Feature's own widget contribution is None.
         return False

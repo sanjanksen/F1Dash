@@ -33,4 +33,6 @@ class HeadToHeadFeature(Feature):
         return {}
 
     def should_show_widget(self, result: dict) -> bool:
+        # head_to_head currently emits no widget; gate stays False until a
+        # widget component is wired up.
         return False
