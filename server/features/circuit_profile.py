@@ -44,6 +44,7 @@ def _build_circuit_profile_widget(result: dict) -> dict:
 class CircuitProfileFeature(Feature):
     name = "get_circuit_profile"
     applies_to = ("session",)
+    triggered_by_modes = frozenset({"circuit_profile"})
     description = (
         "PRIMITIVE TOOL. Returns a structured knowledge profile for a circuit: character (power/technical/street), "
         "per-sector types and style advantages (V-line vs U-line vs late-braker), energy deployment demand, "

@@ -38,3 +38,11 @@ def test_circuit_profile_should_show_widget_respects_availability():
     assert feat.should_show_widget({"circuit_name": "Imola"}) is True
     assert feat.should_show_widget({"available": False}) is False
     assert feat.should_show_widget({}) is False
+
+
+def test_circuit_profile_declares_triggered_by_modes():
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    discover_features()
+    feat = FEATURE_REGISTRY["get_circuit_profile"]
+    assert feat.triggered_by_modes == frozenset({"circuit_profile"})

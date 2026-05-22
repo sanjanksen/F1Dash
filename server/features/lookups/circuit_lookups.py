@@ -72,6 +72,7 @@ class CircuitCornersFeature(Feature):
 class CircuitTrackMapFeature(Feature):
     name = "get_circuit_track_map"
     applies_to = ()
+    triggered_by_modes = frozenset({"circuit_profile"})
     description = (
         "PRIMITIVE TOOL. GPS-derived circuit shape: downsampled {x, y, distance_m} points from the "
         "fastest lap plus sector boundary distances. Use for circuit map visualization."
@@ -103,6 +104,7 @@ class CircuitTrackMapFeature(Feature):
 class HistoricalCircuitPerformanceFeature(Feature):
     name = "get_historical_circuit_performance"
     applies_to = ()
+    triggered_by_modes = frozenset({"circuit_profile"})
     description = (
         "PRIMITIVE TOOL. Historical quali/race top performers for the same circuit across recent years."
     )
