@@ -5,13 +5,6 @@ import f1_data
 from features.base import Feature, register_feature
 
 
-_RELEVANT_KEYWORDS = (
-    "race cornering", "race corner profile", "cornering in the race",
-    "race grip", "race-long grip", "race g-force", "race g force",
-    "corner profile", "tyre stress",
-)
-
-
 @register_feature
 class RaceCorneringProfileFeature(Feature):
     name = "analyze_race_cornering_profile"
@@ -38,8 +31,10 @@ class RaceCorneringProfileFeature(Feature):
     }
 
     def is_relevant_for(self, question: str, resolved: dict | None) -> float:
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _RELEVANT_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args) -> dict:
         return f1_data.analyze_race_cornering_profile(

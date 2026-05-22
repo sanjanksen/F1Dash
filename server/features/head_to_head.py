@@ -5,12 +5,6 @@ import f1_data
 from features.base import Feature, register_feature
 
 
-_RELEVANT_KEYWORDS = (
-    "head to head", "head-to-head", "h2h", " vs ", "vs.", "against",
-    "beat", "compared to", "compare", "matchup",
-)
-
-
 @register_feature
 class HeadToHeadFeature(Feature):
     name = "get_head_to_head"
@@ -27,8 +21,10 @@ class HeadToHeadFeature(Feature):
     }
 
     def is_relevant_for(self, question: str, resolved: dict | None) -> float:
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _RELEVANT_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args) -> dict:
         return f1_data.get_head_to_head(args["driver_a"], args["driver_b"])

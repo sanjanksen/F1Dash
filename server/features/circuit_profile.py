@@ -10,12 +10,6 @@ from __future__ import annotations
 from features.base import Feature, register_feature
 
 
-_RELEVANT_KEYWORDS = (
-    "circuit", "track", "layout", "downforce", "character", "sectors",
-    "circuit profile", "track profile",
-)
-
-
 def _build_circuit_profile_widget(result: dict) -> dict:
     """Builds a circuit_profile widget. If `result` carries a `track_map`
     key (cross-feature injection from get_circuit_track_map), it is attached
@@ -64,8 +58,10 @@ class CircuitProfileFeature(Feature):
     }
 
     def is_relevant_for(self, question: str, resolved: dict | None) -> float:
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _RELEVANT_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args) -> dict:
         from circuit_profiles import get_circuit_profile

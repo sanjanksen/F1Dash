@@ -11,16 +11,6 @@ import f1_data
 from features.base import Feature, register_feature
 
 
-_RELEVANT_KEYWORDS = (
-    "where", "sector", "segment", "faster", "slower", "lose time",
-    "gain time", "lost", "gained", "split", "lap-by-lap",
-)
-
-# Compatible modes act as an eligibility gate only — they cap the score below
-# the fire threshold (0.5) when no keyword intent is present. Mode classifier
-# already narrowed scope upstream; this predicate confirms specific intent.
-_RELEVANT_MODES = frozenset({"qualifying_battle", "driver_comparison"})
-
 _REQUIRED_ARGS = ("driver_a", "driver_b", "lap_number", "round_number")
 
 
@@ -80,18 +70,9 @@ class MiniSectorsFeature(Feature):
     }
 
     def is_relevant_for(self, question: str, resolved: dict | None) -> float:
-        q = (question or "").lower()
-        mode = (resolved or {}).get("analysis_mode")
-
-        has_keyword = any(kw in q for kw in _RELEVANT_KEYWORDS)
-        has_mode = mode in _RELEVANT_MODES
-
-        if has_keyword and has_mode:
-            return 0.85
-        if has_keyword:
-            return 0.65
-        if has_mode:
-            return 0.45  # eligibility candidate but no explicit intent — below fire threshold
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
         return 0.0
 
     def execute(self, **args) -> dict:

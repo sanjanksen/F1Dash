@@ -5,15 +5,6 @@ import f1_data
 from features.base import Feature, register_feature
 
 
-_RELEVANT_KEYWORDS = (
-    "team weekend", "team summary", "team recap", "how did ferrari",
-    "how did mclaren", "how did mercedes", "how did red bull",
-    "how did williams", "how did alpine", "how did rb", "how did kick",
-    "how did aston", "how did haas", "weekend",
-)
-
-_RELEVANT_MODES: frozenset[str] = frozenset()
-
 _REQUIRED_ARGS = ("round_number", "team_name")
 
 
@@ -38,16 +29,9 @@ class TeamWeekendOverviewFeature(Feature):
     }
 
     def is_relevant_for(self, question: str, resolved: dict | None) -> float:
-        q = (question or "").lower()
-        mode = (resolved or {}).get("analysis_mode")
-        has_keyword = any(kw in q for kw in _RELEVANT_KEYWORDS)
-        has_mode = mode in _RELEVANT_MODES
-        if has_keyword and has_mode:
-            return 0.85
-        if has_keyword:
-            return 0.65
-        if has_mode:
-            return 0.45
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
         return 0.0
 
     def execute(self, **args) -> dict:

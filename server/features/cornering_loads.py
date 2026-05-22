@@ -10,12 +10,6 @@ import f1_data
 from features.base import Feature, register_feature
 
 
-_RELEVANT_KEYWORDS = (
-    "cornering loads", "g-force", "g force", "commitment", "lateral g",
-    "grip", "grip utilisation", "grip utilization", "bravery",
-)
-
-
 @register_feature
 class CorneringLoadsFeature(Feature):
     name = "analyze_cornering_loads"
@@ -48,8 +42,10 @@ class CorneringLoadsFeature(Feature):
     }
 
     def is_relevant_for(self, question: str, resolved: dict | None) -> float:
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _RELEVANT_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args) -> dict:
         return f1_data.analyze_cornering_loads(

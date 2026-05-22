@@ -8,12 +8,6 @@ from features.base import Feature, register_feature
 logger = logging.getLogger(__name__)
 
 
-_RELEVANT_KEYWORDS = (
-    "driving style", "smooth", "aggressive", "late braker", "late braking",
-    "throttle application", "driver style", "v-line", "u-line",
-)
-
-
 @register_feature
 class DriverStyleProfileFeature(Feature):
     name = "get_driver_style_profile"
@@ -37,8 +31,10 @@ class DriverStyleProfileFeature(Feature):
     }
 
     def is_relevant_for(self, question: str, resolved: dict | None) -> float:
-        q = (question or "").lower()
-        return 0.65 if any(kw in q for kw in _RELEVANT_KEYWORDS) else 0.0
+        # Mode-driven orchestration replaced keyword predicates. The Feature
+        # ABC still requires this method; the agentic fallback path may call
+        # it (returns 0 = "no opinion from this layer").
+        return 0.0
 
     def execute(self, **args) -> dict:
         from driver_styles import get_driver_style, get_comparison_framing
