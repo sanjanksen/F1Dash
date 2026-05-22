@@ -22,8 +22,10 @@ def discover_features() -> int:
     Returns the number of features in the registry after discovery.
     """
     import features  # the package itself
-    for module_info in pkgutil.iter_modules(features.__path__, prefix="features."):
+    for module_info in pkgutil.walk_packages(features.__path__, prefix="features."):
         if module_info.name in ("features.base", "features.registry"):
+            continue
+        if module_info.ispkg:
             continue
         try:
             importlib.import_module(module_info.name)
