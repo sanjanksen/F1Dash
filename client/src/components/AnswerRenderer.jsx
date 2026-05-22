@@ -1,17 +1,5 @@
 import { Badge } from './ui/badge.jsx'
-import QualifyingBattleWidget from './chat-widgets/QualifyingBattleWidget.jsx'
-import CornerAnalysisWidget from './chat-widgets/CornerAnalysisWidget.jsx'
-import RaceStoryWidget from './chat-widgets/RaceStoryWidget.jsx'
-import RacePaceBattleWidget from './chat-widgets/RacePaceBattleWidget.jsx'
-import CornerComparisonWidget from './chat-widgets/CornerComparisonWidget.jsx'
-import CircuitProfileWidget from './chat-widgets/CircuitProfileWidget.jsx'
-import DataTableWidget from './chat-widgets/DataTableWidget.jsx'
-import PitStopStrategyWidget from './chat-widgets/PitStopStrategyWidget.jsx'
-import DegTrendChart from './chat-widgets/DegTrendChart.jsx'
-import EnergyManagementWidget from './chat-widgets/EnergyManagementWidget.jsx'
-import ActiveAeroWidget from './chat-widgets/ActiveAeroWidget.jsx'
-import UndercutOvercutWidget from './chat-widgets/UndercutOvercutWidget.jsx'
-import MiniSectorHeatmapWidget from './chat-widgets/MiniSectorHeatmapWidget.jsx'
+import { widgetRegistry } from './chat-widgets/widgetRegistry.js'
 
 function splitBlocks(text) {
   return text
@@ -137,46 +125,14 @@ function List({ items, ordered = false, driverCodeSet }) {
 
 function WidgetRenderer({ widget }) {
   if (!widget?.type) return null
-  if (widget.type === 'qualifying_battle') {
-    return <QualifyingBattleWidget widget={widget} />
+  const Component = widgetRegistry[widget.type]
+  if (!Component) {
+    if (import.meta.env.DEV) {
+      console.warn(`Unknown widget type: ${widget.type}`)
+    }
+    return null
   }
-  if (widget.type === 'corner_analysis') {
-    return <CornerAnalysisWidget widget={widget} />
-  }
-  if (widget.type === 'race_story') {
-    return <RaceStoryWidget widget={widget} />
-  }
-  if (widget.type === 'race_pace_battle') {
-    return <RacePaceBattleWidget widget={widget} />
-  }
-  if (widget.type === 'corner_comparison') {
-    return <CornerComparisonWidget widget={widget} />
-  }
-  if (widget.type === 'circuit_profile') {
-    return <CircuitProfileWidget widget={widget} />
-  }
-  if (widget.type === 'data_table') {
-    return <DataTableWidget widget={widget} />
-  }
-  if (widget.type === 'pit_stop_strategy') {
-    return <PitStopStrategyWidget widget={widget} />
-  }
-  if (widget.type === 'deg_trend_chart') {
-    return <DegTrendChart widget={widget} />
-  }
-  if (widget.type === 'energy_management') {
-    return <EnergyManagementWidget widget={widget} />
-  }
-  if (widget.type === 'active_aero') {
-    return <ActiveAeroWidget widget={widget} />
-  }
-  if (widget.type === 'undercut_overcut') {
-    return <UndercutOvercutWidget widget={widget} />
-  }
-  if (widget.type === 'mini_sector_heatmap') {
-    return <MiniSectorHeatmapWidget widget={widget} />
-  }
-  return null
+  return <Component widget={widget} />
 }
 
 export default function AnswerRenderer({ text, widgets = [], validDriverCodes }) {
