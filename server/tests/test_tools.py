@@ -13,7 +13,7 @@ def test_execute_tool_get_driver_standings_returns_sliced_list():
          "points": 120.0, "wins": 2, "code": "NOR", "nationality": "British",
          "driver_id": "norris"},
     ]
-    with patch('tools.get_drivers', return_value=mock_drivers):
+    with patch('f1_data.get_drivers', return_value=mock_drivers):
         result = tools.execute_tool("get_driver_standings", {"limit": 1})
     assert len(result) == 1
     assert result[0]["full_name"] == "Max Verstappen"
@@ -21,48 +21,48 @@ def test_execute_tool_get_driver_standings_returns_sliced_list():
 
 def test_execute_tool_get_driver_standings_default_limit():
     mock_drivers = [{"full_name": f"Driver {i}", "standing": i} for i in range(1, 22)]
-    with patch('tools.get_drivers', return_value=mock_drivers):
+    with patch('f1_data.get_drivers', return_value=mock_drivers):
         result = tools.execute_tool("get_driver_standings", {})
     assert len(result) == 20  # default limit
 
 
 def test_execute_tool_get_constructor_standings():
     mock = [{"team": "Red Bull Racing", "position": 1, "points": 200.0, "wins": 4}]
-    with patch('tools.get_constructor_standings', return_value=mock):
+    with patch('f1_data.get_constructor_standings', return_value=mock):
         result = tools.execute_tool("get_constructor_standings", {})
     assert result[0]["team"] == "Red Bull Racing"
 
 
 def test_execute_tool_get_driver_season_stats_found():
     mock_stats = {"driver": "Lando Norris", "wins": 2, "podiums": 6, "points": 120.0}
-    with patch('tools.get_driver_stats', return_value=mock_stats):
+    with patch('f1_data.get_driver_stats', return_value=mock_stats):
         result = tools.execute_tool("get_driver_season_stats", {"driver_name": "norris"})
     assert result["driver"] == "Lando Norris"
 
 
 def test_execute_tool_get_driver_season_stats_not_found():
-    with patch('tools.get_driver_stats', return_value=None):
+    with patch('f1_data.get_driver_stats', return_value=None):
         with pytest.raises(ValueError, match="not found"):
             tools.execute_tool("get_driver_season_stats", {"driver_name": "nobody"})
 
 
 def test_execute_tool_get_race_results():
     mock = {"race_name": "Bahrain Grand Prix", "results": []}
-    with patch('tools.get_race_results', return_value=mock):
+    with patch('f1_data.get_race_results', return_value=mock):
         result = tools.execute_tool("get_race_results", {"round_number": 1})
     assert result["race_name"] == "Bahrain Grand Prix"
 
 
 def test_execute_tool_get_qualifying_results():
     mock = {"race_name": "Bahrain Grand Prix", "results": []}
-    with patch('tools.get_qualifying_results', return_value=mock):
+    with patch('f1_data.get_qualifying_results', return_value=mock):
         result = tools.execute_tool("get_qualifying_results", {"round_number": 1})
     assert result["race_name"] == "Bahrain Grand Prix"
 
 
 def test_execute_tool_get_season_schedule():
     mock = [{"round": 1, "event_name": "Bahrain Grand Prix", "date": "2025-03-02"}]
-    with patch('tools.get_circuits', return_value=mock):
+    with patch('f1_data.get_circuits', return_value=mock):
         result = tools.execute_tool("get_season_schedule", {})
     assert result[0]["event_name"] == "Bahrain Grand Prix"
 
@@ -78,7 +78,7 @@ def test_execute_tool_get_head_to_head():
 
 def test_execute_tool_get_session_fastest_laps():
     mock = [{"driver": "NOR", "position": 1, "lap_time": "1:26.456"}]
-    with patch('tools.get_session_fastest_laps', return_value=mock):
+    with patch('f1_data.get_session_fastest_laps', return_value=mock):
         result = tools.execute_tool("get_session_fastest_laps",
                                     {"round_number": 8, "session_type": "Q"})
     assert result[0]["driver"] == "NOR"
@@ -86,7 +86,7 @@ def test_execute_tool_get_session_fastest_laps():
 
 def test_execute_tool_get_driver_lap_times():
     mock = {"driver": "NOR", "laps": [{"lap_number": 1, "lap_time": "1:26.456"}]}
-    with patch('tools.get_driver_lap_times', return_value=mock):
+    with patch('f1_data.get_driver_lap_times', return_value=mock):
         result = tools.execute_tool("get_driver_lap_times",
                                     {"round_number": 8, "session_type": "Q", "driver_code": "NOR"})
     assert result["driver"] == "NOR"
@@ -94,7 +94,7 @@ def test_execute_tool_get_driver_lap_times():
 
 def test_execute_tool_get_sector_comparison():
     mock = {"driver_a": "NOR", "driver_b": "LEC", "overall_gap_s": -0.256}
-    with patch('tools.get_sector_comparison', return_value=mock):
+    with patch('f1_data.get_sector_comparison', return_value=mock):
         result = tools.execute_tool("get_sector_comparison",
                                     {"round_number": 8, "session_type": "Q",
                                      "driver_a": "NOR", "driver_b": "LEC"})
@@ -103,7 +103,7 @@ def test_execute_tool_get_sector_comparison():
 
 def test_execute_tool_get_lap_telemetry():
     mock = {"driver": "NOR", "telemetry": [{"distance_m": 0, "speed_kph": 150.0}]}
-    with patch('tools.get_lap_telemetry', return_value=mock):
+    with patch('f1_data.get_lap_telemetry', return_value=mock):
         result = tools.execute_tool("get_lap_telemetry",
                                     {"round_number": 8, "session_type": "Q", "driver_code": "NOR"})
     assert result["driver"] == "NOR"
@@ -172,7 +172,7 @@ def test_tool_definitions_count():
 
 def test_execute_tool_get_telemetry_comparison():
     mock = {"driver_a": "NOR", "driver_b": "LEC", "comparison": [{"distance_m": 0, "delta_speed": 5.0}]}
-    with patch('tools.get_telemetry_comparison', return_value=mock):
+    with patch('f1_data.get_telemetry_comparison', return_value=mock):
         result = tools.execute_tool("get_telemetry_comparison", {
             "round_number": 8, "session_type": "Q",
             "driver_a": "NOR", "driver_b": "LEC"
@@ -183,49 +183,49 @@ def test_execute_tool_get_telemetry_comparison():
 
 def test_execute_tool_get_circuit_corners():
     mock = [{"number": 1, "label": None, "distance_m": 150}]
-    with patch('tools.get_circuit_corners', return_value=mock):
+    with patch('f1_data.get_circuit_corners', return_value=mock):
         result = tools.execute_tool("get_circuit_corners", {"round_number": 8})
     assert result[0]["number"] == 1
 
 
 def test_execute_tool_get_historical_circuit_performance():
     mock = {"circuit_id": "monaco", "history": [{"year": 2024}]}
-    with patch('tools.get_historical_circuit_performance', return_value=mock):
+    with patch('f1_data.get_historical_circuit_performance', return_value=mock):
         result = tools.execute_tool("get_historical_circuit_performance", {"round_number": 8})
     assert result["circuit_id"] == "monaco"
 
 
 def test_execute_tool_get_session_results():
     mock = {"event": "Bahrain Grand Prix", "results": [{"driver": "Max Verstappen"}]}
-    with patch('tools.get_session_results', return_value=mock):
+    with patch('f1_data.get_session_results', return_value=mock):
         result = tools.execute_tool("get_session_results", {"round_number": 1, "session_type": "R"})
     assert result["results"][0]["driver"] == "Max Verstappen"
 
 
 def test_execute_tool_get_driver_strategy():
     mock = {"drivers": [{"driver": "Lando Norris", "pit_stop_count": 1}]}
-    with patch('tools.get_driver_strategy', return_value=mock):
+    with patch('f1_data.get_driver_strategy', return_value=mock):
         result = tools.execute_tool("get_driver_strategy", {"round_number": 1, "session_type": "R", "driver_code": "NOR"})
     assert result["drivers"][0]["pit_stop_count"] == 1
 
 
 def test_execute_tool_get_qualifying_progression():
     mock = {"drivers": [{"abbreviation": "NOR", "made_q3": True}]}
-    with patch('tools.get_qualifying_progression', return_value=mock):
+    with patch('f1_data.get_qualifying_progression', return_value=mock):
         result = tools.execute_tool("get_qualifying_progression", {"round_number": 1})
     assert result["drivers"][0]["made_q3"] is True
 
 
 def test_execute_tool_get_clean_pace_summary():
     mock = {"drivers": [{"abbreviation": "NOR", "rank": 1}]}
-    with patch('tools.get_clean_pace_summary', return_value=mock):
+    with patch('f1_data.get_clean_pace_summary', return_value=mock):
         result = tools.execute_tool("get_clean_pace_summary", {"round_number": 1, "session_type": "Q"})
     assert result["drivers"][0]["rank"] == 1
 
 
 def test_execute_tool_get_track_position_comparison():
     mock = {"comparison": [{"distance_m": 100, "delta_speed": 3.5}]}
-    with patch('tools.get_track_position_comparison', return_value=mock):
+    with patch('f1_data.get_track_position_comparison', return_value=mock):
         result = tools.execute_tool("get_track_position_comparison", {
             "round_number": 1, "session_type": "Q", "driver_a": "NOR", "driver_b": "LEC"
         })
@@ -234,7 +234,7 @@ def test_execute_tool_get_track_position_comparison():
 
 def test_execute_tool_get_circuit_details():
     mock = {"rotation": 90.0, "corners": []}
-    with patch('tools.get_circuit_details', return_value=mock):
+    with patch('f1_data.get_circuit_details', return_value=mock):
         result = tools.execute_tool("get_circuit_details", {"round_number": 1})
     assert result["rotation"] == 90.0
 
@@ -399,14 +399,14 @@ def test_execute_tool_get_team_car_profile_missing_returns_available_false():
 
 def test_execute_tool_get_sprint_results():
     mock = {"session": "S", "race_name": "Chinese Grand Prix", "results": []}
-    with patch('tools.get_sprint_results', return_value=mock):
+    with patch('f1_data.get_sprint_results', return_value=mock):
         result = tools.execute_tool("get_sprint_results", {"round_number": 5})
     assert result["session"] == "S"
 
 
 def test_execute_tool_get_sprint_qualifying_results():
     mock = {"session": "SQ", "race_name": "Chinese Grand Prix", "results": []}
-    with patch('tools.get_sprint_qualifying_results', return_value=mock):
+    with patch('f1_data.get_sprint_qualifying_results', return_value=mock):
         result = tools.execute_tool("get_sprint_qualifying_results", {"round_number": 5})
     assert result["session"] == "SQ"
 
