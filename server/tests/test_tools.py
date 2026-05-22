@@ -111,7 +111,7 @@ def test_execute_tool_get_lap_telemetry():
 
 def test_execute_tool_analyze_energy_management():
     mock = {"mode": "comparison", "confidence": "medium", "inference_summary": ["Likely clipping signal."]}
-    with patch('tools.analyze_energy_management', return_value=mock):
+    with patch('f1_data.analyze_energy_management', return_value=mock):
         result = tools.execute_tool("analyze_energy_management", {
             "round_number": 3, "session_type": "Q", "driver_a": "LEC", "driver_b": "NOR"
         })
@@ -121,7 +121,7 @@ def test_execute_tool_analyze_energy_management():
 
 def test_execute_tool_analyze_qualifying_battle():
     mock = {"faster_driver": "LEC", "cause_type": "straight_line_speed", "decisive_sector": "Sector 1"}
-    with patch('tools.analyze_qualifying_battle', return_value=mock):
+    with patch('f1_data.analyze_qualifying_battle', return_value=mock):
         result = tools.execute_tool("analyze_qualifying_battle", {
             "round_number": 3, "driver_a": "LEC", "driver_b": "NOR"
         })
@@ -287,7 +287,7 @@ def test_execute_tool_extract_corner_profiles():
 
 def test_execute_tool_compare_corner_profiles():
     mock = {"driver_a": "NOR", "driver_b": "LEC", "setup_direction_inference": "corner_heavy"}
-    with patch('tools.compare_corner_profiles', return_value=mock):
+    with patch('f1_data.compare_corner_profiles', return_value=mock):
         result = tools.execute_tool("compare_corner_profiles", {
             "round_number": 3,
             "session_type": "Q",
@@ -299,7 +299,7 @@ def test_execute_tool_compare_corner_profiles():
 
 def test_execute_tool_analyze_stint_degradation():
     mock = {"driver": "NOR", "stints": [{"compound": "MEDIUM"}]}
-    with patch('tools.analyze_stint_degradation', return_value=mock):
+    with patch('f1_data.analyze_stint_degradation', return_value=mock):
         result = tools.execute_tool("analyze_stint_degradation", {
             "round_number": 3,
             "driver_code": "NOR",
@@ -309,7 +309,7 @@ def test_execute_tool_analyze_stint_degradation():
 
 def test_execute_tool_analyze_race_pace_battle():
     mock = {"driver_a": "NOR", "driver_b": "LEC", "decisive_factor": "raw_pace_advantage"}
-    with patch('tools.analyze_race_pace_battle', return_value=mock):
+    with patch('f1_data.analyze_race_pace_battle', return_value=mock):
         result = tools.execute_tool("analyze_race_pace_battle", {
             "round_number": 3,
             "driver_a": "NOR",
@@ -427,7 +427,7 @@ def test_execute_tool_get_driver_race_story_defaults_to_r():
 
 def test_execute_tool_analyze_qualifying_battle_passes_session_type():
     mock = {"session": "SQ", "driver_a": "NOR", "driver_b": "PIA"}
-    with patch('tools.analyze_qualifying_battle', return_value=mock) as mock_fn:
+    with patch('f1_data.analyze_qualifying_battle', return_value=mock) as mock_fn:
         tools.execute_tool("analyze_qualifying_battle", {"round_number": 5, "driver_a": "NOR", "driver_b": "PIA", "session_type": "SQ"})
     mock_fn.assert_called_once_with(5, "NOR", "PIA", session_type="SQ")
 
@@ -531,7 +531,7 @@ def test_execute_tool_analyze_active_aero_usage():
         "inferred": True,
         "detector_version": "f31-v1",
     }
-    with patch('tools.analyze_active_aero_usage', return_value=mock):
+    with patch('f1_data.analyze_active_aero_usage', return_value=mock):
         result = tools.execute_tool("analyze_active_aero_usage", {
             "driver_code": "VER", "round_number": 13, "session_type": "Q", "lap_number": 18,
         })
@@ -573,7 +573,7 @@ def test_execute_tool_analyze_undercut_overcut():
         "session_type": "R",
         "event": "Singapore Grand Prix",
     }
-    with patch("tools.analyze_undercut_overcut", return_value=mock):
+    with patch("f1_data.analyze_undercut_overcut", return_value=mock):
         result = tools.execute_tool("analyze_undercut_overcut", {
             "driver_code": "NOR", "lap_number": 25, "target_driver_code": "VER",
             "round_number": 17,
