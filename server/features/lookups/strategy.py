@@ -14,6 +14,7 @@ _STRATEGY_KEYWORDS = (
 class DriverStrategyFeature(Feature):
     name = "get_driver_strategy"
     applies_to = ()
+    triggered_by_modes = frozenset({"race_pace_comparison"})
     description = (
         "PRIMITIVE TOOL. Tyre strategy and stints for one driver or the whole field. "
         "Use for specific pit/strategy questions. For broad race recaps, prefer composite tools first."

@@ -61,6 +61,7 @@ def _build_race_pace_battle_widget(result: dict) -> dict:
 class RacePaceBattleFeature(Feature):
     name = "analyze_race_pace_battle"
     applies_to = ("pair_of_drivers",)
+    triggered_by_modes = frozenset({"race_pace_comparison", "driver_comparison"})
     description = (
         "DEEP ANALYSIS PRIMITIVE. Compare race pace and tyre degradation between two drivers. "
         "Race equivalent of analyze_qualifying_battle. Returns fuel-corrected pace delta, "

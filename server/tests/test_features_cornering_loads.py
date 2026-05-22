@@ -30,3 +30,11 @@ def test_cornering_loads_no_widget_cross_feature():
     # Cross-feature: grip_commitment is merged into qualifying_battle, no standalone widget.
     assert feat.make_widget({"any": "thing"}) == {}
     assert feat.should_show_widget({"any": "thing"}) is False
+
+
+def test_cornering_loads_declares_triggered_by_modes():
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    discover_features()
+    feat = FEATURE_REGISTRY["analyze_cornering_loads"]
+    assert feat.triggered_by_modes == frozenset({"grip_comparison", "driver_comparison"})

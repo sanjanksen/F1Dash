@@ -19,6 +19,7 @@ _REQUIRED_ARGS = ("round_number", "session_type")
 class SafetyCarPeriodsFeature(Feature):
     name = "get_safety_car_periods"
     applies_to = ("race_session",)
+    triggered_by_modes = frozenset({"race_pace_comparison", "driver_comparison"})
     description = (
         "PRIMITIVE TOOL. SC/VSC timing and pit-stop impact for a session. "
         "Use for specific safety-car questions. For broad race recaps, prefer composite tools first."

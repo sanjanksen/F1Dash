@@ -52,3 +52,11 @@ def test_race_pace_battle_should_show_widget_respects_availability():
     feat = _load_feat()
     assert feat.should_show_widget({"driver_a": "VER"}) is True
     assert feat.should_show_widget({"available": False}) is False
+
+
+def test_race_pace_battle_declares_triggered_by_modes():
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    discover_features()
+    feat = FEATURE_REGISTRY["analyze_race_pace_battle"]
+    assert feat.triggered_by_modes == frozenset({"race_pace_comparison", "driver_comparison"})

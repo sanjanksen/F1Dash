@@ -20,6 +20,7 @@ _RELEVANT_KEYWORDS = (
 class CorneringLoadsFeature(Feature):
     name = "analyze_cornering_loads"
     applies_to = ("pair_of_drivers", "session")
+    triggered_by_modes = frozenset({"grip_comparison", "driver_comparison"})
     description = (
         "DEEP ANALYSIS PRIMITIVE. Compute lateral G and grip utilisation for two drivers across all corners of their fastest laps, "
         "using curvature derived from X/Y position telemetry. Returns per-corner stats (peak G, apex G, load variance, "
