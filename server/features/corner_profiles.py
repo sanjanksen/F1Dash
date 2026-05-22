@@ -1,0 +1,82 @@
+"""Corner-profile comparison deep analysis feature. Migrated from chat.py / tools.py / f1_data.py.
+
+This feature has cross-feature orchestration in chat.py's evidence composer
+(focus-based skip when a qualifying battle widget is also present). The
+cross-feature branch stays on the legacy if/elif path — chat.py's
+_CROSS_FEATURE_TOOLS set makes _registry_widget skip this tool. The Feature
+class is registered but dormant for the cross-feature case; Phase E unifies.
+"""
+from __future__ import annotations
+
+import f1_data
+from features.base import Feature, register_feature
+
+
+_RELEVANT_KEYWORDS = (
+    "corner", "cornering", "apex", "entry", "exit", "mid-corner", "grip",
+)
+
+_RELEVANT_MODES = frozenset({"grip_comparison", "driver_comparison"})
+
+_REQUIRED_ARGS = ("round_number", "session_type", "driver_a", "driver_b")
+
+
+@register_feature
+class CornerProfilesFeature(Feature):
+    name = "compare_corner_profiles"
+    applies_to = ("pair_of_drivers",)
+    description = (
+        "DEEP ANALYSIS PRIMITIVE. Compare corner-by-corner telemetry between two drivers. "
+        "Returns per-corner cause classification (braking/minimum_speed/traction/mixed), "
+        "setup direction inference (corner_heavy/straight_heavy/balanced), average straight speeds, "
+        "and gain location summary showing the top 3 corners where the faster driver has an advantage. "
+        "Use for questions like 'is Ferrari better in corners or on straights vs Mercedes?' or "
+        "'where does Norris gain time on Leclerc in quali?'."
+    )
+    required_args = _REQUIRED_ARGS
+    tool_schema = {
+        "type": "object",
+        "properties": {
+            "round_number": {"type": "integer"},
+            "session_type": {"type": "string"},
+            "driver_a": {"type": "string"},
+            "driver_b": {"type": "string"},
+            "lap_number_a": {"type": "integer"},
+            "lap_number_b": {"type": "integer"},
+        },
+        "required": list(_REQUIRED_ARGS),
+    }
+
+    def is_relevant_for(self, question: str, resolved: dict | None) -> float:
+        q = (question or "").lower()
+        mode = (resolved or {}).get("analysis_mode")
+        has_keyword = any(kw in q for kw in _RELEVANT_KEYWORDS)
+        has_mode = mode in _RELEVANT_MODES
+        if has_keyword and has_mode:
+            return 0.85
+        if has_keyword:
+            return 0.65
+        if has_mode:
+            return 0.45
+        return 0.0
+
+    def execute(self, **args) -> dict:
+        return f1_data.compare_corner_profiles(
+            args["round_number"],
+            args["session_type"],
+            args["driver_a"],
+            args["driver_b"],
+            args.get("lap_number_a"),
+            args.get("lap_number_b"),
+        )
+
+    def make_widget(self, result: dict) -> dict:
+        import chat
+        return chat._make_corner_comparison_widget(result)
+
+    def should_show_widget(self, result: dict) -> bool:
+        if not result.get("available", True):
+            return False
+        # Legacy branch always appended (focus-skip is handled by the legacy
+        # cross-feature path, not by this gate).
+        return True
