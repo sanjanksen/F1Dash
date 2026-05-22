@@ -248,28 +248,28 @@ def test_execute_tool_get_race_control_messages():
 
 def test_execute_tool_get_driver_weekend_overview():
     mock = {"driver": "George Russell", "race": {"finish_position": 4}}
-    with patch('tools.get_driver_weekend_overview', return_value=mock):
+    with patch('f1_data.get_driver_weekend_overview', return_value=mock):
         result = tools.execute_tool("get_driver_weekend_overview", {"round_number": 3, "driver_name": "Russell"})
     assert result["race"]["finish_position"] == 4
 
 
 def test_execute_tool_get_driver_race_story():
     mock = {"driver": "George Russell", "story_points": ["Gained 2 places."]}
-    with patch('tools.get_driver_race_story', return_value=mock):
+    with patch('f1_data.get_driver_race_story', return_value=mock):
         result = tools.execute_tool("get_driver_race_story", {"round_number": 3, "driver_name": "Russell"})
     assert result["story_points"][0] == "Gained 2 places."
 
 
 def test_execute_tool_get_team_weekend_overview():
     mock = {"team": "Mercedes", "total_points": 20.0}
-    with patch('tools.get_team_weekend_overview', return_value=mock):
+    with patch('f1_data.get_team_weekend_overview', return_value=mock):
         result = tools.execute_tool("get_team_weekend_overview", {"round_number": 3, "team_name": "Mercedes"})
     assert result["total_points"] == 20.0
 
 
 def test_execute_tool_get_race_report():
     mock = {"event": "Japanese Grand Prix", "podium": [{"driver": "Max Verstappen"}]}
-    with patch('tools.get_race_report', return_value=mock):
+    with patch('f1_data.get_race_report', return_value=mock):
         result = tools.execute_tool("get_race_report", {"round_number": 3})
     assert result["podium"][0]["driver"] == "Max Verstappen"
 
@@ -320,7 +320,7 @@ def test_execute_tool_analyze_race_pace_battle():
 
 def test_execute_tool_analyze_team_performance():
     mock = {"team": "Ferrari", "setup_direction_inference": "balanced"}
-    with patch('tools.analyze_team_performance', return_value=mock):
+    with patch('f1_data.analyze_team_performance', return_value=mock):
         result = tools.execute_tool("analyze_team_performance", {
             "round_number": 3,
             "team_name": "Ferrari",
@@ -413,14 +413,14 @@ def test_execute_tool_get_sprint_qualifying_results():
 
 def test_execute_tool_get_driver_race_story_passes_session_type():
     mock = {"driver": "Lando Norris", "story_points": []}
-    with patch('tools.get_driver_race_story', return_value=mock) as mock_fn:
+    with patch('f1_data.get_driver_race_story', return_value=mock) as mock_fn:
         tools.execute_tool("get_driver_race_story", {"round_number": 5, "driver_name": "norris", "session_type": "S"})
     mock_fn.assert_called_once_with(5, "norris", session_type="S")
 
 
 def test_execute_tool_get_driver_race_story_defaults_to_r():
     mock = {"driver": "Lando Norris", "story_points": []}
-    with patch('tools.get_driver_race_story', return_value=mock) as mock_fn:
+    with patch('f1_data.get_driver_race_story', return_value=mock) as mock_fn:
         tools.execute_tool("get_driver_race_story", {"round_number": 5, "driver_name": "norris"})
     mock_fn.assert_called_once_with(5, "norris", session_type="R")
 
@@ -599,7 +599,7 @@ def test_execute_tool_search_editorial_content_dispatches_to_search_module():
              "source": "The Race", "published_at": "2026-05-01", "similarity": 0.9},
         ],
     }
-    with patch.object(tools, "_search_editorial_content_safe", return_value=mock_payload) as m:
+    with patch("editorial.search.search_editorial_content", return_value=mock_payload) as m:
         result = tools.execute_tool(
             "search_editorial_content",
             {"query": "McLaren upgrade Imola", "limit": 3, "min_date": "2026-04-01"},
