@@ -24,6 +24,7 @@ class Feature(ABC):
 
     name: str  # tool name; MUST be set on subclass
     applies_to: tuple[str, ...] = ()  # entity-type preconditions
+    triggered_by_modes: frozenset[str] = frozenset()  # analysis_modes this feature serves
     tool_schema: dict = {}  # JSON schema for the tool's input args
     required_args: tuple[str, ...] = ()  # arg names that must be present
     description: str = ""  # human description for tool registration

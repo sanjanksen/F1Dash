@@ -338,3 +338,20 @@ def test_run_pipeline_respects_custom_threshold():
     resolved = {"drivers": [{"code": "A"}, {"code": "B"}]}
     results = run_pipeline("q", resolved, threshold=0.7)
     assert results == []
+
+
+def test_feature_subclass_inherits_triggered_by_modes_default():
+    """Features that don't declare triggered_by_modes default to empty frozenset."""
+    class _NoModes(_DummyFeature):
+        name = "_no_modes"
+    f = _NoModes()
+    assert f.triggered_by_modes == frozenset()
+
+
+def test_feature_subclass_can_declare_triggered_by_modes():
+    """A subclass setting triggered_by_modes exposes it on the instance."""
+    class _WithModes(_DummyFeature):
+        name = "_with_modes"
+        triggered_by_modes = frozenset({"qualifying_battle", "driver_comparison"})
+    f = _WithModes()
+    assert f.triggered_by_modes == frozenset({"qualifying_battle", "driver_comparison"})
