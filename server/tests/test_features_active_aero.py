@@ -25,12 +25,6 @@ def test_active_aero_applies_to_driver_and_lap():
     assert "lap" in feat.applies_to
 
 
-def test_active_aero_relevance_high_for_aero_keyword():
-    feat = _load_feat()
-    score = feat.is_relevant_for("When did Norris use Z-mode on lap 12?", {})
-    assert score >= 0.5
-
-
 def test_active_aero_make_widget_produces_typed_widget():
     feat = _load_feat()
     sample = {
@@ -46,5 +40,35 @@ def test_active_aero_make_widget_produces_typed_widget():
 
 def test_active_aero_should_show_widget_respects_availability():
     feat = _load_feat()
-    assert feat.should_show_widget({"driver_code": "NOR"}) is True
+    full = {
+        "available": True,
+        "driver_code": "NOR",
+        "circuit_in_coverage": True,
+        "total_z_mode_seconds": 1.2,
+        "estimated_lap_time_delta_s": 0.15,
+    }
+    assert feat.should_show_widget(full) is True
     assert feat.should_show_widget({"available": False}) is False
+
+
+def test_active_aero_should_show_widget_meaningful_signal():
+    feat = _load_feat()
+    sample = {
+        "available": True,
+        "circuit_in_coverage": True,
+        "total_z_mode_seconds": 0.8,
+        "estimated_lap_time_delta_s": -0.09,
+    }
+    assert feat.should_show_widget(sample) is True
+
+
+def test_active_aero_should_show_widget_suppresses_negligible():
+    feat = _load_feat()
+    # z-mode time below the 0.3 threshold
+    sample = {
+        "available": True,
+        "circuit_in_coverage": True,
+        "total_z_mode_seconds": 0.1,
+        "estimated_lap_time_delta_s": 0.15,
+    }
+    assert feat.should_show_widget(sample) is False

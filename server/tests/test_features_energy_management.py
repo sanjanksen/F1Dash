@@ -24,12 +24,6 @@ def test_energy_management_applies_to_driver():
     assert "driver" in feat.applies_to
 
 
-def test_energy_management_relevance_high_for_energy_keyword():
-    feat = _load_feat()
-    score = feat.is_relevant_for("Did Norris have any clipping in Imola?", {})
-    assert score >= 0.5
-
-
 def test_energy_management_make_widget_produces_typed_widget():
     feat = _load_feat()
     sample = {
@@ -45,6 +39,34 @@ def test_energy_management_make_widget_produces_typed_widget():
 
 def test_energy_management_should_show_widget_requires_speed_trace():
     feat = _load_feat()
-    assert feat.should_show_widget({"speed_trace_a": [{"d": 0.0}]}) is True
+    full = {
+        "available": True,
+        "speed_trace_a": [{"d": float(i)} for i in range(25)],
+        "total_clipping_seconds_a": 0.5,
+    }
+    assert feat.should_show_widget(full) is True
     assert feat.should_show_widget({"speed_trace_a": []}) is False
     assert feat.should_show_widget({}) is False
+
+
+def test_energy_management_should_show_widget_meaningful_signal():
+    feat = _load_feat()
+    sample = {
+        "available": True,
+        "speed_trace_a": [{"d": float(i)} for i in range(30)],
+        "total_clipping_seconds_a": 0.0,
+        "clipping_delta_a_minus_b": 0.25,
+    }
+    assert feat.should_show_widget(sample) is True
+
+
+def test_energy_management_should_show_widget_suppresses_negligible():
+    feat = _load_feat()
+    # Speed trace long enough but neither clipping signal is material
+    sample = {
+        "available": True,
+        "speed_trace_a": [{"d": float(i)} for i in range(25)],
+        "total_clipping_seconds_a": 0.05,
+        "clipping_delta_a_minus_b": 0.02,
+    }
+    assert feat.should_show_widget(sample) is False

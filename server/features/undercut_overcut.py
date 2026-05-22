@@ -85,7 +85,15 @@ class UndercutOvercutFeature(Feature):
         return _build_undercut_overcut_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
-        # Legacy branch always appended the widget unconditionally.
         if not result.get("available", True):
+            return False
+        pit_loss = result.get("pit_loss_s")
+        if pit_loss is None or pit_loss <= 0:
+            return False
+        rejoin_laps = result.get("advantage_by_rejoin_lap") or []
+        if len(rejoin_laps) < 2:
+            return False
+        advantage = result.get("advantage_s")
+        if advantage is None or abs(advantage) < 0.5:
             return False
         return True

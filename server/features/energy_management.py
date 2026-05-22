@@ -81,5 +81,13 @@ class EnergyManagementFeature(Feature):
         return _build_energy_management_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
-        # Legacy gate: `if w.get("speed_trace_a"): widgets.append(w)`
-        return bool(result.get("speed_trace_a"))
+        if not result.get("available", True):
+            return False
+        speed_trace = result.get("speed_trace_a") or []
+        if len(speed_trace) < 20:
+            return False
+        total_clip = result.get("total_clipping_seconds_a")
+        clip_delta = result.get("clipping_delta_a_minus_b")
+        clip_material = total_clip is not None and total_clip >= 0.2
+        delta_material = clip_delta is not None and abs(clip_delta) >= 0.1
+        return clip_material or delta_material

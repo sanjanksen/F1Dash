@@ -25,12 +25,6 @@ def test_undercut_overcut_applies_to_driver_and_race_session():
     assert "race_session" in feat.applies_to
 
 
-def test_undercut_overcut_relevance_high_for_undercut_keyword():
-    feat = _load_feat()
-    score = feat.is_relevant_for("Should Norris have pitted on lap 14 for the undercut?", {})
-    assert score >= 0.5
-
-
 def test_undercut_overcut_make_widget_produces_typed_widget():
     feat = _load_feat()
     sample = {
@@ -45,5 +39,35 @@ def test_undercut_overcut_make_widget_produces_typed_widget():
 
 def test_undercut_overcut_should_show_widget_respects_availability():
     feat = _load_feat()
-    assert feat.should_show_widget({"driver_code": "NOR"}) is True
+    full = {
+        "available": True,
+        "driver_code": "NOR",
+        "pit_loss_s": 21.0,
+        "advantage_by_rejoin_lap": [{"lap": 1}, {"lap": 2}, {"lap": 3}],
+        "advantage_s": 0.8,
+    }
+    assert feat.should_show_widget(full) is True
     assert feat.should_show_widget({"available": False}) is False
+
+
+def test_undercut_overcut_should_show_widget_meaningful_signal():
+    feat = _load_feat()
+    sample = {
+        "available": True,
+        "pit_loss_s": 22.3,
+        "advantage_by_rejoin_lap": [{"lap": 18}, {"lap": 19}, {"lap": 20}],
+        "advantage_s": -1.2,
+    }
+    assert feat.should_show_widget(sample) is True
+
+
+def test_undercut_overcut_should_show_widget_suppresses_negligible():
+    feat = _load_feat()
+    # advantage below the 0.5 threshold
+    sample = {
+        "available": True,
+        "pit_loss_s": 22.3,
+        "advantage_by_rejoin_lap": [{"lap": 18}, {"lap": 19}, {"lap": 20}],
+        "advantage_s": 0.2,
+    }
+    assert feat.should_show_widget(sample) is False

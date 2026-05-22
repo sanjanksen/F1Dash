@@ -67,7 +67,14 @@ class ActiveAeroFeature(Feature):
         return _build_active_aero_widget(result)
 
     def should_show_widget(self, result: dict) -> bool:
-        # Legacy branch always appended the widget unconditionally.
         if not result.get("available", True):
+            return False
+        if not result.get("circuit_in_coverage"):
+            return False
+        z_secs = result.get("total_z_mode_seconds") or 0
+        if z_secs < 0.3:
+            return False
+        laptime_delta = result.get("estimated_lap_time_delta_s")
+        if laptime_delta is None or abs(laptime_delta) < 0.02:
             return False
         return True
