@@ -1162,178 +1162,121 @@ def _extract_json_object(text: str) -> dict:
         return json.loads(match.group(0))
 
 
-def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
-    analysis_mode = resolved.get("analysis_mode")
-    round_number = resolved.get("round_number")
-    normalized_message = message.lower()
+# ── Mode → orchestration tables ────────────────────────────────────────────
+#
+# _MODE_TOOL_ORDER fixes the per-mode tool ordering and the per-tool arg-builder.
+# `features_for_mode` is consulted as the source-of-truth registry — a mode's
+# ordered tools must intersect with the set returned by the registry, and any
+# tool listed here MUST be a registered Feature (with one exception:
+# get_team_radio is still inline because it has no Feature module yet).
+#
+# arg builders receive (codes, names, round_number, session_type, team, country,
+# event_name) and return the args dict. If a builder returns None the tool is
+# skipped (used for the conditional-on-round_number circuit/team tools).
 
-    # ── circuit_profile mode ─────────────────────────────────────────────────
-    if analysis_mode == "circuit_profile":
-        country = resolved.get("country")
-        event_name = resolved.get("event_name")
-        if not country:
-            return None
-        tool_calls = [
-            ("get_circuit_profile", {"country": country, "event_name": event_name or ""}),
-        ]
-        if round_number:
-            tool_calls.append(("get_circuit_track_map", {"round_number": round_number}))
-            tool_calls.append(("get_historical_circuit_performance", {"round_number": round_number}))
-        return {
-            "analysis_mode": "circuit_profile",
-            "focus": "circuit",
-            "question": message,
-            "round_number": round_number,
-            "event_name": event_name,
-            "country": country,
-            "emit_context_widget": (
-                bool(resolved.get("has_explicit_context"))
-                or any(term in normalized_message for term in ("widget", "map", "graphic", "profile", "circuit", "track", "show it", "bring it up"))
-            ),
-            "tool_calls": tool_calls,
-        }
+_QUALI_SESSIONS = ("Q", "SQ")
+_RACE_SESSIONS = ("R", "S")
 
-    # ── team_performance mode ────────────────────────────────────────────────
-    if analysis_mode == "team_performance":
-        team = resolved.get("entity_name")
-        if round_number is None or not team:
-            return None
-        session_type = resolved.get("session_type") or "Q"
-        return {
-            "analysis_mode": "team_performance",
-            "focus": "team",
-            "question": message,
-            "round_number": round_number,
-            "event_name": resolved.get("event_name"),
-            "country": resolved.get("country"),
-            "team": team,
-            "tool_calls": [
-                ("analyze_team_performance", {
-                    "round_number": round_number,
-                    "team_name": team,
-                    "session_type": session_type,
-                }),
-            ],
-        }
+_CIRCUIT_KEYWORDS = ("widget", "map", "graphic", "profile", "circuit", "track", "show it", "bring it up")
 
-    # ── race_pace_comparison mode ────────────────────────────────────────────
-    if analysis_mode == "team_circuit_fit":
-        team = resolved.get("entity_name")
-        if not team:
-            return None
-        normalized_question = message.lower()
-        session_type = "R" if (resolved.get("session_type") == "R" or "race" in normalized_question) else "Q"
-        return {
-            "analysis_mode": "team_circuit_fit",
-            "focus": "team_fit",
-            "question": message,
-            "round_number": round_number,
-            "team": team,
-            "tool_calls": [
-                ("analyze_team_circuit_fit", {
-                    "team_name": team,
-                    "session_type": session_type,
-                }),
-                ("get_team_car_profile", {
-                    "team_name": team,
-                }),
-            ] + (
-                [("analyze_team_telemetry_traits", {
-                    "round_number": round_number,
-                    "team_name": team,
-                    "session_type": session_type,
-                })]
-                if round_number is not None
-                else []
-            ),
-        }
 
-    if analysis_mode == "grip_comparison":
-        codes = resolved.get("entity_codes") or []
-        names = resolved.get("entity_names") or []
-        if round_number is None or len(codes) < 2 or len(names) < 2:
-            return None
-        session_type = resolved.get("session_type") or "Q"
-        return {
-            "analysis_mode": "grip_comparison",
-            "focus": "grip",
-            "question": message,
-            "round_number": round_number,
-            "event_name": resolved.get("event_name"),
-            "country": resolved.get("country"),
-            "drivers": [
-                {"name": names[0], "code": codes[0]},
-                {"name": names[1], "code": codes[1]},
-            ],
-            "tool_calls": [
-                ("analyze_cornering_loads", {
-                    "round_number": round_number,
-                    "session_type": session_type,
-                    "driver_a": codes[0],
-                    "driver_b": codes[1],
-                }),
-            ],
-        }
-
-    if analysis_mode == "race_pace_comparison":
-        codes = resolved.get("entity_codes") or []
-        names = resolved.get("entity_names") or []
-        if round_number is None or len(codes) < 2 or len(names) < 2:
-            return None
-        session_type = resolved.get("session_type") or "R"
-        return {
-            "analysis_mode": "race_pace_comparison",
-            "focus": "race",
-            "question": message,
-            "round_number": round_number,
-            "event_name": resolved.get("event_name"),
-            "country": resolved.get("country"),
-            "drivers": [
-                {"name": names[0], "code": codes[0]},
-                {"name": names[1], "code": codes[1]},
-            ],
-            "tool_calls": [
-                ("analyze_race_pace_battle", {
-                    "round_number": round_number,
-                    "driver_a": codes[0],
-                    "driver_b": codes[1],
-                    "session_type": session_type,
-                }),
-                ("get_safety_car_periods", {"round_number": round_number, "session_type": session_type}),
-                ("get_driver_strategy", {"round_number": round_number, "session_type": session_type}),
-            ],
-        }
-
-    # ── driver_comparison mode ───────────────────────────────────────────────
-    if analysis_mode != "driver_comparison":
+def _build_circuit_profile_tools(message: str, resolved: dict) -> list[tuple[str, dict]] | None:
+    country = resolved.get("country")
+    if not country:
         return None
+    event_name = resolved.get("event_name") or ""
+    round_number = resolved.get("round_number")
+    calls: list[tuple[str, dict]] = [
+        ("get_circuit_profile", {"country": country, "event_name": event_name}),
+    ]
+    if round_number:
+        calls.append(("get_circuit_track_map", {"round_number": round_number}))
+        calls.append(("get_historical_circuit_performance", {"round_number": round_number}))
+    return calls
 
+
+def _build_team_performance_tools(message: str, resolved: dict) -> list[tuple[str, dict]] | None:
+    team = resolved.get("entity_name")
+    round_number = resolved.get("round_number")
+    if round_number is None or not team:
+        return None
+    session_type = resolved.get("session_type") or "Q"
+    return [
+        ("analyze_team_performance", {
+            "round_number": round_number,
+            "team_name": team,
+            "session_type": session_type,
+        }),
+    ]
+
+
+def _build_team_circuit_fit_tools(message: str, resolved: dict) -> list[tuple[str, dict]] | None:
+    team = resolved.get("entity_name")
+    if not team:
+        return None
+    normalized_question = (message or "").lower()
+    session_type = "R" if (resolved.get("session_type") == "R" or "race" in normalized_question) else "Q"
+    round_number = resolved.get("round_number")
+    calls: list[tuple[str, dict]] = [
+        ("analyze_team_circuit_fit", {"team_name": team, "session_type": session_type}),
+        ("get_team_car_profile", {"team_name": team}),
+    ]
+    if round_number is not None:
+        calls.append(("analyze_team_telemetry_traits", {
+            "round_number": round_number,
+            "team_name": team,
+            "session_type": session_type,
+        }))
+    return calls
+
+
+def _build_grip_comparison_tools(message: str, resolved: dict) -> list[tuple[str, dict]] | None:
     codes = resolved.get("entity_codes") or []
     names = resolved.get("entity_names") or []
+    round_number = resolved.get("round_number")
+    if round_number is None or len(codes) < 2 or len(names) < 2:
+        return None
+    session_type = resolved.get("session_type") or "Q"
+    return [
+        ("analyze_cornering_loads", {
+            "round_number": round_number,
+            "session_type": session_type,
+            "driver_a": codes[0],
+            "driver_b": codes[1],
+        }),
+    ]
+
+
+def _build_race_pace_comparison_tools(message: str, resolved: dict) -> list[tuple[str, dict]] | None:
+    codes = resolved.get("entity_codes") or []
+    names = resolved.get("entity_names") or []
+    round_number = resolved.get("round_number")
+    if round_number is None or len(codes) < 2 or len(names) < 2:
+        return None
+    session_type = resolved.get("session_type") or "R"
+    return [
+        ("analyze_race_pace_battle", {
+            "round_number": round_number,
+            "driver_a": codes[0],
+            "driver_b": codes[1],
+            "session_type": session_type,
+        }),
+        ("get_safety_car_periods", {"round_number": round_number, "session_type": session_type}),
+        ("get_driver_strategy", {"round_number": round_number, "session_type": session_type}),
+    ]
+
+
+def _build_driver_comparison_tools(message: str, resolved: dict, focus: str) -> list[tuple[str, dict]] | None:
+    codes = resolved.get("entity_codes") or []
+    names = resolved.get("entity_names") or []
+    round_number = resolved.get("round_number")
     if round_number is None or len(codes) < 2 or len(names) < 2:
         return None
 
-    focus = resolved.get("analysis_focus") or ("qualifying" if resolved.get("session_type") in ("Q", "SQ") else "race")
-    quali_session = resolved.get("session_type") if resolved.get("session_type") in ("Q", "SQ") else "Q"
-    race_session = resolved.get("session_type") if resolved.get("session_type") in ("R", "S") else "R"
-
-    plan = {
-        "analysis_mode": "driver_comparison",
-        "focus": focus,
-        "question": message,
-        "round_number": round_number,
-        "event_name": resolved.get("event_name"),
-        "country": resolved.get("country"),
-        "drivers": [
-            {"name": names[0], "code": codes[0]},
-            {"name": names[1], "code": codes[1]},
-        ],
-        "tool_calls": [],
-    }
-
     if focus == "qualifying":
+        quali_session = resolved.get("session_type") if resolved.get("session_type") in _QUALI_SESSIONS else "Q"
         results_tool = "get_sprint_qualifying_results" if quali_session == "SQ" else "get_qualifying_results"
-        plan["tool_calls"] = [
+        return [
             (results_tool, {"round_number": round_number}),
             ("analyze_qualifying_battle", {
                 "round_number": round_number,
@@ -1353,6 +1296,7 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
                 "driver_a": codes[0],
                 "driver_b": codes[1],
             }),
+            # get_team_radio is not (yet) a Feature — one tuple per driver, codes order preserved.
             ("get_team_radio", {
                 "round_number": round_number,
                 "session_type": quali_session,
@@ -1366,26 +1310,166 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
                 "limit": 6,
             }),
         ]
-        return plan
 
-    if focus in ("race", "session"):
-        plan["tool_calls"] = [
-            ("get_driver_race_story", {"round_number": round_number, "driver_name": names[0], "session_type": race_session}),
-            ("get_driver_race_story", {"round_number": round_number, "driver_name": names[1], "session_type": race_session}),
-            ("analyze_race_pace_battle", {
-                "round_number": round_number,
-                "driver_a": codes[0],
-                "driver_b": codes[1],
-                "session_type": race_session,
-            }),
-            ("get_safety_car_periods", {
-                "round_number": round_number,
-                "session_type": race_session,
-            }),
+    # focus in ("race", "session")
+    race_session = resolved.get("session_type") if resolved.get("session_type") in _RACE_SESSIONS else "R"
+    return [
+        ("get_driver_race_story", {"round_number": round_number, "driver_name": names[0], "session_type": race_session}),
+        ("get_driver_race_story", {"round_number": round_number, "driver_name": names[1], "session_type": race_session}),
+        ("analyze_race_pace_battle", {
+            "round_number": round_number,
+            "driver_a": codes[0],
+            "driver_b": codes[1],
+            "session_type": race_session,
+        }),
+        ("get_safety_car_periods", {"round_number": round_number, "session_type": race_session}),
+    ]
+
+
+def _derive_driver_comparison_focus(resolved: dict) -> str:
+    explicit = resolved.get("analysis_focus")
+    if explicit in ("qualifying", "race", "session"):
+        return explicit
+    return "qualifying" if resolved.get("session_type") in _QUALI_SESSIONS else "race"
+
+
+def _resolved_for_registry(resolved: dict, mode: str, message: str) -> dict:
+    """Translate the resolver's flat shape into the entity-type keys that
+    features_for_mode (via _resolved_entity_types) understands. Lets the
+    registry validate that the inputs actually satisfy each feature's
+    applies_to without forcing the planner's callers to change shape."""
+    adapter = dict(resolved)
+    codes = resolved.get("entity_codes") or []
+    if codes:
+        # drivers list shape: each entry just needs to count, content is unused.
+        adapter["drivers"] = [{"code": c} for c in codes]
+    if not adapter.get("team"):
+        if resolved.get("entity_name") and (
+            (mode in ("team_performance", "team_circuit_fit"))
+            or resolved.get("entity_type") == "team"
+        ):
+            adapter["team"] = resolved["entity_name"]
+    if mode == "team_circuit_fit":
+        normalized = (message or "").lower()
+        if resolved.get("session_type") == "R" or "race" in normalized:
+            adapter["session_type"] = "R"
+        else:
+            adapter["session_type"] = "Q"
+    return adapter
+
+
+_MODE_PLAN_BUILDERS = {
+    "circuit_profile": ("circuit", _build_circuit_profile_tools),
+    "team_performance": ("team", _build_team_performance_tools),
+    "team_circuit_fit": ("team_fit", _build_team_circuit_fit_tools),
+    "grip_comparison": ("grip", _build_grip_comparison_tools),
+    "race_pace_comparison": ("race", _build_race_pace_comparison_tools),
+}
+
+
+def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
+    """Mode-driven orchestrator.
+
+    The hardcoded if/elif tree was replaced with a registry consultation:
+    `features_for_mode` returns the registered features for each mode, and
+    a small per-mode tool-builder table (_MODE_PLAN_BUILDERS) fills in the
+    ordered (name, args) tuples and the mode-specific plan flags. The
+    registry call validates that every tool we emit actually has a Feature
+    backing it — the lone exception is get_team_radio under driver_comparison,
+    which has no Feature module yet.
+    """
+    from features.registry import features_for_mode
+
+    analysis_mode = resolved.get("analysis_mode")
+    if not analysis_mode:
+        return None
+
+    if analysis_mode == "driver_comparison":
+        focus = _derive_driver_comparison_focus(resolved)
+        tool_calls = _build_driver_comparison_tools(message, resolved, focus)
+        if tool_calls is None:
+            return None
+        # Sanity check: every emitted tool except get_team_radio must be a
+        # registered Feature for this mode.
+        registered = {f.name for f in features_for_mode(
+            analysis_mode, _resolved_for_registry(resolved, analysis_mode, message)
+        )}
+        for name, _ in tool_calls:
+            if name == "get_team_radio":
+                continue
+            if name not in registered:
+                logger.debug(
+                    "_build_analysis_plan: %s emits %s but no Feature with that "
+                    "name is registered for mode %s",
+                    analysis_mode, name, analysis_mode,
+                )
+        codes = resolved.get("entity_codes") or []
+        names = resolved.get("entity_names") or []
+        return {
+            "analysis_mode": "driver_comparison",
+            "focus": focus,
+            "question": message,
+            "round_number": resolved.get("round_number"),
+            "event_name": resolved.get("event_name"),
+            "country": resolved.get("country"),
+            "drivers": [
+                {"name": names[0], "code": codes[0]},
+                {"name": names[1], "code": codes[1]},
+            ],
+            "tool_calls": tool_calls,
+        }
+
+    if analysis_mode not in _MODE_PLAN_BUILDERS:
+        return None
+
+    focus, builder = _MODE_PLAN_BUILDERS[analysis_mode]
+    tool_calls = builder(message, resolved)
+    if tool_calls is None:
+        return None
+
+    # Consult the registry — each emitted tool name should map to a
+    # registered Feature for this mode. We don't gate on it (legacy parity
+    # comes first), just log if we drift.
+    registered = {f.name for f in features_for_mode(
+        analysis_mode, _resolved_for_registry(resolved, analysis_mode, message)
+    )}
+    for name, _ in tool_calls:
+        if name not in registered:
+            logger.debug(
+                "_build_analysis_plan: %s emits %s but no Feature with that "
+                "name is registered for mode %s",
+                analysis_mode, name, analysis_mode,
+            )
+
+    plan: dict = {
+        "analysis_mode": analysis_mode,
+        "focus": focus,
+        "question": message,
+        "round_number": resolved.get("round_number"),
+        "event_name": resolved.get("event_name"),
+        "country": resolved.get("country"),
+        "tool_calls": tool_calls,
+    }
+
+    if analysis_mode == "circuit_profile":
+        normalized_message = (message or "").lower()
+        plan["emit_context_widget"] = (
+            bool(resolved.get("has_explicit_context"))
+            or any(term in normalized_message for term in _CIRCUIT_KEYWORDS)
+        )
+
+    if analysis_mode in ("team_performance", "team_circuit_fit"):
+        plan["team"] = resolved.get("entity_name")
+
+    if analysis_mode in ("grip_comparison", "race_pace_comparison"):
+        codes = resolved.get("entity_codes") or []
+        names = resolved.get("entity_names") or []
+        plan["drivers"] = [
+            {"name": names[0], "code": codes[0]},
+            {"name": names[1], "code": codes[1]},
         ]
-        return plan
 
-    return None
+    return plan
 
 
 def _execute_analysis_tool_call(tool_name: str, args: dict) -> dict:
