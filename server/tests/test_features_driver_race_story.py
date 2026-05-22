@@ -37,3 +37,11 @@ def test_driver_race_story_should_show_widget_suppresses_unavailable():
     assert feat.should_show_widget({"available": False}) is False
     assert feat.should_show_widget({}) is False
     assert feat.should_show_widget({"driver": "x"}) is True
+
+
+def test_driver_race_story_declares_triggered_by_modes():
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    discover_features()
+    feat = FEATURE_REGISTRY["get_driver_race_story"]
+    assert feat.triggered_by_modes == frozenset({"driver_comparison"})

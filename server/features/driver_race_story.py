@@ -43,6 +43,7 @@ def _build_race_story_widget(result: dict) -> dict:
 class DriverRaceStoryFeature(Feature):
     name = "get_driver_race_story"
     applies_to = ("driver", "race_session")
+    triggered_by_modes = frozenset({"driver_comparison"})
     description = (
         "COMPOSITE RECAP TOOL. Narrative-ready race or sprint story for one driver in one round. "
         "Use this first for broad prompts like 'how did Russell's race go?' or 'how did Norris do in the sprint?'. "

@@ -62,6 +62,7 @@ def _build_qualifying_battle_widget(result: dict) -> dict:
 class QualifyingBattleFeature(Feature):
     name = "analyze_qualifying_battle"
     applies_to = ("pair_of_drivers",)
+    triggered_by_modes = frozenset({"driver_comparison"})
     description = (
         "DEEP ANALYSIS PRIMITIVE. Backend-derived causal summary for a qualifying battle between two drivers. "
         "Use this for questions like 'why was Leclerc faster than Norris in quali?' when you need where and why the gap happened, not just the final times. "

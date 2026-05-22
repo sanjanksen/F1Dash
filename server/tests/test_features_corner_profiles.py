@@ -52,3 +52,11 @@ def test_corner_profiles_should_show_widget_respects_availability():
     feat = _load_feat()
     assert feat.should_show_widget({"driver_a": "NOR"}) is True
     assert feat.should_show_widget({"available": False}) is False
+
+
+def test_corner_profiles_declares_triggered_by_modes():
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    discover_features()
+    feat = FEATURE_REGISTRY["compare_corner_profiles"]
+    assert feat.triggered_by_modes == frozenset({"driver_comparison"})

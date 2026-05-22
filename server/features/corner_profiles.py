@@ -43,6 +43,7 @@ def _build_corner_comparison_widget(result: dict) -> dict:
 class CornerProfilesFeature(Feature):
     name = "compare_corner_profiles"
     applies_to = ("pair_of_drivers",)
+    triggered_by_modes = frozenset({"driver_comparison"})
     description = (
         "DEEP ANALYSIS PRIMITIVE. Compare corner-by-corner telemetry between two drivers. "
         "Returns per-corner cause classification (braking/minimum_speed/traction/mixed), "
