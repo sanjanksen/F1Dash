@@ -170,3 +170,89 @@ def test_qualifying_battle_widget_carries_time_gained_on_cause_explanations():
     causes = widget.get("cause_explanations") or []
     assert causes, "Expected cause_explanations to survive into the widget"
     assert causes[0].get("time_gained_s") == 0.182
+
+
+def test_qualifying_battle_widget_passes_through_sector_reconciliation():
+    """sector_reconciliation must survive into the widget so the JSX can
+    render per-sector marker contribution vs sector gap with residuals."""
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    discover_features()
+    feat = FEATURE_REGISTRY["analyze_qualifying_battle"]
+
+    result = {
+        "available": True,
+        "driver_a": "LEC", "driver_b": "NOR",
+        "faster_driver": "LEC",
+        "overall_gap_s": 0.040,
+        "sector_reconciliation": {
+            "Sector 1": {
+                "sector_gap_s": 0.131,
+                "marker_contribution_s": 0.105,
+                "residual_s": 0.026,
+                "markers": [{"distance_m": 1500, "time_gained_s": 0.105, "gainer_driver": "LEC"}],
+            },
+            "Sector 2": {
+                "sector_gap_s": -0.081,
+                "marker_contribution_s": -0.060,
+                "residual_s": -0.021,
+                "markers": [{"distance_m": 3200, "time_gained_s": -0.060, "gainer_driver": "NOR"}],
+            },
+            "Sector 3": {
+                "sector_gap_s": -0.010,
+                "marker_contribution_s": 0.0,
+                "residual_s": -0.010,
+                "markers": [],
+            },
+        },
+    }
+    widget = feat.make_widget(result)
+    reconciliation = widget.get("sector_reconciliation") or {}
+    assert "Sector 1" in reconciliation
+    assert reconciliation["Sector 1"]["sector_gap_s"] == 0.131
+    assert reconciliation["Sector 1"]["marker_contribution_s"] == 0.105
+    assert reconciliation["Sector 2"]["markers"][0]["gainer_driver"] == "NOR"
+
+
+def test_qualifying_battle_widget_carries_gainer_driver_on_each_marker():
+    """When markers from BOTH drivers appear in cause_explanations, the
+    gainer_driver field must propagate so the JSX can render each card
+    with the correct attribution."""
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    discover_features()
+    feat = FEATURE_REGISTRY["analyze_qualifying_battle"]
+
+    result = {
+        "available": True,
+        "driver_a": "LEC", "driver_b": "NOR",
+        "faster_driver": "LEC",
+        "overall_gap_s": 0.040,
+        "cause_explanations": [
+            {
+                "cause_type": "minimum_speed",
+                "rank": 1,
+                "distance_m": 1500,
+                "delta_speed_kph": 13.0,
+                "time_gained_s": 0.105,
+                "gainer_driver": "LEC",
+                "sector": "Sector 1",
+            },
+            {
+                "cause_type": "braking",
+                "rank": 2,
+                "distance_m": 3200,
+                "delta_speed_kph": -10.0,
+                "time_gained_s": -0.060,
+                "gainer_driver": "NOR",
+                "sector": "Sector 2",
+            },
+        ],
+    }
+    widget = feat.make_widget(result)
+    causes = widget.get("cause_explanations") or []
+    assert len(causes) == 2
+    drivers = {c.get("gainer_driver") for c in causes}
+    assert drivers == {"LEC", "NOR"}, (
+        "Expected markers attributed to BOTH drivers (two-sided picker)"
+    )

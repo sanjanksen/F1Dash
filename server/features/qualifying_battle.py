@@ -34,6 +34,7 @@ def _build_qualifying_battle_widget(result: dict) -> dict:
         "cause_type": result.get("cause_type"),
         "cause_explanation": result.get("cause_explanation"),
         "cause_explanations": result.get("cause_explanations") or [],
+        "sector_reconciliation": result.get("sector_reconciliation") or {},
         "zone_summary": result.get("zone_summary"),
         "energy_relevant": result.get("energy_relevant"),
         "energy_reason": result.get("energy_reason"),

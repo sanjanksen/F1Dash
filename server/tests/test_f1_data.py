@@ -821,6 +821,81 @@ def test_telemetry_battle_top_causes_carry_time_gained_s():
             assert cause["time_gained_s"] >= 0.0
 
 
+def test_telemetry_battle_surfaces_markers_from_both_drivers_when_both_gain():
+    """User-reported regression: when A wins the lap by 0.040s but B took
+    a sector by 0.081s, the widget surfaced only A-favorable markers.
+
+    Construct a synthetic trace where A gains 0.10s in S1 (1500m apex)
+    and B gains 0.06s in S2 (3300m braking). The picker must surface
+    BOTH events — one with positive time_gained_s, one with negative.
+    """
+    import numpy as np
+    # 500 samples along a 5000m lap. Equal speeds everywhere except:
+    # - 1500m apex window: A is 12 km/h faster (LEC-style mid-corner)
+    # - 3300m braking: B is 10 km/h faster (NOR brakes later)
+    distance = np.linspace(0, 5000, 500).tolist()
+    samples = []
+    for d in distance:
+        sa = 200.0
+        sb = 200.0
+        if 1480 <= d <= 1520:  # narrow A-gain at apex
+            sa = 117.0
+            sb = 104.0
+            samples.append({
+                "distance_m": d, "delta_speed": sa - sb,
+                "speed_a": sa, "speed_b": sb,
+                "throttle_a": 35.0, "throttle_b": 35.0,
+                "brake_a": False, "brake_b": False,
+                "gear_a": 3, "gear_b": 3,
+            })
+            continue
+        if 3280 <= d <= 3320:  # B-gain at braking zone (A on brakes earlier)
+            sa = 240.0
+            sb = 250.0
+            samples.append({
+                "distance_m": d, "delta_speed": sa - sb,
+                "speed_a": sa, "speed_b": sb,
+                "throttle_a": 0.0, "throttle_b": 50.0,
+                "brake_a": True, "brake_b": False,
+                "gear_a": 5, "gear_b": 6,
+            })
+            continue
+        samples.append({
+            "distance_m": d, "delta_speed": 0.0,
+            "speed_a": sa, "speed_b": sb,
+            "throttle_a": 100.0, "throttle_b": 100.0,
+            "brake_a": False, "brake_b": False,
+            "gear_a": 7, "gear_b": 7,
+        })
+
+    result = f1_data._summarize_telemetry_battle(
+        samples, "LEC", "LEC", "NOR",
+        sector_boundary_distances=[2000, 4000],
+    )
+    assert result is not None
+    causes = result["top_causes"]
+    drivers = {c["gainer_driver"] for c in causes}
+    assert drivers == {"LEC", "NOR"}, (
+        f"Expected both drivers to appear as gainers; got {drivers}"
+    )
+
+    # Time contributions per marker must be physically plausible
+    # (extremum-window picker should not give >0.20s on a narrow event).
+    for c in causes:
+        tg = c["time_gained_s"]
+        assert abs(tg) < 0.20, f"Marker contribution implausibly large: {c}"
+
+    # Sector reconciliation must be present.
+    assert "sector_reconciliation" in result
+    assert "Sector 1" in result["sector_reconciliation"]
+    assert "Sector 2" in result["sector_reconciliation"]
+    s1 = result["sector_reconciliation"]["Sector 1"]
+    s2 = result["sector_reconciliation"]["Sector 2"]
+    # S1 gap is positive (A gained); S2 gap is negative (B gained).
+    assert s1["sector_gap_s"] > 0
+    assert s2["sector_gap_s"] < 0
+
+
 def test_telemetry_battle_time_gained_s_negative_when_b_gains_locally():
     """When B is the overall faster driver but A is briefly faster at one
     point, that cause's signed time_gained_s for the B-favorable points
