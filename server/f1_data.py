@@ -1109,6 +1109,7 @@ def _integrate_time_gained_around_extremum(
     center_distance_m: float,
     peak_fraction_threshold: float = 0.3,
     max_window_m: float = 200.0,
+    sector_bounds_m: tuple[float, float] | None = None,
 ) -> float | None:
     """Integrate signed time gained (A − B convention) around a local
     per-meter extremum near ``center_distance_m``.
@@ -1117,6 +1118,11 @@ def _integrate_time_gained_around_extremum(
     the per-meter contribution drops below ``peak_fraction_threshold *
     |peak|`` (or until the cumulative window exceeds ``max_window_m``).
     Captures the physical event without summing adjacent unrelated samples.
+
+    When ``sector_bounds_m=(lo, hi)`` is supplied, the search and the
+    outward walk are clamped to ``[lo, hi]`` — markers can never claim
+    time gained outside their owning sector, so per-sector marker totals
+    stay coherent with FastF1's per-lap sector gaps.
 
     Returns seconds (positive = A gained, negative = B gained), or ``None``
     when integration is not possible.
@@ -1130,6 +1136,12 @@ def _integrate_time_gained_around_extremum(
     if seg_mids.size == 0:
         return None
 
+    sector_lo: float | None = None
+    sector_hi: float | None = None
+    if sector_bounds_m is not None:
+        sector_lo = float(sector_bounds_m[0])
+        sector_hi = float(sector_bounds_m[1])
+
     # Locate the segment closest to the requested center.
     centre_idx = int(np.argmin(np.abs(seg_mids - float(center_distance_m))))
 
@@ -1138,6 +1150,9 @@ def _integrate_time_gained_around_extremum(
     # center doesn't become the "peak" by accident.
     search_lo = float(center_distance_m) - max_window_m / 2.0
     search_hi = float(center_distance_m) + max_window_m / 2.0
+    if sector_lo is not None:
+        search_lo = max(search_lo, sector_lo)
+        search_hi = min(search_hi, sector_hi)
     in_window = (seg_mids >= search_lo) & (seg_mids <= search_hi)
     if not in_window.any():
         return float(seg_contrib[centre_idx])
@@ -1152,7 +1167,9 @@ def _integrate_time_gained_around_extremum(
     peak_sign = 1.0 if seg_contrib[peak_idx] >= 0 else -1.0
 
     # Walk left/right while per-meter contribution stays above threshold
-    # AND keeps the same sign as the peak. Cap by max_window_m total.
+    # AND keeps the same sign as the peak. Cap by max_window_m total AND
+    # by sector bounds when supplied (markers don't cross sector
+    # boundaries).
     half_window = max_window_m / 2.0
     lo_idx = peak_idx
     hi_idx = peak_idx
@@ -1164,6 +1181,8 @@ def _integrate_time_gained_around_extremum(
             break
         if peak_mid - float(seg_mids[lo_idx - 1]) > half_window:
             break
+        if sector_lo is not None and float(seg_mids[lo_idx - 1]) < sector_lo:
+            break
         lo_idx -= 1
 
     while hi_idx + 1 < seg_contrib.size:
@@ -1171,6 +1190,8 @@ def _integrate_time_gained_around_extremum(
         if abs(cand) < threshold or (cand >= 0) != (peak_sign >= 0):
             break
         if float(seg_mids[hi_idx + 1]) - peak_mid > half_window:
+            break
+        if sector_hi is not None and float(seg_mids[hi_idx + 1]) > sector_hi:
             break
         hi_idx += 1
 
@@ -3733,6 +3754,20 @@ def _summarize_telemetry_battle(
     if len(samples) < 2:
         return None
 
+    _b1 = sector_boundary_distances[0]
+    _b2 = sector_boundary_distances[1]
+    _lap_end = float(_dist_arr.max()) if _dist_arr.size else None
+
+    def _sector_bounds_for_distance(d: float) -> tuple[float, float] | None:
+        """Owning-sector (lo, hi) for a distance, or None if boundaries unknown."""
+        if _b1 is None or _lap_end is None:
+            return None
+        if d <= _b1:
+            return (0.0, float(_b1))
+        if _b2 is None or d <= _b2:
+            return (float(_b1), float(_b2) if _b2 is not None else _lap_end)
+        return (float(_b2), _lap_end)
+
     candidates: list[dict] = []
     for s in samples:
         dist = s.get("distance_m")
@@ -3748,6 +3783,7 @@ def _summarize_telemetry_battle(
             continue
         contrib = _integrate_time_gained_around_extremum(
             _dist_arr, _v_a_arr, _v_b_arr, center_distance_m=float(dist),
+            sector_bounds_m=_sector_bounds_for_distance(float(dist)),
         )
         if contrib is None or abs(contrib) < 1e-4:
             continue
@@ -3814,6 +3850,26 @@ def _summarize_telemetry_battle(
             marker["corner_number"] = None
             marker["corner_name"] = None
             marker["location_label"] = fallback
+
+    # Per-sector conservation: when authoritative sector gaps are
+    # supplied (FastF1 lap-time sector splits, the ground truth), the
+    # summed marker magnitude inside a sector is bounded by
+    # |sector_gap|. Markers exceeding that envelope are proportionally
+    # scaled down so the narrated marker time-gain can never exceed
+    # what the sector actually produced. We never inflate.
+    if auth_gaps:
+        sectors_seen = {m.get("sector") for m in picked if m.get("sector")}
+        for label in sectors_seen:
+            gap = auth_gaps.get(label)
+            if gap is None:
+                continue
+            sec_markers = [m for m in picked if m.get("sector") == label]
+            named_sum = sum(m["time_gained_s"] for m in sec_markers)
+            if abs(named_sum) <= abs(gap) + 1e-6:
+                continue
+            scale = abs(gap) / abs(named_sum) if abs(named_sum) > 0 else 0.0
+            for m in sec_markers:
+                m["time_gained_s"] = m["time_gained_s"] * scale
 
     # Build sector_reconciliation. When authoritative sector gaps are
     # supplied (FastF1 lap-time splits), those values are the single

@@ -896,6 +896,93 @@ def test_telemetry_battle_surfaces_markers_from_both_drivers_when_both_gain():
     assert s2["sector_gap_s"] < 0
 
 
+def test_integrate_time_gained_around_extremum_clamped_by_sector_bounds():
+    """When sector_bounds_m is supplied the integration window cannot
+    cross the sector boundary. A peak near a boundary must not pull in
+    samples from the neighbouring sector.
+    """
+    import numpy as np
+    from f1_data import _integrate_time_gained_around_extremum
+
+    # 500 samples along 0..5000m. Plant a sustained A-gain at 980..1020
+    # (peaks right next to a boundary at 1000m), and ALSO a B-gain on
+    # the FAR side at 1050..1100 (just past the boundary). Without the
+    # clamp the extremum walker can drift across into the B-gain area.
+    distance = np.linspace(0, 5000, 500)
+    v_a = np.full_like(distance, 200.0)
+    v_b = np.full_like(distance, 200.0)
+    a_peak_mask = (distance >= 980) & (distance <= 1020)
+    v_a[a_peak_mask] = 217.0
+    b_peak_mask = (distance >= 1050) & (distance <= 1100)
+    v_b[b_peak_mask] = 217.0
+
+    # Clamp the marker (centred at 1000m) to Sector 1 = [0, 1000].
+    clamped = _integrate_time_gained_around_extremum(
+        distance.tolist(), v_a.tolist(), v_b.tolist(),
+        center_distance_m=1000.0,
+        sector_bounds_m=(0.0, 1000.0),
+    )
+    # Without the clamp the walker might integrate across the boundary
+    # and the contribution would be much smaller in magnitude. With it,
+    # only the A-gain side counts and the value should be clearly > 0.
+    assert clamped is not None
+    assert clamped > 0.0, f"expected A-gain on the clamped side, got {clamped}"
+
+    # Also: an integration window asked outside the clamp must still
+    # return only what's inside the clamp.
+    far = _integrate_time_gained_around_extremum(
+        distance.tolist(), v_a.tolist(), v_b.tolist(),
+        center_distance_m=1075.0,
+        sector_bounds_m=(0.0, 1000.0),
+    )
+    # 1075 is outside [0, 1000] entirely — search window will collapse
+    # and fall back to the nearest sample within bounds. The result
+    # must NOT pull in the B-gain (which lives at 1050..1100).
+    # Any value returned must be non-negative (A side only).
+    if far is not None:
+        assert far >= -1e-3, f"clamped integration leaked into B-gain side: {far}"
+
+
+def test_sector_marker_contribution_bounded_by_authoritative_sector_gap():
+    """Conservation: when authoritative sector gaps are supplied, the
+    summed |marker_contribution| within a sector cannot exceed the
+    authoritative |sector_gap|. Scaling is applied if it would.
+    """
+    import numpy as np
+    # 5000m lap. Plant TWO same-signed A-gain events in Sector 1
+    # (apex 800m AND apex 1600m). The sum of their raw marker
+    # contributions exceeds the authoritative Sector 1 gap, so the
+    # conservation scaler must clamp them down.
+    distance = np.linspace(0, 5000, 500).tolist()
+    samples = []
+    for d in distance:
+        sa, sb = 200.0, 200.0
+        if 780 <= d <= 820:
+            sa, sb = 130.0, 110.0
+        elif 1580 <= d <= 1620:
+            sa, sb = 130.0, 110.0
+        samples.append({
+            "distance_m": d, "delta_speed": sa - sb,
+            "speed_a": sa, "speed_b": sb,
+            "throttle_a": 35.0, "throttle_b": 35.0,
+            "brake_a": False, "brake_b": False,
+            "gear_a": 3, "gear_b": 3,
+        })
+    # Pretend FastF1 says Sector 1 was worth only +0.030s for A.
+    auth = {"Sector 1": 0.030, "Sector 2": 0.0, "Sector 3": 0.0}
+    result = f1_data._summarize_telemetry_battle(
+        samples, "LEC", "LEC", "NOR",
+        sector_boundary_distances=[2000, 4000],
+        authoritative_sector_gaps_s=auth,
+    )
+    assert result is not None
+    s1_markers = [c for c in result["top_causes"] if c.get("sector") == "Sector 1"]
+    summed = sum(c["time_gained_s"] for c in s1_markers)
+    assert abs(summed) <= abs(auth["Sector 1"]) + 1e-6, (
+        f"S1 markers sum to {summed}, exceeding |sector_gap|={auth['Sector 1']}"
+    )
+
+
 def test_sector_reconciliation_uses_authoritative_sector_gaps_when_supplied():
     """When FastF1-derived authoritative sector gaps are passed in, the
     sector_reconciliation panel reports THOSE values as sector_gap_s —
