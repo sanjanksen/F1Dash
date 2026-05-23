@@ -1597,9 +1597,10 @@ def _preload_resolved_context(resolved: dict) -> dict | None:
     return preloaded
 
 
-def _build_request_system_prompt(resolved: dict, preloaded: dict | None) -> str:
+def _build_request_system_suffix(resolved: dict, preloaded: dict | None) -> str:
+    """Per-request resolved-context suffix appended after the stable SYSTEM_PROMPT."""
     if not resolved.get("has_explicit_context") and not resolved.get("used_previous_context"):
-        return SYSTEM_PROMPT
+        return ""
 
     lines = [
         "Deterministic backend-resolved context for the latest user message:",
@@ -1643,7 +1644,15 @@ def _build_request_system_prompt(resolved: dict, preloaded: dict | None) -> str:
         if "error" in preloaded:
             lines.append(f"- preloaded_error: {preloaded['error']}")
 
-    return SYSTEM_PROMPT + "\n\n" + "\n".join(lines)
+    return "\n".join(lines)
+
+
+def _build_request_system_prompt(resolved: dict, preloaded: dict | None) -> str:
+    """Concatenated system prompt for callers that want a single string (e.g. OpenAI path)."""
+    suffix = _build_request_system_suffix(resolved, preloaded)
+    if not suffix:
+        return SYSTEM_PROMPT
+    return SYSTEM_PROMPT + "\n\n" + suffix
 
 
 def _build_analysis_user_prompt(question: str, resolved: dict, plan: dict, evidence: list[dict]) -> str:
@@ -1751,7 +1760,11 @@ def _run_anthropic_analysis(question: str, resolved: dict, plan: dict, evidence:
         client,
         model="claude-sonnet-4-6",
         max_tokens=1200,
-        system=ANALYSIS_SYSTEM_PROMPT,
+        system=[{
+            "type": "text",
+            "text": ANALYSIS_SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"},
+        }],
         messages=[{
             "role": "user",
             "content": _build_analysis_user_prompt(question, resolved, plan, evidence),
@@ -1767,7 +1780,11 @@ def _run_anthropic_answer_writer(question: str, analysis: dict) -> str:
         client,
         model="claude-haiku-4-5-20251001",
         max_tokens=1200,
-        system=ANSWER_WRITER_SYSTEM_PROMPT,
+        system=[{
+            "type": "text",
+            "text": ANSWER_WRITER_SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"},
+        }],
         messages=[{
             "role": "user",
             "content": _build_answer_writer_prompt(question, analysis),
@@ -1783,7 +1800,18 @@ def _answer_anthropic(message: str, history: list[dict], resolved_context: dict 
     else:
         resolved = resolved_context
         preloaded = preloaded_context
-    request_system_prompt = _build_request_system_prompt(resolved, preloaded)
+    system_suffix = _build_request_system_suffix(resolved, preloaded)
+    system_blocks = [{
+        "type": "text",
+        "text": SYSTEM_PROMPT,
+        "cache_control": {"type": "ephemeral"},
+    }]
+    if system_suffix:
+        system_blocks.append({"type": "text", "text": system_suffix})
+    cached_tools = [
+        *TOOL_DEFINITIONS[:-1],
+        {**TOOL_DEFINITIONS[-1], "cache_control": {"type": "ephemeral"}},
+    ]
     messages = [{"role": h["role"], "content": h["content"]} for h in history]
     messages.append({"role": "user", "content": message})
     executed_evidence = []
@@ -1793,8 +1821,8 @@ def _answer_anthropic(message: str, history: list[dict], resolved_context: dict 
             client,
             model="claude-sonnet-4-6",
             max_tokens=4096,
-            system=request_system_prompt,
-            tools=TOOL_DEFINITIONS,
+            system=system_blocks,
+            tools=cached_tools,
             messages=messages,
         )
 

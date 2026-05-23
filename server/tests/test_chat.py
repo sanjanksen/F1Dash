@@ -283,7 +283,13 @@ def test_answer_f1_question_passes_system_prompt():
 
     call_kwargs = mock_client.messages.create.call_args[1]
     assert "system" in call_kwargs
-    assert len(call_kwargs["system"]) > 50  # not empty
+    system = call_kwargs["system"]
+    if isinstance(system, str):
+        assert len(system) > 50
+    else:
+        # Cache-control system blocks: [{"type": "text", "text": "...", "cache_control": ...}, ...]
+        total_text = "".join(block.get("text", "") for block in system)
+        assert len(total_text) > 50
 
 
 def test_answer_f1_question_passes_tool_definitions():
