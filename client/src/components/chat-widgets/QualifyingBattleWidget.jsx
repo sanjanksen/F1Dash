@@ -255,50 +255,58 @@ function SectorReconciliationPanel({ reconciliation, driverA, driverB }) {
   const entries = Object.entries(reconciliation).filter(([, v]) => v && typeof v === 'object')
   if (!entries.length) return null
 
+  // Format a signed time-gain value with explicit driver attribution.
+  // The widget always shows the gainer's gain as a POSITIVE magnitude,
+  // never raw signed numbers — the driver label communicates direction.
+  // GAIN convention: positive = driverA gained, negative = driverB gained.
+  const formatGainAttribution = (signedSeconds, { zeroLabel = 'level' } = {}) => {
+    if (typeof signedSeconds !== 'number') return null
+    if (Math.abs(signedSeconds) < 0.005) return { driver: null, magnitude: 0, color: null, label: zeroLabel }
+    const driver = signedSeconds > 0 ? driverA : driverB
+    const color = driver === driverA ? COLOR_A : COLOR_B
+    return { driver, magnitude: Math.abs(signedSeconds), color, label: null }
+  }
+
+  const renderAttributed = (value, opts) => {
+    const a = formatGainAttribution(value, opts)
+    if (!a) return null
+    if (a.label) return <span className="text-muted-foreground">{a.label}</span>
+    return (
+      <>
+        <span style={{ color: a.color }} className="font-mono-data font-semibold">{a.driver}</span>
+        <span className="text-muted-foreground"> +{a.magnitude.toFixed(3)}s</span>
+      </>
+    )
+  }
+
   return (
     <section className="py-4">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h4 className="text-sm font-medium text-foreground">Sector reconciliation</h4>
-        <div className="text-xs text-muted-foreground">Marker contributions vs sector gaps</div>
+        <div className="text-xs text-muted-foreground">
+          Named markers + unnamed residual = sector gap
+        </div>
       </div>
       <div className="mt-3 space-y-2">
         {entries.map(([sector, data]) => {
           const sectorGap = data?.sector_gap_s
           const markerContribution = data?.marker_contribution_s
           const residual = data?.residual_s
-          // sector_gap_s is in GAIN convention: positive = driver_a gained,
-          // negative = driver_b gained (matches time_gained_s on markers).
-          const sectorWinner =
-            typeof sectorGap === 'number' && Math.abs(sectorGap) >= 0.005
-              ? sectorGap > 0
-                ? driverA
-                : driverB
-              : null
-          const sectorColor = sectorWinner === driverA ? COLOR_A : sectorWinner === driverB ? COLOR_B : 'hsl(var(--muted-foreground))'
           return (
-            <div key={sector} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2 text-xs">
+            <div key={sector} className="grid grid-cols-[5rem_minmax(0,1fr)] gap-2 text-xs">
               <div className="font-medium text-muted-foreground">{sector}</div>
-              <div className="space-y-0.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span>
-                    {sectorWinner ? (
-                      <>
-                        <span style={{ color: sectorColor }} className="font-mono-data font-semibold">{sectorWinner}</span>
-                        <span className="text-muted-foreground"> +{Math.abs(sectorGap).toFixed(3)}s</span>
-                      </>
-                    ) : (
-                      <span className="text-muted-foreground">Level</span>
-                    )}
-                  </span>
-                  <span className="font-mono-data text-muted-foreground">
-                    {typeof markerContribution === 'number'
-                      ? `markers ${markerContribution >= 0 ? '+' : ''}${markerContribution.toFixed(3)}s`
-                      : ''}
-                    {typeof residual === 'number'
-                      ? `, residual ${residual >= 0 ? '+' : ''}${residual.toFixed(3)}s`
-                      : ''}
-                  </span>
-                </div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span>{renderAttributed(sectorGap)}</span>
+                <span className="text-muted-foreground">·</span>
+                <span>
+                  <span className="text-muted-foreground">markers </span>
+                  {renderAttributed(markerContribution, { zeroLabel: '(none)' })}
+                </span>
+                <span className="text-muted-foreground">·</span>
+                <span>
+                  <span className="text-muted-foreground">residual </span>
+                  {renderAttributed(residual, { zeroLabel: '~0s' })}
+                </span>
               </div>
             </div>
           )
