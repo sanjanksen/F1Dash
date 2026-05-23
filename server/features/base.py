@@ -23,7 +23,13 @@ class Feature(ABC):
 
     name: str  # tool name; MUST be set on subclass
     applies_to: tuple[str, ...] = ()  # entity-type preconditions
-    triggered_by_modes: frozenset[str] = frozenset()  # analysis_modes this feature serves
+    triggered_by_modes: frozenset[str] = frozenset()
+    """Conversation modes for which this feature is a candidate in the
+    deterministic plan-builder. Empty default = AGENTIC-ONLY: the feature
+    is exposed in the LLM tool list (so the model can pick it explicitly)
+    but is never auto-selected by chat.py's _build_analysis_plan. Declare
+    modes here only for features that should fire when the resolver
+    classifies a question into one of them."""
     tool_schema: dict = {}  # JSON schema for the tool's input args
     required_args: tuple[str, ...] = ()  # arg names that must be present
     description: str = ""  # human description for tool registration
