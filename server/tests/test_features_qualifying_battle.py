@@ -63,3 +63,49 @@ def test_qualifying_battle_declares_triggered_by_modes():
     discover_features()
     feat = FEATURE_REGISTRY["analyze_qualifying_battle"]
     assert feat.triggered_by_modes == frozenset({"driver_comparison"})
+
+
+def test_qualifying_battle_widget_handles_split_sector_lap():
+    """When result.split_sector_lap is True and decisive_sector is None,
+    the widget must NOT claim a decisive sector. split_sector_lap is passed
+    through so the React component can render the appropriate prose."""
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    discover_features()
+    feat = FEATURE_REGISTRY["analyze_qualifying_battle"]
+
+    result = {
+        "available": True,
+        "driver_a": "LEC", "driver_b": "NOR",
+        "lap_time_a": "1:28.143", "lap_time_b": "1:28.183",
+        "overall_gap_s": 0.040,
+        "s1_gap_s": 0.05, "s2_gap_s": 0.05, "s3_gap_s": 0.04,
+        "decisive_sector": None,
+        "decisive_sector_gap_s": None,
+        "split_sector_lap": True,
+    }
+    widget = feat.make_widget(result)
+    assert widget["type"] == "qualifying_battle"
+    assert widget.get("decisive_sector") is None
+    assert widget.get("split_sector_lap") is True
+
+
+def test_qualifying_battle_widget_passes_through_decisive_sector_when_set():
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    discover_features()
+    feat = FEATURE_REGISTRY["analyze_qualifying_battle"]
+
+    result = {
+        "available": True,
+        "driver_a": "LEC", "driver_b": "NOR",
+        "lap_time_a": "1:28.143", "lap_time_b": "1:28.183",
+        "overall_gap_s": 0.040,
+        "s1_gap_s": 0.131, "s2_gap_s": -0.081, "s3_gap_s": -0.010,
+        "decisive_sector": "Sector 1",
+        "decisive_sector_gap_s": 0.131,
+        "split_sector_lap": False,
+    }
+    widget = feat.make_widget(result)
+    assert widget.get("decisive_sector") == "Sector 1"
+    assert widget.get("split_sector_lap") is False

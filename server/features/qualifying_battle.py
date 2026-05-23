@@ -29,6 +29,7 @@ def _build_qualifying_battle_widget(result: dict) -> dict:
         "overall_gap_s": result.get("overall_gap_s"),
         "decisive_sector": result.get("decisive_sector"),
         "decisive_sector_gap_s": result.get("decisive_sector_gap_s"),
+        "split_sector_lap": bool(result.get("split_sector_lap")),
         "decisive_corner": result.get("decisive_corner"),
         "cause_type": result.get("cause_type"),
         "cause_explanation": result.get("cause_explanation"),
