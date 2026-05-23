@@ -1102,6 +1102,81 @@ def _integrate_time_gained_from_samples(
     return float(seg_contrib.sum())
 
 
+def _integrate_time_gained_around_extremum(
+    distance,
+    speed_a_kph,
+    speed_b_kph,
+    center_distance_m: float,
+    peak_fraction_threshold: float = 0.3,
+    max_window_m: float = 200.0,
+) -> float | None:
+    """Integrate signed time gained (A − B convention) around a local
+    per-meter extremum near ``center_distance_m``.
+
+    Walks outward in both directions from the peak-magnitude segment until
+    the per-meter contribution drops below ``peak_fraction_threshold *
+    |peak|`` (or until the cumulative window exceeds ``max_window_m``).
+    Captures the physical event without summing adjacent unrelated samples.
+
+    Returns seconds (positive = A gained, negative = B gained), or ``None``
+    when integration is not possible.
+    """
+    segs = _trapezoidal_time_gained_segments(
+        distance, speed_a_kph, speed_b_kph,
+    )
+    if segs is None:
+        return None
+    distance_arr, seg_mids, seg_contrib = segs
+    if seg_mids.size == 0:
+        return None
+
+    # Locate the segment closest to the requested center.
+    centre_idx = int(np.argmin(np.abs(seg_mids - float(center_distance_m))))
+
+    # Search for the magnitude-peak segment in a small neighbourhood
+    # (±max_window_m/2) so a tiny near-zero seg right at the requested
+    # center doesn't become the "peak" by accident.
+    search_lo = float(center_distance_m) - max_window_m / 2.0
+    search_hi = float(center_distance_m) + max_window_m / 2.0
+    in_window = (seg_mids >= search_lo) & (seg_mids <= search_hi)
+    if not in_window.any():
+        return float(seg_contrib[centre_idx])
+    window_idx = np.flatnonzero(in_window)
+    abs_window_contrib = np.abs(seg_contrib[window_idx])
+    peak_idx = int(window_idx[int(np.argmax(abs_window_contrib))])
+    peak_abs = abs(float(seg_contrib[peak_idx]))
+    if peak_abs <= 0.0:
+        return float(seg_contrib[peak_idx])
+
+    threshold = peak_abs * float(peak_fraction_threshold)
+    peak_sign = 1.0 if seg_contrib[peak_idx] >= 0 else -1.0
+
+    # Walk left/right while per-meter contribution stays above threshold
+    # AND keeps the same sign as the peak. Cap by max_window_m total.
+    half_window = max_window_m / 2.0
+    lo_idx = peak_idx
+    hi_idx = peak_idx
+    peak_mid = float(seg_mids[peak_idx])
+
+    while lo_idx - 1 >= 0:
+        cand = seg_contrib[lo_idx - 1]
+        if abs(cand) < threshold or (cand >= 0) != (peak_sign >= 0):
+            break
+        if peak_mid - float(seg_mids[lo_idx - 1]) > half_window:
+            break
+        lo_idx -= 1
+
+    while hi_idx + 1 < seg_contrib.size:
+        cand = seg_contrib[hi_idx + 1]
+        if abs(cand) < threshold or (cand >= 0) != (peak_sign >= 0):
+            break
+        if float(seg_mids[hi_idx + 1]) - peak_mid > half_window:
+            break
+        hi_idx += 1
+
+    return float(seg_contrib[lo_idx:hi_idx + 1].sum())
+
+
 def _pick_driver(laps, code: str):
     """Call pick_drivers([code]) (FastF1 3.8+) or fall back to pick_driver(code)."""
     pick = getattr(laps, 'pick_drivers', None)

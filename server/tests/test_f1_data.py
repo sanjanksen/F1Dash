@@ -4314,6 +4314,110 @@ def test_integrate_time_gained_apex_sample_does_not_blow_up():
     assert result < 0.6, f"Apex-sample artefact leaked through: {result}s"
 
 
+# -----------------------------------------------------------------------------
+# _integrate_time_gained_around_extremum
+# -----------------------------------------------------------------------------
+
+def test_integrate_time_gained_around_extremum_localizes_corner_apex():
+    """A short apex event embedded in an otherwise-flat trace should
+    integrate to a SMALL value compared to a wide fixed window — the
+    extremum walker should clip back to the physical event."""
+    from f1_data import (
+        _integrate_time_gained_around_extremum,
+        _integrate_time_gained_from_samples,
+    )
+    import numpy as np
+
+    # 200 m of equal speeds, then a narrow ~40 m apex where A is briefly
+    # 13 km/h faster, then 200 m more of equal speeds. Wide ±100 m window
+    # would still sum a lot of the surrounding equal-speed segments.
+    distance = np.linspace(0, 5000, 251)  # 20 m sample spacing
+    speed_a = np.full(distance.size, 200.0)
+    speed_b = np.full(distance.size, 200.0)
+    apex_centre = 4700.0
+    apex_idx = int(np.argmin(np.abs(distance - apex_centre)))
+    speed_a[apex_idx - 1:apex_idx + 2] = 117.0
+    speed_b[apex_idx - 1:apex_idx + 2] = 104.0
+
+    wide = _integrate_time_gained_from_samples(
+        distance, speed_a, speed_b,
+        start_distance=apex_centre - 100.0,
+        end_distance=apex_centre + 100.0,
+    )
+    tight = _integrate_time_gained_around_extremum(
+        distance, speed_a, speed_b, center_distance_m=apex_centre,
+    )
+    assert wide is not None and tight is not None
+    # Tight window must capture less than the wide one because it walks
+    # back to where the per-meter contribution decays.
+    assert abs(tight) <= abs(wide) + 1e-6
+
+
+def test_integrate_time_gained_around_extremum_straight_marker_bounded():
+    """14 km/h delta at 300 km/h, narrow physical event around 4700 m.
+    Result must be physically plausible (< 0.20 s)."""
+    from f1_data import _integrate_time_gained_around_extremum
+    import numpy as np
+
+    distance = np.linspace(4500, 4900, 41)  # 10m spacing
+    speed_a = np.full(distance.size, 300.0)
+    speed_b = np.full(distance.size, 300.0)
+    # Narrow ~30 m physical event where A is 14 km/h faster
+    centre_idx = int(np.argmin(np.abs(distance - 4700.0)))
+    speed_a[centre_idx - 1:centre_idx + 2] = 314.0
+
+    result = _integrate_time_gained_around_extremum(
+        distance, speed_a, speed_b, center_distance_m=4700.0,
+    )
+    assert result is not None
+    assert 0 < result < 0.20, f"Expected small positive contribution, got {result}s"
+
+
+def test_integrate_time_gained_around_extremum_signed_when_b_gains():
+    """When the local extremum is negative (B gained at that point), the
+    helper must return a negative number — A-minus-B signed convention."""
+    from f1_data import _integrate_time_gained_around_extremum
+    import numpy as np
+
+    distance = np.linspace(0, 1000, 51)
+    speed_a = np.full(distance.size, 200.0)
+    speed_b = np.full(distance.size, 200.0)
+    centre_idx = int(np.argmin(np.abs(distance - 500.0)))
+    speed_a[centre_idx - 1:centre_idx + 2] = 104.0
+    speed_b[centre_idx - 1:centre_idx + 2] = 117.0
+
+    result = _integrate_time_gained_around_extremum(
+        distance, speed_a, speed_b, center_distance_m=500.0,
+    )
+    assert result is not None
+    assert result < 0.0, f"Expected B-gain (negative); got {result}"
+
+
+def test_integrate_time_gained_around_extremum_handles_few_samples():
+    from f1_data import _integrate_time_gained_around_extremum
+    assert _integrate_time_gained_around_extremum([], [], [], 100.0) is None
+    assert _integrate_time_gained_around_extremum([10.0], [200.0], [199.0], 10.0) is None
+
+
+def test_integrate_time_gained_around_extremum_caps_at_max_window():
+    """If the per-meter contribution is uniform across a huge span, the
+    walker must respect max_window_m (default 200 m)."""
+    from f1_data import _integrate_time_gained_around_extremum
+    import numpy as np
+
+    distance = np.linspace(0, 5000, 251)
+    speed_a = np.full(distance.size, 314.0)
+    speed_b = np.full(distance.size, 300.0)
+
+    result = _integrate_time_gained_around_extremum(
+        distance, speed_a, speed_b, center_distance_m=2500.0,
+        max_window_m=200.0,
+    )
+    assert result is not None
+    # Per-meter at 300/314 ~ 0.000528 s/m. 200 m → ~0.106 s. Allow margin.
+    assert 0.0 < result < 0.20, f"Walker leaked past max_window: got {result}s"
+
+
 def test_classify_decisive_sector_when_one_dominates():
     """If one sector owns >=55% of total absolute gap, decisive_sector is set
     and split_sector_lap is False."""
