@@ -3527,6 +3527,81 @@ def _base_location_context(distance_m: int | float | None) -> dict:
     }
 
 
+def _cause_explanation(
+    ct: str,
+    dist: int | None,
+    location_context: dict | None = None,
+    *,
+    gainer_driver: str | None = None,
+    faster_driver: str | None = None,
+    driver_a_code: str | None = None,
+    driver_b_code: str | None = None,
+    is_teammate_comparison: bool = False,
+) -> str:
+    """Build the per-marker prose. ``gainer_driver`` is the driver who
+    gained at THIS specific marker — narrate from their perspective
+    even when they are not the overall-faster driver on the lap.
+    """
+    def _specific_plain(lc: dict | None) -> str | None:
+        if not lc or lc.get("phase") == "lap_region":
+            return None
+        return lc.get("plain")
+
+    readable_location = _specific_plain(location_context)
+    loc = f" {readable_location}" if readable_location else (f" around {dist}m" if dist is not None else "")
+    gainer = gainer_driver or faster_driver
+    loser = driver_b_code if gainer == driver_a_code else driver_a_code
+    if ct == "straight_line_speed":
+        if is_teammate_comparison:
+            return (
+                f"There's a straight-line speed delta{loc} — on identical machinery this likely reflects "
+                f"a setup trim difference (wing angle, cooling) or DRS timing rather than "
+                f"a meaningful car performance gap."
+            )
+        return (
+            f"{gainer} carries more speed at full throttle late on the straight{loc}, "
+            f"opening the gap before the braking zone."
+        )
+    if ct == "straight_line_speed_energy_limited":
+        return (
+            f"Late-straight deployment{loc}: {loser} fades while still full throttle, "
+            f"so {gainer} keeps accelerating harder before the next braking zone."
+        )
+    if ct == "braking":
+        if is_teammate_comparison:
+            return (
+                f"Braking technique is the key difference{loc}: {loser} commits to the brake "
+                f"earlier while {gainer} trails the braking point and carries more entry speed. "
+                f"On identical hardware this is a pure driving style call."
+            )
+        return (
+            f"Corner entry{loc}: {loser} is already on the brake while "
+            f"{gainer} is still carrying speed into the zone."
+        )
+    if ct == "minimum_speed":
+        if is_teammate_comparison:
+            return (
+                f"Mid-corner minimum speed{loc}: {gainer} gives up less speed at the direction change. "
+                f"Between teammates this points to setup divergence (downforce level, diff, ride height) "
+                f"or a conscious style difference through the apex — not a car advantage."
+            )
+        return (
+            f"{gainer} gives up less speed mid-corner{loc} and exits with more momentum."
+        )
+    if ct == "traction":
+        if is_teammate_comparison:
+            return (
+                f"Traction on exit{loc}: {gainer} gets back to full throttle earlier. "
+                f"Between teammates this usually comes down to throttle application technique "
+                f"or diff settings — same rear end, different commitment level."
+            )
+        return (
+            f"Traction on exit{loc}: {gainer} gets back to full speed earlier "
+            f"and carries that advantage down the following straight."
+        )
+    return "Mixed advantages — no single dominant mechanism."
+
+
 def _telemetry_location_context(round_number: int, distance_m: int | float | None, cause_type: str | None) -> dict:
     base = _base_location_context(distance_m)
     if not _is_finite_distance(distance_m):
@@ -4302,69 +4377,6 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
         readable_location = _specific_location_plain(location_context)
         return f" {readable_location}" if readable_location else (f" around {dist}m" if dist is not None else "")
 
-    def _cause_explanation(
-        ct: str,
-        dist: int | None,
-        location_context: dict | None = None,
-        gainer_driver: str | None = None,
-    ) -> str:
-        """Build the per-marker prose. ``gainer_driver`` is the driver who
-        gained at THIS specific marker — narrate from their perspective
-        even when they are not the overall-faster driver on the lap.
-        """
-        loc = _location_phrase(dist, location_context)
-        gainer = gainer_driver or faster_driver
-        loser = driver_b_code if gainer == driver_a_code else driver_a_code
-        if ct == "straight_line_speed":
-            if is_teammate_comparison:
-                return (
-                    f"There's a straight-line speed delta{loc} — on identical machinery this likely reflects "
-                    f"a setup trim difference (wing angle, cooling) or DRS timing rather than "
-                    f"a meaningful car performance gap."
-                )
-            return (
-                f"{gainer} carries more speed at full throttle late on the straight{loc}, "
-                f"opening the gap before the braking zone."
-            )
-        if ct == "straight_line_speed_energy_limited":
-            return (
-                f"Late-straight deployment{loc}: {loser} fades while still full throttle, "
-                f"so {gainer} keeps accelerating harder before the next braking zone."
-            )
-        if ct == "braking":
-            if is_teammate_comparison:
-                return (
-                    f"Braking technique is the key difference{loc}: {loser} commits to the brake "
-                    f"earlier while {gainer} trails the braking point and carries more entry speed. "
-                    f"On identical hardware this is a pure driving style call."
-                )
-            return (
-                f"Corner entry{loc}: {loser} is already on the brake while "
-                f"{gainer} is still carrying speed into the zone."
-            )
-        if ct == "minimum_speed":
-            if is_teammate_comparison:
-                return (
-                    f"Mid-corner minimum speed{loc}: {gainer} gives up less speed at the direction change. "
-                    f"Between teammates this points to setup divergence (downforce level, diff, ride height) "
-                    f"or a conscious style difference through the apex — not a car advantage."
-                )
-            return (
-                f"{gainer} gives up less speed mid-corner{loc} and exits with more momentum."
-            )
-        if ct == "traction":
-            if is_teammate_comparison:
-                return (
-                    f"Traction on exit{loc}: {gainer} gets back to full throttle earlier. "
-                    f"Between teammates this usually comes down to throttle application technique "
-                    f"or diff settings — same rear end, different commitment level."
-                )
-            return (
-                f"Traction on exit{loc}: {gainer} gets back to full speed earlier "
-                f"and carries that advantage down the following straight."
-            )
-        return "Mixed advantages — no single dominant mechanism."
-
     energy_relevant = False
     energy_reason = None
     energy_context_explanation = None
@@ -4468,6 +4480,10 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
         primary_cause["distance_m"] if primary_cause else None,
         primary_location_context,
         gainer_driver=(primary_cause.get("gainer_driver") if primary_cause else None),
+        faster_driver=faster_driver,
+        driver_a_code=driver_a_code,
+        driver_b_code=driver_b_code,
+        is_teammate_comparison=is_teammate_comparison,
     )
 
     # Build multi-cause explanation list. Rank by absolute time contribution
@@ -4502,6 +4518,10 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
                 tc["distance_m"],
                 location_context,
                 gainer_driver=tc.get("gainer_driver"),
+                faster_driver=faster_driver,
+                driver_a_code=driver_a_code,
+                driver_b_code=driver_b_code,
+                is_teammate_comparison=is_teammate_comparison,
             ),
         })
 
