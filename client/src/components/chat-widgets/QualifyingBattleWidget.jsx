@@ -234,8 +234,15 @@ function MechanismRow({ cause, active, driverA, driverB, fasterDriver, onMouseEn
               <div className="text-sm font-medium text-foreground">{mechanism}</div>
             </div>
             <div className="text-right">
-              <div className="font-mono-data text-sm font-semibold text-foreground">
-                {timeHeadline ?? (kphSupport ?? '-')}
+              <div className="font-mono-data text-sm font-semibold">
+                {timeHeadline ? (
+                  <>
+                    <span style={{ color: gainerColor }}>{gainer}</span>
+                    <span className="text-foreground"> {timeHeadline}</span>
+                  </>
+                ) : (
+                  <span className="text-foreground">{kphSupport ?? '-'}</span>
+                )}
               </div>
               {timeHeadline && kphSupport ? (
                 <div className="font-mono-data text-[10px] text-muted-foreground">{kphSupport}</div>
