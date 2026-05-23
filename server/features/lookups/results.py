@@ -35,7 +35,7 @@ class RaceResultsFeature(Feature):
 @register_feature
 class QualifyingResultsFeature(Feature):
     name = "get_qualifying_results"
-    applies_to = ()
+    applies_to = ("quali_session",)
     triggered_by_modes = frozenset({"driver_comparison"})
     description = "PRIMITIVE TOOL. Raw qualifying classification with Q1/Q2/Q3 times for one round."
     required_args = ("round_number",)
@@ -84,7 +84,7 @@ class SprintResultsFeature(Feature):
 @register_feature
 class SprintQualifyingResultsFeature(Feature):
     name = "get_sprint_qualifying_results"
-    applies_to = ()
+    applies_to = ("sprint_quali_session",)
     triggered_by_modes = frozenset({"driver_comparison"})
     description = (
         "PRIMITIVE TOOL. Sprint qualifying/shootout classification for one round "

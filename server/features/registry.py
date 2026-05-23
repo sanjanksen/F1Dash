@@ -44,7 +44,8 @@ def _resolved_entity_types(resolved: dict | None) -> set[str]:
         - team present -> "team"
         - circuit_slug present -> "circuit"
         - round_number present + session_type in {R, S} -> "race_session"
-        - round_number present + session_type in {Q, SQ} -> "quali_session"
+        - round_number present + session_type == Q -> "quali_session"
+        - round_number present + session_type == SQ -> "sprint_quali_session"
         - round_number present + session_type in {FP1, FP2, FP3} -> "practice_session"
         - any round_number -> "session"
         - lap_number present -> "lap"
@@ -65,8 +66,10 @@ def _resolved_entity_types(resolved: dict | None) -> set[str]:
     if resolved.get("round_number"):
         if session in ("R", "S"):
             types.add("race_session")
-        elif session in ("Q", "SQ"):
+        elif session == "Q":
             types.add("quali_session")
+        elif session == "SQ":
+            types.add("sprint_quali_session")
         elif session in ("FP1", "FP2", "FP3"):
             types.add("practice_session")
         types.add("session")
