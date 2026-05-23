@@ -544,8 +544,15 @@ def _cause_label(cause_type: str | None) -> str:
 
 
 def _canonical_reason_from_cause(cause: dict, result: dict) -> str:
-    faster = result.get("faster_driver") or result.get("driver_a")
-    slower = result.get("slower_driver") or result.get("driver_b")
+    overall_faster = result.get("faster_driver") or result.get("driver_a")
+    overall_slower = result.get("slower_driver") or result.get("driver_b")
+    # Per-marker attribution: the driver who gained at THIS specific
+    # point may differ from the overall-faster driver on the lap. We
+    # narrate from the per-marker gainer's perspective so cause prose
+    # never claims the overall-winner gained at a point where they
+    # actually lost time.
+    gainer = cause.get("gainer_driver") or overall_faster
+    loser = overall_slower if gainer == overall_faster else overall_faster
     distance = cause.get("distance_m")
     delta = cause.get("delta_speed_kph")
     label = _cause_label(cause.get("cause_type"))
@@ -553,19 +560,19 @@ def _canonical_reason_from_cause(cause: dict, result: dict) -> str:
     delta_text = f"{abs(delta):.1f} kph" if isinstance(delta, (int, float)) else "a speed"
 
     if cause.get("cause_type") == "straight_line_speed_energy_limited":
-        cause_text = f"Cause: {slower} faded while still full throttle, consistent with earlier deployment taper or clipping."
+        cause_text = f"Cause: {loser} faded while still full throttle, consistent with earlier deployment taper or clipping."
     elif cause.get("cause_type") == "traction":
-        cause_text = f"Cause: {faster} got to throttle earlier or cleaner on corner exit."
+        cause_text = f"Cause: {gainer} got to throttle earlier or cleaner on corner exit."
     elif cause.get("cause_type") == "braking":
-        cause_text = f"Cause: {faster} carried the braking phase deeper while {slower} had already committed to the brake."
+        cause_text = f"Cause: {gainer} carried the braking phase deeper while {loser} had already committed to the brake."
     elif cause.get("cause_type") == "minimum_speed":
-        cause_text = f"Cause: {faster} carried a cleaner arc and did not slow the car as much mid-corner."
+        cause_text = f"Cause: {gainer} carried a cleaner arc and did not slow the car as much mid-corner."
     elif cause.get("cause_type") == "straight_line_speed":
-        cause_text = f"Cause: {faster} had the stronger straight-line speed phase."
+        cause_text = f"Cause: {gainer} had the stronger straight-line speed phase."
     else:
         cause_text = f"Cause: {label} was the clearest telemetry mechanism."
 
-    return f"{cause_text} Effect: {faster} was {delta_text} faster than {slower}{distance_text}."
+    return f"{cause_text} Effect: {gainer} was {delta_text} faster than {loser}{distance_text}."
 
 
 def _canonicalize_qualifying_analysis(analysis: dict, evidence: list[dict]) -> dict:

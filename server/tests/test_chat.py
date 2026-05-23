@@ -552,6 +552,37 @@ def test_canonicalize_qualifying_analysis_aligns_answer_with_widget_source():
     assert "2100m" in canonical["secondary_reasons"][0]
 
 
+def test_canonical_reason_attributes_marker_to_per_marker_gainer_not_overall_winner():
+    """When a marker's gainer_driver is the OVERALL-slower driver (e.g.
+    LEC won the lap but NOR was faster in S2), the cause prose must
+    attribute the gain to NOR, not LEC. Previously the helper used
+    result.faster_driver / slower_driver only, so it incorrectly
+    narrated overall-winner-gained at points the loser actually won.
+    """
+    import chat
+
+    # Overall winner LEC. Per-marker gainer at this point is NOR (the
+    # overall-slower driver). The narrated subject of the cause prose
+    # must be NOR.
+    cause = {
+        "cause_type": "minimum_speed",
+        "distance_m": 3000,
+        "delta_speed_kph": -7.5,
+        "gainer_driver": "NOR",
+    }
+    result = {
+        "driver_a": "LEC",
+        "driver_b": "NOR",
+        "faster_driver": "LEC",
+        "slower_driver": "NOR",
+    }
+    text = chat._canonical_reason_from_cause(cause, result)
+    # The cause is attributed to NOR (per-marker gainer), not LEC.
+    assert "NOR carried a cleaner arc" in text
+    # The "Effect:" sentence also speaks from NOR's perspective.
+    assert "NOR was 7.5 kph faster than LEC" in text
+
+
 def test_build_analysis_plan_uses_requested_session_for_race_pace_comparison():
     import chat
 
