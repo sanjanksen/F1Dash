@@ -294,7 +294,19 @@ export default function QualifyingBattleWidget({ widget }) {
 
         {(s1 || s2 || s3) && (
           <section className="py-4">
-            <h4 className="text-sm font-medium text-foreground">Sector breakdown</h4>
+            <div className="flex flex-wrap items-baseline justify-between gap-3">
+              <h4 className="text-sm font-medium text-foreground">Sector breakdown</h4>
+              {widget.split_sector_lap ? (
+                <div className="text-xs text-muted-foreground">Gap built across all three sectors</div>
+              ) : widget.decisive_sector ? (
+                <div className="text-xs text-muted-foreground">
+                  Decisive sector: <span className="font-medium text-foreground">{widget.decisive_sector}</span>
+                  {typeof widget.decisive_sector_gap_s === 'number'
+                    ? <span className="ml-1 font-mono-data">+{Math.abs(widget.decisive_sector_gap_s).toFixed(3)}s</span>
+                    : null}
+                </div>
+              ) : null}
+            </div>
             <div className="mt-3 space-y-3">
               {[
                 ['S1', s1],
