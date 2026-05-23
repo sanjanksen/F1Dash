@@ -80,10 +80,10 @@ class CornerProfilesFeature(Feature):
         gain_locations = result.get("gain_location_summary") or []
         if len(gain_locations) < 1:
             return False
-        speed_a = result.get("avg_straight_speed_a")
-        speed_b = result.get("avg_straight_speed_b")
-        brake_delta = result.get("braking_point_delta_m")
+        speed_a = result.get("avg_straight_speed_a_kph")
+        speed_b = result.get("avg_straight_speed_b_kph")
+        total = result.get("total_time_gained_s")
         speed_material = (speed_a is not None and speed_b is not None
-                          and abs(speed_a - speed_b) >= 2)
-        brake_material = brake_delta is not None and abs(brake_delta) >= 5
-        return speed_material or brake_material
+                          and abs(speed_a - speed_b) >= 2.0)
+        time_material = total is not None and abs(total) >= 0.05
+        return speed_material or time_material
