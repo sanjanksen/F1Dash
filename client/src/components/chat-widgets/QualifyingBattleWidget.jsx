@@ -266,8 +266,10 @@ function SectorReconciliationPanel({ reconciliation, driverA, driverB }) {
           const sectorGap = data?.sector_gap_s
           const markerContribution = data?.marker_contribution_s
           const residual = data?.residual_s
+          // sector_gap_s is in GAIN convention: positive = driver_a gained,
+          // negative = driver_b gained (matches time_gained_s on markers).
           const sectorWinner =
-            typeof sectorGap === 'number' && sectorGap !== 0
+            typeof sectorGap === 'number' && Math.abs(sectorGap) >= 0.005
               ? sectorGap > 0
                 ? driverA
                 : driverB

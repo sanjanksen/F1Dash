@@ -984,11 +984,14 @@ def test_sector_marker_contribution_bounded_by_authoritative_sector_gap():
 
 
 def test_sector_reconciliation_uses_authoritative_sector_gaps_when_supplied():
-    """When FastF1-derived authoritative sector gaps are passed in, the
-    sector_reconciliation panel reports THOSE values as sector_gap_s —
-    not a telemetry-integration approximation. This is the single
-    source of truth required so the reconciliation panel matches the
-    sector-breakdown panel exactly.
+    """When FastF1-derived authoritative sector gaps are passed in (TIME-DELTA
+    convention: positive = driver_a slower), the sector_reconciliation panel
+    reports them in GAIN convention (positive = driver_a gained) so it
+    matches time_gained_s on markers.
+
+    This is the single source of truth: same magnitude as the
+    sector-breakdown panel, sign flipped to GAIN convention so the
+    reconciliation panel can interpret it consistently with markers.
     """
     import numpy as np
     distance = np.linspace(0, 5000, 500).tolist()
@@ -1004,7 +1007,11 @@ def test_sector_reconciliation_uses_authoritative_sector_gaps_when_supplied():
             "brake_a": False, "brake_b": False,
             "gear_a": 3, "gear_b": 3,
         })
-    auth = {"Sector 1": 0.131, "Sector 2": -0.081, "Sector 3": -0.010}
+    # FastF1 TIME-DELTA convention: gap_s = a_time − b_time
+    # S1: -0.131 means LEC (A) was 0.131s faster in S1 (took less time)
+    # S2: +0.081 means LEC (A) was 0.081s slower in S2 (NOR gained)
+    # S3: +0.010 means LEC (A) was 0.010s slower in S3 (NOR gained)
+    auth = {"Sector 1": -0.131, "Sector 2": 0.081, "Sector 3": 0.010}
     result = f1_data._summarize_telemetry_battle(
         samples, "LEC", "LEC", "NOR",
         sector_boundary_distances=[2000, 4000],
@@ -1012,11 +1019,12 @@ def test_sector_reconciliation_uses_authoritative_sector_gaps_when_supplied():
     )
     assert result is not None
     rec = result["sector_reconciliation"]
-    # The reported sector_gap_s must equal the authoritative value
-    # exactly (within rounding) — NOT a telemetry-integration estimate.
-    assert rec["Sector 1"]["sector_gap_s"] == 0.131
-    assert rec["Sector 2"]["sector_gap_s"] == -0.081
-    assert rec["Sector 3"]["sector_gap_s"] == -0.010
+    # Reconciliation reports GAIN convention (negated from input): positive
+    # = driver_a gained. Same magnitude as input, sign flipped to match
+    # marker time_gained_s convention.
+    assert rec["Sector 1"]["sector_gap_s"] == 0.131   # A gained 0.131s in S1
+    assert rec["Sector 2"]["sector_gap_s"] == -0.081  # B gained 0.081s in S2
+    assert rec["Sector 3"]["sector_gap_s"] == -0.010  # B gained 0.010s in S3
 
 
 def test_telemetry_battle_time_gained_s_negative_when_b_gains_locally():

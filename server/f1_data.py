@@ -3888,8 +3888,16 @@ def _summarize_telemetry_battle(
             if lo is None or hi is None:
                 continue
             if label in auth_gaps and auth_gaps[label] is not None:
-                sector_gap = float(auth_gaps[label])
+                # auth_gaps stores FastF1 time-delta convention
+                # (sector_gap_s = a_time − b_time, so positive = B faster,
+                # negative = A faster). We convert to GAIN convention
+                # (positive = A gained) so the reconciliation panel uses
+                # the SAME sign convention as time_gained_s on markers.
+                sector_gap = -float(auth_gaps[label])
             else:
+                # The telemetry-integrated helper already returns values in
+                # GAIN convention (positive = A gained at that span), so no
+                # negation needed.
                 sector_gap = _integrate_time_gained_from_samples(
                     _dist_arr, _v_a_arr, _v_b_arr,
                     start_distance=float(lo),
@@ -3898,6 +3906,10 @@ def _summarize_telemetry_battle(
             sector_markers = [m for m in picked if m.get("sector") == label]
             marker_contribution = sum(m["time_gained_s"] for m in sector_markers)
             sector_reconciliation[label] = {
+                # sector_gap_s and marker_contribution_s are BOTH in GAIN
+                # convention now: positive = driver_a gained, negative =
+                # driver_b gained. The residual is the unsurfaced gain for
+                # driver_a (positive) or driver_b (negative) in this sector.
                 "sector_gap_s": round(sector_gap, 4) if sector_gap is not None else None,
                 "marker_contribution_s": round(marker_contribution, 4),
                 "residual_s": (
