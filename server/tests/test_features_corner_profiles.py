@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 
 pytestmark = pytest.mark.usefixtures("reset_feature_registry")
@@ -38,7 +40,7 @@ def test_corner_profiles_should_show_widget_respects_availability():
     sample = {
         "driver_a": "NOR",
         "gain_location_summary": [{"corner": "T1"}],
-        "braking_point_delta_m": 8.0,
+        "total_time_gained_s": 0.18,
     }
     assert feat.should_show_widget(sample) is True
     assert feat.should_show_widget({"available": False}) is False
@@ -46,25 +48,40 @@ def test_corner_profiles_should_show_widget_respects_availability():
 
 def test_corner_profiles_should_show_widget_meaningful_signal():
     feat = _load_feat()
+    # Speed delta ≥ 2 kph: speed_material is True regardless of total gain.
     sample = {
         "available": True,
         "gain_location_summary": [{"corner": "T3"}, {"corner": "T7"}],
-        "avg_straight_speed_a": 312.0,
-        "avg_straight_speed_b": 308.0,
-        "braking_point_delta_m": 1.0,
+        "avg_straight_speed_a_kph": 312.0,
+        "avg_straight_speed_b_kph": 308.0,
+        "total_time_gained_s": 0.02,
+    }
+    assert feat.should_show_widget(sample) is True
+
+
+def test_corner_profiles_should_show_widget_meaningful_time_gained_only():
+    """Even with sub-threshold straight-speed delta, a material total_time_gained_s
+    must surface the widget."""
+    feat = _load_feat()
+    sample = {
+        "available": True,
+        "gain_location_summary": [{"corner": "T3"}],
+        "avg_straight_speed_a_kph": 311.0,
+        "avg_straight_speed_b_kph": 310.5,
+        "total_time_gained_s": 0.12,
     }
     assert feat.should_show_widget(sample) is True
 
 
 def test_corner_profiles_should_show_widget_suppresses_negligible():
     feat = _load_feat()
-    # gain locations present but speed delta < 2 and brake delta < 5
+    # gain locations present but speed delta < 2 kph and |total time gained| < 0.05s
     sample = {
         "available": True,
         "gain_location_summary": [{"corner": "T3"}],
-        "avg_straight_speed_a": 311.0,
-        "avg_straight_speed_b": 310.5,
-        "braking_point_delta_m": 2.0,
+        "avg_straight_speed_a_kph": 311.0,
+        "avg_straight_speed_b_kph": 310.5,
+        "total_time_gained_s": 0.02,
     }
     assert feat.should_show_widget(sample) is False
 
@@ -118,3 +135,47 @@ def test_corner_profiles_widget_surfaces_per_corner_time_gained_and_total():
     assert rows[1]["time_gained_s"] == -0.041
     assert rows[1]["time_gained_estimate"] is True
     assert widget["total_time_gained_s"] == 0.094
+
+
+def test_corner_profiles_gate_uses_real_compare_corner_profiles_field_names():
+    """End-to-end check: compare_corner_profiles' actual return dict must
+    contain the keys the gate reads. Stubs extract_corner_profiles so we
+    exercise the full assembly without needing FastF1 telemetry."""
+    import f1_data
+
+    def _make_profile(driver, lap_time_s, apex_kph, straight_kph):
+        return {
+            "event": "Imola GP",
+            "lap_time": "1:18.000" if lap_time_s == 78.0 else "1:18.100",
+            "lap_time_s": lap_time_s,
+            "corner_profiles": {
+                "corner_1": {
+                    "apex_speed_kph": apex_kph,
+                    "entry_speed_kph": apex_kph + 40,
+                    "exit_speed_kph": apex_kph + 20,
+                    "braking_point_m": 250,
+                    "apex_gear": 3,
+                    "corner_length_m": 120.0,
+                },
+            },
+            "straight_profiles": [
+                {"max_speed_kph": straight_kph},
+                {"max_speed_kph": straight_kph - 4},
+            ],
+            "lap_summary": {},
+        }
+
+    profile_a = _make_profile("NOR", 78.0, 132.0, 312.0)
+    profile_b = _make_profile("LEC", 78.1, 124.0, 308.0)
+
+    with patch("f1_data.extract_corner_profiles", side_effect=[profile_a, profile_b]):
+        out = f1_data.compare_corner_profiles(7, "Q", "NOR", "LEC")
+
+    # Confirm the real return shape carries the keys the feature gate reads.
+    assert "avg_straight_speed_a_kph" in out
+    assert "avg_straight_speed_b_kph" in out
+    assert "total_time_gained_s" in out
+    assert "gain_location_summary" in out
+    # And the gate fires on this realistic payload.
+    feat = _load_feat()
+    assert feat.should_show_widget(out) is True
