@@ -695,8 +695,8 @@ def test_run_anthropic_answer_writer_uses_current_model():
     assert "claude-opus-4-5" not in source, (
         "chat.py still references deprecated model claude-opus-4-5"
     )
-    assert "claude-opus-4-7" in source, (
-        "chat.py must reference the current model claude-opus-4-7"
+    assert "claude-haiku-4-5-20251001" in source, (
+        "chat.py must reference the current answer-writer model claude-haiku-4-5-20251001"
     )
 
 

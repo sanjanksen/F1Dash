@@ -1765,7 +1765,7 @@ def _run_anthropic_answer_writer(question: str, analysis: dict) -> str:
     client = _get_anthropic_client()
     response = _call_anthropic(
         client,
-        model="claude-opus-4-7",
+        model="claude-haiku-4-5-20251001",
         max_tokens=1200,
         system=ANSWER_WRITER_SYSTEM_PROMPT,
         messages=[{
