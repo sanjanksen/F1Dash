@@ -22,12 +22,17 @@ export default function ActiveAeroWidget({ widget }) {
 
   const segments = widget.segments ?? []
   const totalZ = widget.total_z_mode_seconds ?? 0
+  // Backend emits estimated_lap_time_delta_s as a POSITIVE value meaning
+  // "time SAVED by using Z-mode vs X-only baseline". We surface it as a
+  // positive gain throughout — consistent with formatTimeDelta's "positive
+  // = gain" convention used elsewhere in the app.
   const delta = widget.estimated_lap_time_delta_s ?? 0
 
-  // Per-segment time estimate is a pro-rated share of the lap-time delta by Z-mode duration.
+  // Per-segment estimate: pro-rated share of total time saved by Z-mode duration.
+  // Positive value = time saved by this segment.
   const segmentTimeEstimate = (seg) => {
     if (!delta || !totalZ || !seg?.duration_s) return null
-    return -(delta / totalZ) * seg.duration_s
+    return (delta / totalZ) * seg.duration_s
   }
 
   return (
@@ -60,9 +65,9 @@ export default function ActiveAeroWidget({ widget }) {
           </dd>
         </div>
         <div>
-          <dt className="text-xs uppercase tracking-wide text-muted-foreground">Est. lap-time vs X-only</dt>
+          <dt className="text-xs uppercase tracking-wide text-muted-foreground">Est. time saved vs X-only</dt>
           <dd className="mt-1 font-mono-data text-lg font-semibold text-foreground">
-            -{fmtSecs(delta)}
+            +{fmtSecs(delta)}
           </dd>
         </div>
       </dl>
