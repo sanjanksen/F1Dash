@@ -941,6 +941,12 @@ For decisive mechanisms, reconcile with sector gaps when possible:
 Records with `time_gained_estimate: true` are approximations from
 two-point integration; surface them with a hedge ("roughly", "about").
 
+`time_gained_s` is signed as **driver_a − driver_b** at that point.
+Positive means driver_a gained time; negative means driver_b gained.
+This is independent of which driver was overall faster on the lap —
+when narrating mechanisms, attribute the gain to the driver whose
+side of the sign matches at that specific marker / corner / segment.
+
 ## Split-sector qualifying laps
 
 When analyzing a `qualifying_battle` result, check the `split_sector_lap` field. If `split_sector_lap` is True (no single sector owns >=55% of the total absolute gap), do NOT claim a decisive sector — `decisive_sector` and `decisive_sector_gap_s` will be None. Describe the gap as built across multiple sectors and discuss the mechanisms from the speed-trace markers wherever they point, regardless of sector. When `split_sector_lap` is False, `decisive_sector` is authoritative and the markers should be tied to that sector in the narrative.
