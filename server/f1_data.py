@@ -3678,6 +3678,34 @@ def _summarize_openf1_intervals(intervals: list[dict]) -> dict | None:
     }
 
 
+def _classify_decisive_sector(
+    s1_gap_s: float,
+    s2_gap_s: float,
+    s3_gap_s: float,
+    dominance_threshold: float = 0.55,
+) -> dict:
+    """Classify a qualifying lap's decisive sector by share of total absolute gap.
+
+    Returns {"decisive_sector": "S1"|"S2"|"S3"|None, "split_sector_lap": bool}.
+
+    decisive_sector is None when:
+      - Total absolute gap is negligible (no meaningful difference between laps)
+      - Or no sector owns >= dominance_threshold of the total absolute gap
+        (i.e. the gap is distributed across sectors)
+
+    split_sector_lap is True only in the second case — when there IS a gap
+    but it's spread across sectors.
+    """
+    abs_gaps = {"S1": abs(s1_gap_s), "S2": abs(s2_gap_s), "S3": abs(s3_gap_s)}
+    total = sum(abs_gaps.values())
+    if total < 1e-6:
+        return {"decisive_sector": None, "split_sector_lap": False}
+    dominant_sector, dominant_gap = max(abs_gaps.items(), key=lambda kv: kv[1])
+    if dominant_gap / total >= dominance_threshold:
+        return {"decisive_sector": dominant_sector, "split_sector_lap": False}
+    return {"decisive_sector": None, "split_sector_lap": True}
+
+
 def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, session_type: str = "Q") -> dict:
     """
     Backend-derived causal summary for a qualifying battle.
@@ -3786,10 +3814,20 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
         ("Sector 2", sector.get("sector2", {}).get("gap_s")),
         ("Sector 3", sector.get("sector3", {}).get("gap_s")),
     ]
-    decisive_sector, decisive_sector_gap = max(
-        sector_rows,
-        key=lambda item: abs(item[1]) if item[1] is not None else -1,
-    )
+    s1_gap = sector_rows[0][1] or 0.0
+    s2_gap = sector_rows[1][1] or 0.0
+    s3_gap = sector_rows[2][1] or 0.0
+    _classification = _classify_decisive_sector(s1_gap, s2_gap, s3_gap)
+    split_sector_lap = _classification["split_sector_lap"]
+    _short_to_long = {"S1": "Sector 1", "S2": "Sector 2", "S3": "Sector 3"}
+    _short_to_gap = {"S1": s1_gap, "S2": s2_gap, "S3": s3_gap}
+    if _classification["decisive_sector"] is not None:
+        _short = _classification["decisive_sector"]
+        decisive_sector = _short_to_long[_short]
+        decisive_sector_gap = _short_to_gap[_short]
+    else:
+        decisive_sector = None
+        decisive_sector_gap = None
 
     comparison_samples = telemetry.get("comparison", []) if telemetry else []
     sector_boundary_distances = telemetry.get("sector_boundary_distances", [None, None]) if telemetry else [None, None]
@@ -4039,6 +4077,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
         "overall_gap_s": overall_gap,
         "decisive_sector": decisive_sector,
         "decisive_sector_gap_s": decisive_sector_gap,
+        "split_sector_lap": split_sector_lap,
         "decisive_distance_m": decisive_distance,
         "decisive_corner": decisive_corner,
         "zone_summary": zone_summary,

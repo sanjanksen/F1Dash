@@ -4094,3 +4094,43 @@ def test_marker_picker_returns_empty_when_no_meaningful_delta():
     speed_b = np.full(200, 200.0) + np.random.RandomState(42).normal(0, 0.5, 200)
     markers = _pick_speed_trace_markers(distance, speed_a, speed_b, max_markers=3)
     assert markers == []
+
+
+def test_classify_decisive_sector_when_one_dominates():
+    """If one sector owns >=55% of total absolute gap, decisive_sector is set
+    and split_sector_lap is False."""
+    from f1_data import _classify_decisive_sector
+
+    # Total absolute = 0.131 + 0.081 + 0.010 = 0.222; S1 share = 59% > 55%
+    result = _classify_decisive_sector(
+        s1_gap_s=0.131,
+        s2_gap_s=-0.081,
+        s3_gap_s=-0.010,
+    )
+    assert result["decisive_sector"] == "S1"
+    assert result["split_sector_lap"] is False
+
+
+def test_classify_split_sector_lap():
+    """If no sector owns >=55% of total absolute gap, decisive_sector is None
+    and split_sector_lap is True."""
+    from f1_data import _classify_decisive_sector
+
+    # Total absolute = 0.14; max share = 0.05/0.14 = 36% < 55%
+    result = _classify_decisive_sector(
+        s1_gap_s=0.05,
+        s2_gap_s=0.05,
+        s3_gap_s=0.04,
+    )
+    assert result["decisive_sector"] is None
+    assert result["split_sector_lap"] is True
+
+
+def test_classify_decisive_sector_handles_zero_gap():
+    """Effectively-identical laps return None decisive_sector and
+    split_sector_lap=False (nothing to split)."""
+    from f1_data import _classify_decisive_sector
+
+    result = _classify_decisive_sector(s1_gap_s=0.0, s2_gap_s=0.0, s3_gap_s=0.0)
+    assert result["decisive_sector"] is None
+    assert result["split_sector_lap"] is False
