@@ -1,4 +1,5 @@
 import { Badge } from '../ui/badge.jsx'
+import { formatTimeDelta, formatTimeMagnitude } from './formatTimeDelta.js'
 
 function fmt(value, suffix = ' kph') {
   return typeof value === 'number' ? `${Math.abs(value).toFixed(1)}${suffix}` : '-'
@@ -47,25 +48,43 @@ export default function CornerComparisonWidget({ widget }) {
 
       {widget.gain_location_summary?.length ? (
         <section className="py-4">
-          <h4 className="text-sm font-medium text-foreground">Corner gain markers</h4>
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <h4 className="text-sm font-medium text-foreground">Corner gain markers</h4>
+            {formatTimeMagnitude(widget.total_time_gained_s) ? (
+              <div className="text-xs text-muted-foreground">
+                Total time gained:{' '}
+                <span className="font-mono-data font-semibold text-foreground">
+                  {formatTimeMagnitude(widget.total_time_gained_s)}
+                </span>
+              </div>
+            ) : null}
+          </div>
           <div className="mt-3 divide-y divide-border/70">
-            {widget.gain_location_summary.slice(0, 3).map((item, index) => (
-              <div key={`${item.corner}-${index}`} className="grid gap-3 py-3 sm:grid-cols-[5.5rem_minmax(0,1fr)]">
-                <div>
-                  <Badge variant={index === 0 ? 'accent' : 'muted'}>{item.corner}</Badge>
-                </div>
-                <div>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-sm font-medium text-foreground">
-                      {CAUSE_LABELS[item.cause] ?? item.cause ?? 'Mixed'}
-                    </div>
-                    <div className="font-mono-data text-xs text-muted-foreground">
-                      apex {fmt(item.apex_delta_kph)} / exit {fmt(item.exit_delta_kph)}
+            {widget.gain_location_summary.slice(0, 3).map((item, index) => {
+              const timeStr = formatTimeDelta(item.time_gained_s, { approximate: item.time_gained_estimate })
+              return (
+                <div key={`${item.corner}-${index}`} className="grid gap-3 py-3 sm:grid-cols-[5.5rem_minmax(0,1fr)]">
+                  <div>
+                    <Badge variant={index === 0 ? 'accent' : 'muted'}>{item.corner}</Badge>
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-sm font-medium text-foreground">
+                        {CAUSE_LABELS[item.cause] ?? item.cause ?? 'Mixed'}
+                      </div>
+                      <div className="text-right">
+                        <div className="font-mono-data text-sm font-semibold text-foreground">
+                          {timeStr ?? `apex ${fmt(item.apex_delta_kph)}`}
+                        </div>
+                        <div className="font-mono-data text-[10px] text-muted-foreground">
+                          apex {fmt(item.apex_delta_kph)} / exit {fmt(item.exit_delta_kph)}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </section>
       ) : null}

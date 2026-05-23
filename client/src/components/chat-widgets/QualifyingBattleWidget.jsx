@@ -4,6 +4,7 @@ import SpeedTraceChart from './SpeedTraceChart.jsx'
 import TrackMap from './TrackMap.jsx'
 import { Badge } from '../ui/badge.jsx'
 import { CornerAnalysisPanel } from './CornerAnalysisWidget.jsx'
+import { formatTimeDelta, formatTimeMagnitude } from './formatTimeDelta.js'
 
 const COLOR_A = 'hsl(var(--primary))'
 const COLOR_B = 'hsl(var(--speed))'
@@ -94,6 +95,11 @@ function traceCoversCauses(points, causes) {
 }
 
 function causeWinner(cause, driverA, driverB, fasterDriver) {
+  // Trust time_gained_s sign when present — it's the authoritative measure.
+  // (km/h sign can disagree on rounding edge cases.)
+  if (typeof cause.time_gained_s === 'number' && Math.abs(cause.time_gained_s) >= 0.005) {
+    return cause.time_gained_s > 0 ? driverA : driverB
+  }
   if (typeof cause.delta_speed_kph === 'number') {
     if (cause.delta_speed_kph > 0) return driverA
     if (cause.delta_speed_kph < 0) return driverB
@@ -150,8 +156,9 @@ function SectorBar({ label, sectorData, maxAbsGap, driverA, driverB }) {
 }
 
 function MechanismRow({ cause, active, driverA, driverB, fasterDriver, onMouseEnter, onMouseLeave }) {
-  const { cause_type, delta_speed_kph, explanation } = cause
-  const winnerDelta = typeof delta_speed_kph === 'number' ? `${Math.abs(delta_speed_kph).toFixed(1)} kph` : '-'
+  const { cause_type, delta_speed_kph, explanation, time_gained_s } = cause
+  const timeHeadline = formatTimeMagnitude(time_gained_s)
+  const kphSupport = typeof delta_speed_kph === 'number' ? `${Math.abs(delta_speed_kph).toFixed(1)} kph` : null
   const mechanism = CAUSE_LABELS[cause_type] ?? cause_type ?? 'Mixed'
   const description = causeDescription(cause, driverA, driverB, fasterDriver)
 
@@ -171,7 +178,14 @@ function MechanismRow({ cause, active, driverA, driverB, fasterDriver, onMouseEn
         <div>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="text-sm font-medium text-foreground">{mechanism}</div>
-            <div className="font-mono-data text-xs text-muted-foreground">{winnerDelta}</div>
+            <div className="text-right">
+              <div className="font-mono-data text-sm font-semibold text-foreground">
+                {timeHeadline ?? (kphSupport ?? '-')}
+              </div>
+              {timeHeadline && kphSupport ? (
+                <div className="font-mono-data text-[10px] text-muted-foreground">{kphSupport}</div>
+              ) : null}
+            </div>
           </div>
           <div className="mt-2 text-sm leading-6 text-muted-foreground">{description}</div>
           {explanation ? <div className="mt-2 text-xs leading-5 text-muted-foreground/80">{explanation}</div> : null}

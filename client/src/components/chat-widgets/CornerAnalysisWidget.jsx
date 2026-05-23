@@ -1,4 +1,5 @@
 import { Badge } from '../ui/badge.jsx'
+import { formatTimeMagnitude, formatTimeDelta } from './formatTimeDelta.js'
 
 function formatRowVal(val, fmt) {
   if (val == null) return '—'
@@ -37,6 +38,10 @@ export function CornerAnalysisPanel({ grip, driverA, driverB }) {
     { key: 'technique',  rows: techniqueRows  },
   ].filter((g) => g.rows.length > 0)
 
+  const totalTimeGained = grip.total_time_gained_s
+  const totalTimeStr = formatTimeMagnitude(totalTimeGained)
+  const cornerRecords = Array.isArray(grip.corner_time_records) ? grip.corner_time_records : []
+
   return (
     <section className="py-4">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
@@ -44,8 +49,30 @@ export function CornerAnalysisPanel({ grip, driverA, driverB }) {
         <div className="text-xs text-muted-foreground">From cornering load data</div>
       </div>
 
+      {totalTimeStr ? (
+        <div className="mt-2 text-sm text-foreground">
+          Total time gained from grip differential:{' '}
+          <span className="font-mono-data font-semibold">{totalTimeStr}</span>
+        </div>
+      ) : null}
+
       {grip.confidence_read ? (
         <div className="mt-2 text-sm leading-6 text-muted-foreground">{grip.confidence_read}</div>
+      ) : null}
+
+      {cornerRecords.length > 0 ? (
+        <ul className="mt-3 space-y-1 text-xs">
+          {cornerRecords.slice(0, 6).map((rec, i) => {
+            const label = formatTimeDelta(rec.time_gained_s, { approximate: rec.time_gained_estimate })
+            if (!label) return null
+            return (
+              <li key={i} className="flex items-baseline justify-between gap-3">
+                <span className="text-muted-foreground">{rec.corner ?? rec.label ?? `Corner ${i + 1}`}</span>
+                <span className="font-mono-data text-foreground">{label}</span>
+              </li>
+            )
+          })}
+        </ul>
       ) : null}
 
       {/* Driver summary badges */}

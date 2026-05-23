@@ -1,3 +1,5 @@
+import { formatTimeDelta } from './formatTimeDelta.js'
+
 const COLOR_A = 'hsl(var(--primary))'
 const COLOR_B = 'hsl(var(--speed))'
 const ZONE_LICO = 'hsl(var(--time) / 0.3)'
@@ -109,8 +111,13 @@ export default function EnergyManagementWidget({ widget }) {
   const clipA    = (widget.drivers?.[0]?.possible_clipping_windows   ?? []).slice(0, 8)
   const f33SegA  = widget.clipping_segments_a ?? []
   const totalClipA = widget.total_clipping_seconds_a
+  const totalClipB = widget.total_clipping_seconds_b
   const budgetA = widget.clipping_budget_status_a
   const straights = widget.straight_breakdown ?? []
+  const clipDiffSeconds = (typeof totalClipA === 'number' && typeof totalClipB === 'number')
+    ? totalClipA - totalClipB
+    : null
+  const clipDiffLabel = formatTimeDelta(clipDiffSeconds)
 
   if (!traceA.length) return null
 
@@ -162,6 +169,13 @@ export default function EnergyManagementWidget({ widget }) {
           {budgetA === 'above' ? ' (above budget)' : ''}.
         </p>
       )}
+      {clipDiffLabel && Math.abs(clipDiffSeconds) >= 0.005 ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Clipping differential ({driverA} − {driverB}):{' '}
+          <span className="font-mono-data text-foreground">{clipDiffLabel}</span>
+          {clipDiffSeconds > 0 ? ` (${driverA} loses more time)` : ` (${driverB} loses more time)`}
+        </p>
+      ) : null}
 
       {/* Metrics comparison */}
       <div className="mt-1 grid gap-px bg-border/70 border-t border-border/70 sm:grid-cols-3">

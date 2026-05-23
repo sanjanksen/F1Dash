@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { formatTimeDelta } from './formatTimeDelta.js'
 
 const COLOR_A = 'hsl(var(--primary))'
 const COLOR_B = 'hsl(var(--speed))'
@@ -171,6 +172,11 @@ export default function SpeedTraceChart({
   )
   const activeX = xForDistance(activePoint?.distance_m, domain, CHART_W)
 
+  // Find nearest cause to the active cursor so the tooltip strip can show its time-gained.
+  const nearestCauseIdx = nearestMechIndex(causes, activePoint?.distance_m ?? domain.min, 120)
+  const nearestCause = typeof nearestCauseIdx === 'number' ? causes[nearestCauseIdx] : null
+  const nearestCauseTimeStr = nearestCause ? formatTimeDelta(nearestCause.time_gained_s) : null
+
   const delta = activePoint?.delta_speed
   const deltaIsA = typeof delta === 'number' && delta > 0
   const deltaIsB = typeof delta === 'number' && delta < 0
@@ -261,6 +267,7 @@ export default function SpeedTraceChart({
             const labelX = Math.min(Math.max(cx, 8), CHART_W - 8)
             const color = RANK_COLORS[index]
             const isActive = activeMechIndex === index
+            const timeLabel = formatTimeDelta(cause.time_gained_s)
 
             return (
               <g key={index}>
@@ -286,6 +293,20 @@ export default function SpeedTraceChart({
                 <text x={labelX} y={13} textAnchor="middle" fill="white" fontSize="9" fontFamily="monospace" fontWeight="bold">
                   {RANK_LABELS[index]}
                 </text>
+                {timeLabel ? (
+                  <text
+                    x={labelX}
+                    y={26}
+                    textAnchor="middle"
+                    fill={color}
+                    fillOpacity={isActive ? 1 : 0.85}
+                    fontSize="9"
+                    fontFamily="monospace"
+                    fontWeight="600"
+                  >
+                    {timeLabel}
+                  </text>
+                ) : null}
               </g>
             )
           })}
@@ -326,6 +347,11 @@ export default function SpeedTraceChart({
             <span className="rounded px-1.5 py-0.5 font-mono-data text-[10px] font-medium" style={{ background: `${deltaColor}18`, color: deltaColor }}>
               {deltaLabel}
             </span>
+            {nearestCauseTimeStr ? (
+              <span className="rounded px-1.5 py-0.5 font-mono-data text-[10px] font-medium text-muted-foreground" style={{ background: 'hsl(var(--muted) / 0.5)' }}>
+                nearest marker: {nearestCauseTimeStr}
+              </span>
+            ) : null}
           </div>
           <svg viewBox={`0 0 ${CHART_W} ${DELTA_H}`} className="w-full overflow-visible" style={{ height: `${DELTA_H * 0.6}px` }}>
             <defs>
