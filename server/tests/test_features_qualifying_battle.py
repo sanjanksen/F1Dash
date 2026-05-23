@@ -79,7 +79,11 @@ def test_qualifying_battle_widget_handles_split_sector_lap():
         "driver_a": "LEC", "driver_b": "NOR",
         "lap_time_a": "1:28.143", "lap_time_b": "1:28.183",
         "overall_gap_s": 0.040,
-        "s1_gap_s": 0.05, "s2_gap_s": 0.05, "s3_gap_s": 0.04,
+        "sector_comparison": {
+            "sector1": {"gap_s": 0.05},
+            "sector2": {"gap_s": 0.05},
+            "sector3": {"gap_s": 0.04},
+        },
         "decisive_sector": None,
         "decisive_sector_gap_s": None,
         "split_sector_lap": True,
@@ -88,6 +92,7 @@ def test_qualifying_battle_widget_handles_split_sector_lap():
     assert widget["type"] == "qualifying_battle"
     assert widget.get("decisive_sector") is None
     assert widget.get("split_sector_lap") is True
+    assert widget.get("sector_comparison", {}).get("sector1", {}).get("gap_s") == 0.05
 
 
 def test_qualifying_battle_widget_passes_through_decisive_sector_when_set():
@@ -101,7 +106,11 @@ def test_qualifying_battle_widget_passes_through_decisive_sector_when_set():
         "driver_a": "LEC", "driver_b": "NOR",
         "lap_time_a": "1:28.143", "lap_time_b": "1:28.183",
         "overall_gap_s": 0.040,
-        "s1_gap_s": 0.131, "s2_gap_s": -0.081, "s3_gap_s": -0.010,
+        "sector_comparison": {
+            "sector1": {"gap_s": 0.131},
+            "sector2": {"gap_s": -0.081},
+            "sector3": {"gap_s": -0.010},
+        },
         "decisive_sector": "Sector 1",
         "decisive_sector_gap_s": 0.131,
         "split_sector_lap": False,
@@ -109,6 +118,7 @@ def test_qualifying_battle_widget_passes_through_decisive_sector_when_set():
     widget = feat.make_widget(result)
     assert widget.get("decisive_sector") == "Sector 1"
     assert widget.get("split_sector_lap") is False
+    assert widget.get("sector_comparison", {}).get("sector1", {}).get("gap_s") == 0.131
 
 
 def test_qualifying_battle_widget_carries_time_gained_on_cause_explanations():
