@@ -4673,8 +4673,33 @@ def get_circuit_corners(round_number: int) -> list[dict]:
     """
     Corner positions (distance along track in metres) for a circuit.
     Use alongside telemetry tools to map speed/brake differences to named corners.
+
+    FastF1 doesn't expose circuit info at the module level — circuit info is
+    only available on a loaded session. `session.get_circuit_info()` internally
+    calls `self.laps.pick_fastest()` to determine corner distances along the
+    fastest lap, so we MUST load laps (and the telemetry that backs them).
+
+    Tries qualifying first (richest data, most lap variety) then race.
+    Returns [] if no session for the round has happened yet.
     """
-    circuit_info = fastf1.get_circuit_info(CURRENT_YEAR, round_number)
+    session = None
+    for st in ('Q', 'R'):
+        try:
+            session = _load_session(
+                round_number, st,
+                laps=True, telemetry=True, weather=False, messages=False,
+            )
+            break
+        except Exception:
+            session = None
+    if session is None:
+        return []
+    try:
+        circuit_info = session.get_circuit_info()
+    except Exception:
+        return []
+    if circuit_info is None or getattr(circuit_info, 'corners', None) is None:
+        return []
     corners = []
     for _, row in circuit_info.corners.iterrows():
         raw_label = str(row.get('Letter', '')).strip()
