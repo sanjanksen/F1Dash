@@ -4,9 +4,8 @@ from __future__ import annotations
 import importlib
 import logging
 import pkgutil
-import time
 
-from features.base import Feature, FEATURE_REGISTRY, audit_log
+from features.base import Feature, FEATURE_REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -111,65 +110,3 @@ def features_for_mode(mode: str | None, resolved: dict | None) -> list[Feature]:
     return out
 
 
-def run_pipeline(
-    question: str,
-    resolved: dict | None,
-    args_by_feature: dict[str, dict] | None = None,
-) -> list[tuple[Feature, dict, dict | None]]:
-    """End-to-end registry pipeline: candidates -> execute -> widget gate -> audit.
-
-    Returns one (feature, execute_result, widget_or_none) per feature that
-    cleared applies_to. The audit log is populated as a side effect for
-    every fired feature.
-
-    feature.execute() exceptions are caught -- the entry's result becomes
-    {"available": False, "error": <ExceptionType>} and the widget gate
-    decides whether to emit a widget for it (usually False).
-    """
-    args_by_feature = args_by_feature or {}
-    out: list[tuple[Feature, dict, dict | None]] = []
-
-    for feat in candidates_for(resolved):
-        args = args_by_feature.get(feat.name, {})
-        t0 = time.time()
-        try:
-            result = feat.execute(**args)
-        except Exception as e:
-            logger.warning(
-                "run_pipeline: feature %s execute() raised %s",
-                feat.name, type(e).__name__,
-            )
-            result = {"available": False, "error": type(e).__name__}
-        duration_ms = int((time.time() - t0) * 1000)
-
-        try:
-            show = feat.should_show_widget(result)
-        except Exception as e:
-            logger.warning(
-                "run_pipeline: feature %s should_show_widget raised %s",
-                feat.name, type(e).__name__,
-            )
-            show = False
-
-        widget = None
-        if show:
-            try:
-                widget = feat.make_widget(result)
-            except Exception as e:
-                logger.warning(
-                    "run_pipeline: feature %s make_widget raised %s",
-                    feat.name, type(e).__name__,
-                )
-                widget = None
-
-        audit_log(
-            feature_name=feat.name,
-            question=question,
-            applies_to_passed=True,
-            executed=True,
-            widget_emitted=widget is not None,
-            duration_ms=duration_ms,
-        )
-        out.append((feat, result, widget))
-
-    return out
