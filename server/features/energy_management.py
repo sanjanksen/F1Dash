@@ -80,8 +80,12 @@ class EnergyManagementFeature(Feature):
         speed_trace = result.get("speed_trace_a") or []
         if len(speed_trace) < 20:
             return False
-        total_clip = result.get("total_clipping_seconds_a")
-        clip_delta = result.get("clipping_delta_a_minus_b")
-        clip_material = total_clip is not None and total_clip >= 0.2
-        delta_material = clip_delta is not None and abs(clip_delta) >= 0.1
-        return clip_material or delta_material
+        clip_a = result.get("clipping_signature_a") or {}
+        clip_b = result.get("clipping_signature_b") or {}
+        total_a = clip_a.get("total_clipping_seconds") or 0
+        total_b = clip_b.get("total_clipping_seconds") or 0
+        if total_a >= 0.2:
+            return True
+        if abs(total_a - total_b) >= 0.1:
+            return True
+        return False

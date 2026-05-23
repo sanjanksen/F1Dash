@@ -43,7 +43,13 @@ def test_race_pace_battle_should_show_widget_meaningful_signal():
     feat = _load_feat()
     sample = {
         "available": True,
-        "lap_overlap": 12,
+        "aligned_stints": [
+            {
+                "compound": "SOFT",
+                "stint_a": {"lap_numbers": list(range(5, 20))},
+                "stint_b": {"lap_numbers": list(range(5, 20))},
+            }
+        ],
         "overall_pace_delta_s": 0.25,
         "deg_rate_delta": 0.01,
     }
@@ -55,9 +61,33 @@ def test_race_pace_battle_should_show_widget_suppresses_negligible():
     # Flip overall pace delta below the 0.15 threshold, deg also immaterial
     sample = {
         "available": True,
-        "lap_overlap": 12,
+        "aligned_stints": [
+            {
+                "compound": "SOFT",
+                "stint_a": {"lap_numbers": list(range(5, 20))},
+                "stint_b": {"lap_numbers": list(range(5, 20))},
+            }
+        ],
         "overall_pace_delta_s": 0.05,
         "deg_rate_delta": 0.01,
+    }
+    assert feat.should_show_widget(sample) is False
+
+
+def test_race_pace_battle_should_show_widget_suppresses_when_overlap_too_small():
+    feat = _load_feat()
+    # Aligned stints exist but no overlapping laps -- gate suppresses
+    sample = {
+        "available": True,
+        "aligned_stints": [
+            {
+                "compound": "MEDIUM",
+                "stint_a": {"lap_numbers": [1, 2]},
+                "stint_b": {"lap_numbers": [40, 41]},
+            }
+        ],
+        "overall_pace_delta_s": 0.6,
+        "deg_rate_delta": 0.2,
     }
     assert feat.should_show_widget(sample) is False
 

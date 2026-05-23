@@ -45,7 +45,6 @@ def test_active_aero_should_show_widget_respects_availability():
         "driver_code": "NOR",
         "circuit_in_coverage": True,
         "total_z_mode_seconds": 1.2,
-        "estimated_lap_time_delta_s": 0.15,
     }
     assert feat.should_show_widget(full) is True
     assert feat.should_show_widget({"available": False}) is False
@@ -57,7 +56,6 @@ def test_active_aero_should_show_widget_meaningful_signal():
         "available": True,
         "circuit_in_coverage": True,
         "total_z_mode_seconds": 0.8,
-        "estimated_lap_time_delta_s": -0.09,
     }
     assert feat.should_show_widget(sample) is True
 
@@ -69,6 +67,15 @@ def test_active_aero_should_show_widget_suppresses_negligible():
         "available": True,
         "circuit_in_coverage": True,
         "total_z_mode_seconds": 0.1,
-        "estimated_lap_time_delta_s": 0.15,
+    }
+    assert feat.should_show_widget(sample) is False
+
+
+def test_active_aero_should_show_widget_suppresses_when_circuit_uncovered():
+    feat = _load_feat()
+    sample = {
+        "available": True,
+        "circuit_in_coverage": False,
+        "total_z_mode_seconds": 5.0,
     }
     assert feat.should_show_widget(sample) is False

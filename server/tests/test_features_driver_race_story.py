@@ -31,7 +31,7 @@ def test_driver_race_story_should_show_widget_suppresses_unavailable():
     full = {
         "available": True,
         "driver": "x",
-        "finish_position": 3,
+        "race": {"finish_position": 3},
         "story_points": [{"lap": 1}],
         "pit_stops": [{"lap": 18}],
     }
@@ -44,7 +44,7 @@ def test_driver_race_story_should_show_widget_meaningful_signal():
     feat = _load_feat()
     sample = {
         "available": True,
-        "status": "FINISHED",
+        "race": {"status": "FINISHED"},
         "story_points": [{"lap": 1}, {"lap": 14}],
         "interval_summary": {"close": True},
         "radio_highlights": [{"lap": 20}],
@@ -57,7 +57,7 @@ def test_driver_race_story_should_show_widget_suppresses_negligible():
     # Only one storyful field present, fails the >=2 gate
     sample = {
         "available": True,
-        "finish_position": 7,
+        "race": {"finish_position": 7},
         "story_points": [{"lap": 1}],
     }
     assert feat.should_show_widget(sample) is False

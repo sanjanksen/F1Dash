@@ -68,7 +68,8 @@ class ActiveAeroFeature(Feature):
         z_secs = result.get("total_z_mode_seconds") or 0
         if z_secs < 0.3:
             return False
-        laptime_delta = result.get("estimated_lap_time_delta_s")
-        if laptime_delta is None or abs(laptime_delta) < 0.02:
-            return False
+        # f1_data derives estimated_lap_time_delta_s as z_secs * 0.02, so an
+        # absolute-magnitude gate on it is redundant with the z_secs gate and
+        # effectively unreachable for any z_secs < 1.0s. Drop the redundant
+        # check; surfacing a 0.3s+ Z-mode usage is signal enough.
         return True

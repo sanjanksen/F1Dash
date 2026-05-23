@@ -90,8 +90,19 @@ class RacePaceBattleFeature(Feature):
     def should_show_widget(self, result: dict) -> bool:
         if not result.get("available", True):
             return False
-        lap_overlap = result.get("lap_overlap")
-        if lap_overlap is not None and lap_overlap < 3:
+        # Require at least one compound-matched stint pair with >= 3 overlapping
+        # laps. Cross-compound comparisons aren't meaningful per the underlying
+        # analyzer, so aligned_stints is the right denominator.
+        aligned = result.get("aligned_stints") or []
+        best_overlap = 0
+        for stint in aligned:
+            stint_a = stint.get("stint_a") or stint.get("driver_a") or {}
+            stint_b = stint.get("stint_b") or stint.get("driver_b") or {}
+            laps_a = set(stint_a.get("lap_numbers") or [])
+            laps_b = set(stint_b.get("lap_numbers") or [])
+            if laps_a and laps_b:
+                best_overlap = max(best_overlap, len(laps_a & laps_b))
+        if aligned and best_overlap < 3:
             return False
         overall = result.get("overall_pace_delta_s")
         deg = result.get("deg_rate_delta")

@@ -42,7 +42,7 @@ def test_energy_management_should_show_widget_requires_speed_trace():
     full = {
         "available": True,
         "speed_trace_a": [{"d": float(i)} for i in range(25)],
-        "total_clipping_seconds_a": 0.5,
+        "clipping_signature_a": {"total_clipping_seconds": 0.5},
     }
     assert feat.should_show_widget(full) is True
     assert feat.should_show_widget({"speed_trace_a": []}) is False
@@ -51,11 +51,12 @@ def test_energy_management_should_show_widget_requires_speed_trace():
 
 def test_energy_management_should_show_widget_meaningful_signal():
     feat = _load_feat()
+    # Driver A has no clipping but driver B has a lot -- delta >= 0.1 fires.
     sample = {
         "available": True,
         "speed_trace_a": [{"d": float(i)} for i in range(30)],
-        "total_clipping_seconds_a": 0.0,
-        "clipping_delta_a_minus_b": 0.25,
+        "clipping_signature_a": {"total_clipping_seconds": 0.0},
+        "clipping_signature_b": {"total_clipping_seconds": 0.25},
     }
     assert feat.should_show_widget(sample) is True
 
@@ -66,7 +67,7 @@ def test_energy_management_should_show_widget_suppresses_negligible():
     sample = {
         "available": True,
         "speed_trace_a": [{"d": float(i)} for i in range(25)],
-        "total_clipping_seconds_a": 0.05,
-        "clipping_delta_a_minus_b": 0.02,
+        "clipping_signature_a": {"total_clipping_seconds": 0.05},
+        "clipping_signature_b": {"total_clipping_seconds": 0.03},
     }
     assert feat.should_show_widget(sample) is False
