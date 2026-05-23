@@ -126,14 +126,14 @@ function locationLabel(cause) {
 }
 
 function locationPlain(cause) {
-  // Same precedence as locationLabel but choose phrasing that reads
-  // naturally inside a sentence (e.g. "at Turn 11").
+  // Prefer the resolved corner/straight label set by the backend's
+  // _resolve_corner_for_distance (corner_name and location_label fields
+  // on the marker dict). Falls back to distance only when neither is
+  // present or both are the 'around <distance>m' fallback form.
   if (cause.corner_name) return `at ${cause.corner_name}`
-  if (cause.location_label) {
-    // location_label can be "Turn 11", "T8 → T9 straight", or "around 4700m".
-    // "around 4700m" already reads inline; corner-style labels need "at ".
-    return cause.location_label.startsWith('around ')
-      ? cause.location_label
+  if (cause.location_label && !cause.location_label.startsWith('around ')) {
+    return cause.location_label.toLowerCase().includes('straight')
+      ? `on the ${cause.location_label}`
       : `at ${cause.location_label}`
   }
   if (cause.location_context?.plain) return cause.location_context.plain
