@@ -109,3 +109,54 @@ def test_qualifying_battle_widget_passes_through_decisive_sector_when_set():
     widget = feat.make_widget(result)
     assert widget.get("decisive_sector") == "Sector 1"
     assert widget.get("split_sector_lap") is False
+
+
+def test_qualifying_battle_widget_carries_time_gained_on_cause_explanations():
+    """Each cause_explanations entry must carry time_gained_s, surfaced by
+    the widget so the React component can render time as the headline."""
+    from features.base import FEATURE_REGISTRY
+    from features.registry import discover_features
+    discover_features()
+    feat = FEATURE_REGISTRY["analyze_qualifying_battle"]
+
+    result = {
+        "available": True,
+        "driver_a": "LEC", "driver_b": "NOR",
+        "faster_driver": "LEC",
+        "overall_gap_s": 0.040,
+        "decisive_sector": "Sector 1",
+        "decisive_sector_gap_s": 0.131,
+        "split_sector_lap": False,
+        "cause_explanations": [
+            {
+                "cause_type": "minimum_speed",
+                "rank": 1,
+                "distance_m": 1500,
+                "delta_speed_kph": 13.0,
+                "speed_a": 117.0,
+                "speed_b": 104.0,
+                "time_gained_s": 0.182,
+                "gear_a": 3,
+                "gear_b": 3,
+                "sector": "sector1",
+                "location_context": None,
+                "explanation": "Mid-corner.",
+            },
+        ],
+        "telemetry_summary": {
+            "top_causes": [
+                {
+                    "cause_type": "minimum_speed",
+                    "distance_m": 1500,
+                    "speed_a": 117.0,
+                    "speed_b": 104.0,
+                    "delta_speed_kph": 13.0,
+                    "time_gained_s": 0.182,
+                },
+            ],
+        },
+    }
+    widget = feat.make_widget(result)
+    causes = widget.get("cause_explanations") or []
+    assert causes, "Expected cause_explanations to survive into the widget"
+    assert causes[0].get("time_gained_s") == 0.182

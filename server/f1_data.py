@@ -3606,6 +3606,38 @@ def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_
         per_m = (1.0 / sb - 1.0 / sa) if faster_is_a else (1.0 / sa - 1.0 / sb)
         return max(per_m, 0.0)
 
+    # Pre-extract sample arrays for per-sample time-gain integration around
+    # each cause. We use a 200m window centered on the cause distance and
+    # always integrate winner-vs-loser (so time_gained_s is positive when
+    # the faster driver actually gained at this point).
+    _dist_arr = np.asarray([s.get("distance_m") for s in samples], dtype=float)
+    if faster_is_a:
+        _v_winner = np.asarray([s.get("speed_a") or 0 for s in samples], dtype=float)
+        _v_loser = np.asarray([s.get("speed_b") or 0 for s in samples], dtype=float)
+    else:
+        _v_winner = np.asarray([s.get("speed_b") or 0 for s in samples], dtype=float)
+        _v_loser = np.asarray([s.get("speed_a") or 0 for s in samples], dtype=float)
+
+    def _time_gained_for_cause(sample) -> float | None:
+        dist = sample.get("distance_m")
+        if dist is None:
+            return None
+        # Prefer per-sample integration over a 200m window when we have
+        # enough samples. Fall back to two-point approximation otherwise.
+        if len(_dist_arr) >= 2:
+            integrated = _integrate_time_gained_from_samples(
+                _dist_arr, _v_winner, _v_loser,
+                start_distance=float(dist) - 100.0,
+                end_distance=float(dist) + 100.0,
+            )
+            if integrated is not None:
+                return integrated
+        v_a = sample.get("speed_a")
+        v_b = sample.get("speed_b")
+        v_winner = v_a if faster_is_a else v_b
+        v_loser = v_b if faster_is_a else v_a
+        return _compute_time_gained_over_window(v_winner, v_loser, 200.0)
+
     ranked = []
     for cause_type, sample in (
         ("straight_line_speed", strongest_speed),
@@ -3622,6 +3654,9 @@ def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_
             "rank_weight": _time_per_meter(sample),
             "distance_m": sample.get("distance_m"),
             "delta_speed_kph": sample.get("delta_speed"),
+            "speed_a": sample.get("speed_a"),
+            "speed_b": sample.get("speed_b"),
+            "time_gained_s": _time_gained_for_cause(sample),
             "throttle_a": sample.get("throttle_a"),
             "throttle_b": sample.get("throttle_b"),
             "brake_a": sample.get("brake_a"),
@@ -4016,12 +4051,24 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
             v_slow_ms = ENERGY_NOMINAL_SLOW_KPH / 3.6
             v_fast_ms = max((ENERGY_NOMINAL_SLOW_KPH + abs(delta_speed)) / 3.6, 1.0)
             energy_time_per_m = max((1.0 / v_slow_ms) - (1.0 / v_fast_ms), 0.0)
+            energy_winner_kph = ENERGY_NOMINAL_SLOW_KPH + abs(delta_speed)
+            # Two-point approximation over a 200m window — synthetic cause
+            # has no per-sample telemetry of its own, so we use the same
+            # window as the standard cause-level fallback.
+            energy_time_gained_s = _compute_time_gained_over_window(
+                v_winner_kph=energy_winner_kph,
+                v_loser_kph=ENERGY_NOMINAL_SLOW_KPH,
+                window_distance_m=200.0,
+            )
             energy_cause = {
                 "cause_type": "straight_line_speed_energy_limited",
                 "magnitude": abs(delta_speed),
                 "rank_weight": energy_time_per_m * 1.15,
                 "distance_m": energy_distance,
                 "delta_speed_kph": delta_speed,
+                "speed_a": None,
+                "speed_b": None,
+                "time_gained_s": energy_time_gained_s,
                 "throttle_a": None,
                 "throttle_b": None,
                 "brake_a": False,
@@ -4064,6 +4111,9 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
             "rank": i + 1,
             "distance_m": tc["distance_m"],
             "delta_speed_kph": tc["delta_speed_kph"],
+            "speed_a": tc.get("speed_a"),
+            "speed_b": tc.get("speed_b"),
+            "time_gained_s": tc.get("time_gained_s"),
             "gear_a": tc.get("gear_a"),
             "gear_b": tc.get("gear_b"),
             "sector": _sector_for_distance(tc["distance_m"]),

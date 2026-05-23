@@ -776,6 +776,47 @@ def test_telemetry_battle_does_not_classify_full_throttle_delta_as_traction():
     assert any(cause["cause_type"] == "traction" and cause["distance_m"] == 900 for cause in result["top_causes"])
 
 
+def test_telemetry_battle_top_causes_carry_time_gained_s():
+    """Each top_causes entry must carry time_gained_s and speed_a/speed_b
+    so downstream surfaces can render time-first prose."""
+    samples = [
+        {
+            "distance_m": 600,
+            "delta_speed": 25.0,
+            "speed_a": 280.0,
+            "speed_b": 255.0,
+            "throttle_a": 100.0,
+            "throttle_b": 100.0,
+            "brake_a": False,
+            "brake_b": False,
+            "gear_a": 8,
+            "gear_b": 8,
+        },
+        {
+            "distance_m": 1500,
+            "delta_speed": 13.0,
+            "speed_a": 117.0,
+            "speed_b": 104.0,
+            "throttle_a": 35.0,
+            "throttle_b": 35.0,
+            "brake_a": False,
+            "brake_b": False,
+            "gear_a": 3,
+            "gear_b": 3,
+        },
+    ]
+    result = f1_data._summarize_telemetry_battle(samples, "ANT", "ANT", "RUS")
+    assert result is not None
+    for cause in result["top_causes"]:
+        assert "time_gained_s" in cause
+        assert "speed_a" in cause
+        assert "speed_b" in cause
+        # All listed candidates favor ANT (faster) at this distance, so
+        # time_gained_s must be positive or zero.
+        if cause["time_gained_s"] is not None:
+            assert cause["time_gained_s"] >= 0.0
+
+
 def test_telemetry_location_context_places_traction_after_previous_corner():
     corners = [
         {"number": 1, "distance_m": 300},
