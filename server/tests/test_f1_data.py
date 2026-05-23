@@ -4202,8 +4202,9 @@ def test_integrate_time_gained_from_samples_synthetic_bump():
 
 
 def test_integrate_time_gained_from_samples_window_restriction():
-    """Restricting the window to only the bump region produces the same
-    value as the full integration (the rest of the trace contributes 0)."""
+    """Restricting the window to cover the bump (including the segments
+    transitioning into and out of it) produces the same value as the
+    full integration (the rest of the trace contributes 0)."""
     from f1_data import _integrate_time_gained_from_samples
     import numpy as np
 
@@ -4213,11 +4214,14 @@ def test_integrate_time_gained_from_samples_window_restriction():
     speed_winner[100:110] = 130.0
     speed_loser[100:110] = 117.0
 
+    # Trapezoidal integration attributes contribution to *segments*; widen
+    # the window by one sample on each side so the transition segments
+    # are included.
     full = _integrate_time_gained_from_samples(distance, speed_winner, speed_loser)
     windowed = _integrate_time_gained_from_samples(
         distance, speed_winner, speed_loser,
-        start_distance=float(distance[100]) - 1.0,
-        end_distance=float(distance[109]) + 1.0,
+        start_distance=float(distance[99]) - 1.0,
+        end_distance=float(distance[110]) + 1.0,
     )
     assert full is not None and windowed is not None
     assert abs(full - windowed) < 1e-6
@@ -4241,6 +4245,84 @@ def test_integrate_time_gained_from_samples_returns_none_below_two_samples():
     from f1_data import _integrate_time_gained_from_samples
     assert _integrate_time_gained_from_samples([], [], []) is None
     assert _integrate_time_gained_from_samples([100.0], [200.0], [199.0]) is None
+
+
+def test_integrate_time_gained_robust_to_unsorted_samples():
+    """When samples are in random order, the result must match the sorted
+    version. _integrate_time_gained_from_samples sorts by distance up
+    front so callers don't have to."""
+    from f1_data import _integrate_time_gained_from_samples
+    import numpy as np
+
+    distance = np.array([0.0, 100.0, 200.0, 300.0, 400.0, 500.0])
+    winner_kph = np.array([100, 110, 120, 110, 100, 110], dtype=float)
+    loser_kph = np.array([95, 100, 110, 105, 95, 105], dtype=float)
+
+    sorted_result = _integrate_time_gained_from_samples(distance, winner_kph, loser_kph)
+
+    order = np.array([3, 0, 5, 2, 4, 1])
+    shuffled_result = _integrate_time_gained_from_samples(
+        distance[order], winner_kph[order], loser_kph[order],
+    )
+    assert sorted_result is not None and shuffled_result is not None
+    assert abs(sorted_result - shuffled_result) < 1e-6, (
+        f"Unsorted samples gave {shuffled_result}, sorted gave {sorted_result}"
+    )
+
+
+def test_integrate_time_gained_realistic_straight_marker():
+    """Sanity: 14 km/h delta at 300 km/h sustained over a 200 m window
+    should be roughly 0.10 s. Earlier rectangular-rule artefacts produced
+    multi-second values for the same scenario."""
+    from f1_data import _integrate_time_gained_from_samples
+    import numpy as np
+
+    distance = np.linspace(4600, 4800, 20)
+    winner_kph = np.full(20, 314.0)
+    loser_kph = np.full(20, 300.0)
+
+    result = _integrate_time_gained_from_samples(distance, winner_kph, loser_kph)
+    assert result is not None
+    assert 0.05 < result < 0.20, f"Expected ~0.10s, got {result}s"
+
+
+def test_integrate_time_gained_clips_pathological_gaps():
+    """A 5 km wide data gap between two samples must not be filled in
+    with sustained per-meter contribution. The cap on segment width
+    keeps the integral bounded."""
+    from f1_data import _integrate_time_gained_from_samples
+    import numpy as np
+
+    distance = np.array([0.0, 5000.0])
+    winner_kph = np.array([314.0, 314.0])
+    loser_kph = np.array([300.0, 300.0])
+
+    result = _integrate_time_gained_from_samples(distance, winner_kph, loser_kph)
+    assert result is not None
+    assert result < 0.20, f"Pathological gap leaked through: {result}s"
+
+
+def test_integrate_time_gained_apex_sample_does_not_blow_up():
+    """Single apex sample sandwiched between two fast samples used to
+    return ~1.5 s under rectangular quadrature. Trapezoidal integration
+    plus a per-segment cap keep the value physically plausible."""
+    from f1_data import _integrate_time_gained_from_samples
+    import numpy as np
+
+    # Cause at 4700 m: winner late-brakes, apex sample shows large delta
+    # but the cars only spend an instant at those speeds.
+    distance = np.array([4600.0, 4700.0, 4800.0])
+    v_winner = np.array([280.0, 120.0, 130.0])
+    v_loser = np.array([270.0, 80.0, 130.0])
+
+    result = _integrate_time_gained_from_samples(
+        distance, v_winner, v_loser,
+        start_distance=4600.0, end_distance=4800.0,
+    )
+    assert result is not None
+    # Old rectangular rule gave ~1.5 s; trapezoidal + cap brings it under
+    # the 0.25 s/segment ceiling so the 200 m window stays under 0.6 s.
+    assert result < 0.6, f"Apex-sample artefact leaked through: {result}s"
 
 
 def test_classify_decisive_sector_when_one_dominates():

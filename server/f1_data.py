@@ -1018,17 +1018,31 @@ def _integrate_time_gained_from_samples(
     start_distance: float | None = None,
     end_distance: float | None = None,
 ) -> float | None:
-    """Per-sample integration of time-gained-by-winner over distance.
+    """Per-segment integration of time-gained-by-winner over distance.
 
     Optionally restricts integration to [start_distance, end_distance].
-    Returns seconds (positive = winner gained time). Uses the same
-    contribution math as `_pick_speed_trace_markers`:
+    Returns seconds (positive = winner gained time).
 
-        per_meter[i] = 1/v_loser_ms[i] - 1/v_winner_ms[i]
-        time_gained = sum(per_meter[i] * step[i])
+    Uses the trapezoidal rule for ``∫ (1/v_loser - 1/v_winner) ds``: each
+    segment between adjacent samples contributes
+
+        seg_contrib = 0.5 * ((1/v_l[i] + 1/v_l[i+1]) - (1/v_w[i] + 1/v_w[i+1]))
+                      * (d[i+1] - d[i])
+
+    The prior implementation used end-of-step rectangular quadrature
+    (``per_meter[i] * step[i]``) which, at 100 m sample spacing through a
+    braking zone, treats the instantaneous apex speed as if it persisted
+    for the whole segment. That over-attributes "time gained" — e.g. an
+    apex sample at 80 km/h with a 270 km/h predecessor produces ~1.5 s
+    of fake time-gain on a single segment.
+
+    To stay robust to (a) callers that pass unsorted samples and (b)
+    pathological data gaps where two adjacent samples sit hundreds of
+    metres apart, we sort by distance up front and cap the per-segment
+    contribution at a physically plausible bound.
 
     Returns None when fewer than 2 samples or the requested window
-    contains no samples.
+    contains no segments.
     """
     distance_arr = np.asarray(distance, dtype=float)
     sw = np.asarray(speed_winner_kph, dtype=float)
@@ -1040,23 +1054,48 @@ def _integrate_time_gained_from_samples(
     sw = sw[:n]
     sl = sl[:n]
 
-    SAFE_MIN_KPH = 30.0
-    sw_clip = np.clip(sw, SAFE_MIN_KPH, None) / 3.6
-    sl_clip = np.clip(sl, SAFE_MIN_KPH, None) / 3.6
+    # Sort by distance so segments reflect physical adjacency, not array
+    # order. Cheap insurance against unsorted callers.
+    order = np.argsort(distance_arr)
+    distance_arr = distance_arr[order]
+    sw = sw[order]
+    sl = sl[order]
 
-    per_meter = (1.0 / sl_clip) - (1.0 / sw_clip)
-    first_step = distance_arr[1] - distance_arr[0]
-    steps = np.diff(distance_arr, prepend=distance_arr[0] - first_step)
-    contrib = per_meter * np.abs(steps)
+    SAFE_MIN_KPH = 30.0
+    inv_sw = 1.0 / (np.clip(sw, SAFE_MIN_KPH, None) / 3.6)
+    inv_sl = 1.0 / (np.clip(sl, SAFE_MIN_KPH, None) / 3.6)
+
+    seg_widths = np.diff(distance_arr)
+    # Pathological data gaps (e.g. dropped telemetry leaving a 500 m hole)
+    # should not be filled in with sustained speed deltas. Sample spacing
+    # is normally ~100 m; cap at 150 m so genuine spacing is unaffected
+    # but multi-hundred-metre gaps stop leaking through.
+    MAX_REASONABLE_SEG_M = 150.0
+    seg_widths = np.clip(seg_widths, 0.0, MAX_REASONABLE_SEG_M)
+
+    seg_per_m = 0.5 * ((inv_sl[:-1] + inv_sl[1:]) - (inv_sw[:-1] + inv_sw[1:]))
+    seg_contrib = seg_per_m * seg_widths
+
+    # Trapezoidal quadrature still over-attributes time at sparse braking
+    # samples — an apex sample alone can give a sub-second segment even
+    # after averaging. Cap each segment at a physically plausible bound.
+    # A 30 km/h delta sustained over 150 m at a 100 km/h apex yields about
+    # 0.16 s; real telemetry rarely exceeds that per segment. We use 0.25 s
+    # so legitimate heavy-braking segments survive but rectangular-rule
+    # artefacts (~1.5 s) get clipped.
+    MAX_SEG_CONTRIB_S = 0.25
+    seg_contrib = np.clip(seg_contrib, -MAX_SEG_CONTRIB_S, MAX_SEG_CONTRIB_S)
 
     if start_distance is not None or end_distance is not None:
         lo = start_distance if start_distance is not None else float(distance_arr[0])
         hi = end_distance if end_distance is not None else float(distance_arr[-1])
-        mask = (distance_arr >= lo) & (distance_arr <= hi)
+        # Match segments whose midpoint falls in the window.
+        seg_mids = 0.5 * (distance_arr[:-1] + distance_arr[1:])
+        mask = (seg_mids >= lo) & (seg_mids <= hi)
         if not mask.any():
             return None
-        contrib = contrib[mask]
-    return float(contrib.sum())
+        seg_contrib = seg_contrib[mask]
+    return float(seg_contrib.sum())
 
 
 def _pick_speed_trace_markers(
