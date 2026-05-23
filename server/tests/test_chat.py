@@ -431,6 +431,8 @@ def test_qualifying_widget_includes_grip_commitment_from_cornering_loads():
                 "driver_a": "ANT",
                 "driver_b": "RUS",
                 "faster_driver": "ANT",
+                "overall_gap_s": 0.131,
+                "decisive_sector_gap_s": 0.080,
             },
         },
         {

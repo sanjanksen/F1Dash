@@ -77,7 +77,8 @@ def test_evidence_unmigrated_tool_still_works():
 def test_evidence_cross_feature_orchestration_preserved():
     """The grip_commitment / qualifying_battle merge logic stays on the
     legacy path. Confirms we didn't accidentally route the qualifying_battle
-    branch through the registry."""
+    branch through the registry. Payload must clear should_show_widget so
+    the cross-feature gate (Issue 7 fix) doesn't suppress the widget."""
     from features.registry import discover_features
     discover_features()
     import chat
@@ -88,8 +89,13 @@ def test_evidence_cross_feature_orchestration_preserved():
             "event": "Imola GP", "session": "Q",
         }},
         {"tool": "analyze_qualifying_battle", "result": {
+            "available": True,
             "round_number": 7, "session_type": "Q",
             "driver_a": "NOR", "driver_b": "PIA",
+            "faster_driver": "NOR",
+            "overall_gap_s": 0.12,
+            "decisive_sector": "Sector 1",
+            "decisive_sector_gap_s": 0.10,
         }},
     ]
     widgets = chat._widgets_from_analysis_evidence({}, evidence)

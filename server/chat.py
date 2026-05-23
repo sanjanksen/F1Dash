@@ -249,10 +249,26 @@ def _widgets_from_preloaded(preloaded: dict | None) -> list[dict]:
     tool = preloaded.get("tool")
     result = preloaded.get("result") or {}
 
+    # Cross-feature special case: analyze_cornering_loads is registered but
+    # its should_show_widget returns False by design (it's a contributor,
+    # not a primary widget producer). On the preloaded path with no
+    # qualifying_battle host to merge into, surface a standalone
+    # corner_analysis widget directly from grip_commitment.
+    if tool == "analyze_cornering_loads":
+        grip = _make_grip_commitment_summary(result)
+        if grip is None:
+            return []
+        return [{
+            "type": "corner_analysis",
+            "driver_a": grip["driver_a"],
+            "driver_b": grip["driver_b"],
+            "event": result.get("event"),
+            "session": result.get("session"),
+            "grip": grip,
+        }]
+
     # Registry-first dispatch: if the tool is a registered Feature, route
     # the widget through feature.make_widget (respecting should_show_widget).
-    # All widget-bearing preload tools have been migrated to the registry; no
-    # legacy fallback remains here.
     from features.base import FEATURE_REGISTRY
     if tool in FEATURE_REGISTRY:
         w = _registry_widget(tool, result)
@@ -308,19 +324,23 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
 
         if tool == "analyze_qualifying_battle":
             # Cross-feature merge with grip_commitment — kept on legacy path
-            # until Feature contract supports cross-result merging.
+            # until Feature contract supports cross-result merging. After
+            # merging, run the feature's own should_show_widget gate so the
+            # cross-feature branch can't bypass the visibility threshold.
             result = dict(item["result"])
             if grip_commitment:
                 result["grip_commitment"] = grip_commitment
             feat = FEATURE_REGISTRY["analyze_qualifying_battle"]
-            widgets.append(feat.make_widget(result))
+            if feat.should_show_widget(result):
+                widgets.append(feat.make_widget(result))
         elif tool == "compare_corner_profiles":
             # Focus-based skip rule — kept on legacy path until plan-context
             # is part of the Feature contract.
             if plan.get("focus") == "qualifying" and has_primary_qualifying_widget:
                 continue
             feat = FEATURE_REGISTRY["compare_corner_profiles"]
-            widgets.append(feat.make_widget(item["result"]))
+            if feat.should_show_widget(item["result"]):
+                widgets.append(feat.make_widget(item["result"]))
         elif tool == "get_circuit_profile":
             # track_map is passed in from a sibling tool — kept on legacy path
             # until Feature contract supports cross-result composition.
@@ -330,7 +350,8 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
             if track_map_result:
                 result["track_map"] = track_map_result
             feat = FEATURE_REGISTRY["get_circuit_profile"]
-            widgets.append(feat.make_widget(result))
+            if feat.should_show_widget(result):
+                widgets.append(feat.make_widget(result))
 
     # Standalone corner_analysis widget: when cornering loads were run but there's no
     # qualifying_battle widget to embed grip_commitment into (pure grip comparison query).
