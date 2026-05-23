@@ -147,22 +147,30 @@ def _detect_fp_number(normalized: str) -> int | None:
 def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
     session_type = None
     fp_number = _detect_fp_number(normalized)
+    has_outqualify = bool(re.search(r"\boutqualif(?:y|ied|ying|ies)\b", normalized))
+    has_qualifying_word = (
+        "qualifying" in normalized
+        or re.search(r"\bq[123]\b", normalized)
+        or re.search(r"\bquali\b", normalized)
+        or re.search(r"\bqualify\b", normalized)
+        or "pole lap" in normalized
+        or "pole run" in normalized
+        or re.search(r"\bpole\b", normalized)
+        or has_outqualify
+    )
+    has_sprint_word = bool(re.search(r"\bsprint\b", normalized)) or "shootout" in normalized
     if fp_number is not None:
         session_type = f"FP{fp_number}"
     elif (
         "sprint qualifying" in normalized
         or "sprint quali" in normalized
         or "sprint shootout" in normalized
+        or "shootout" in normalized
         or re.search(r"\bsq\b", normalized)
+        or (has_sprint_word and has_qualifying_word)
     ):
         session_type = "SQ"
-    elif (
-        "qualifying" in normalized
-        or re.search(r"\bq\d\b", normalized)
-        or re.search(r"\bquali\b", normalized)
-        or "pole lap" in normalized
-        or "pole run" in normalized
-    ):
+    elif has_qualifying_word:
         session_type = "Q"
     elif re.search(r"\bsprint\b", normalized):
         session_type = "S"
@@ -187,7 +195,7 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
         scope = "pit_strategy"
     if any(term in normalized for term in ("lift and coast", "lift-and-coast", "lico", "clipping", "super clipping", "super-clipping", "energy recovery", "deployment")):
         scope = "energy"
-    if "qualifying" in normalized or re.search(r"\bquali\b", normalized) or "pole lap" in normalized or "pole run" in normalized:
+    if has_qualifying_word:
         scope = scope or "qualifying"
     if re.search(r"\bradio\b", normalized) or "team radio" in normalized or "on the radio" in normalized:
         scope = "radio"

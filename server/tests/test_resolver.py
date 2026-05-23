@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import resolver
 
 
@@ -708,3 +710,27 @@ class TestHasReferenceLanguage:
 
     def test_two_weak_tokens_returns_true(self):
         assert resolver._has_reference_language("did he and his car make it") is True
+
+
+# ── qualifying-mention session_type detection ────────────────────────────────
+
+
+@pytest.mark.parametrize("question", [
+    "how did Norris outqualify Piastri",
+    "why did Lec beat Norris in qualifying at Imola",
+    "show me Q3 from Miami",
+    "who took pole in Bahrain",
+    "outqualified by Sainz in Monaco",
+])
+@patch('resolver._extract_entities_llm', return_value={})
+@patch('resolver.get_drivers', return_value=[])
+@patch('circuits_cache.get_circuits', return_value=[])
+def test_resolver_sets_session_type_Q_for_qualifying_questions(
+    mock_circuits, mock_drivers, mock_llm, question
+):
+    """Common qualifying-mention phrasings must result in session_type=Q."""
+    resolved = resolver.resolve_query_context(question, None)
+    assert resolved.get("session_type") in ("Q", "SQ"), (
+        f"Expected Q/SQ session_type for question {question!r}, "
+        f"got {resolved.get('session_type')!r}"
+    )
