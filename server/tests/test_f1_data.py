@@ -896,6 +896,42 @@ def test_telemetry_battle_surfaces_markers_from_both_drivers_when_both_gain():
     assert s2["sector_gap_s"] < 0
 
 
+def test_sector_reconciliation_uses_authoritative_sector_gaps_when_supplied():
+    """When FastF1-derived authoritative sector gaps are passed in, the
+    sector_reconciliation panel reports THOSE values as sector_gap_s —
+    not a telemetry-integration approximation. This is the single
+    source of truth required so the reconciliation panel matches the
+    sector-breakdown panel exactly.
+    """
+    import numpy as np
+    distance = np.linspace(0, 5000, 500).tolist()
+    samples = []
+    for d in distance:
+        sa, sb = 200.0, 200.0
+        if 1480 <= d <= 1520:
+            sa, sb = 117.0, 104.0
+        samples.append({
+            "distance_m": d, "delta_speed": sa - sb,
+            "speed_a": sa, "speed_b": sb,
+            "throttle_a": 35.0, "throttle_b": 35.0,
+            "brake_a": False, "brake_b": False,
+            "gear_a": 3, "gear_b": 3,
+        })
+    auth = {"Sector 1": 0.131, "Sector 2": -0.081, "Sector 3": -0.010}
+    result = f1_data._summarize_telemetry_battle(
+        samples, "LEC", "LEC", "NOR",
+        sector_boundary_distances=[2000, 4000],
+        authoritative_sector_gaps_s=auth,
+    )
+    assert result is not None
+    rec = result["sector_reconciliation"]
+    # The reported sector_gap_s must equal the authoritative value
+    # exactly (within rounding) — NOT a telemetry-integration estimate.
+    assert rec["Sector 1"]["sector_gap_s"] == 0.131
+    assert rec["Sector 2"]["sector_gap_s"] == -0.081
+    assert rec["Sector 3"]["sector_gap_s"] == -0.010
+
+
 def test_telemetry_battle_time_gained_s_negative_when_b_gains_locally():
     """When B is the overall faster driver but A is briefly faster at one
     point, that cause's signed time_gained_s for the B-favorable points

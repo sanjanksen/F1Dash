@@ -3699,6 +3699,7 @@ def _summarize_telemetry_battle(
     top_k: int = 4,
     min_spacing_m: float = 200.0,
     round_number: int | None = None,
+    authoritative_sector_gaps_s: dict | None = None,
 ) -> dict | None:
     """Two-sided telemetry-battle summary.
 
@@ -3708,11 +3709,19 @@ def _summarize_telemetry_battle(
     marker. Per-marker time contribution uses
     ``_integrate_time_gained_around_extremum`` so a 14 km/h delta at
     300 km/h doesn't get over-attributed by a fixed-width window.
+
+    When ``authoritative_sector_gaps_s`` is supplied (mapping
+    ``"Sector 1"``/``"Sector 2"``/``"Sector 3"`` → FastF1 sector
+    time-gap in seconds, A − B convention), the ``sector_reconciliation``
+    panel reports those FastF1-authoritative values as ``sector_gap_s``
+    (single source of truth so the panel matches the sector-breakdown
+    panel exactly) rather than a telemetry-integration approximation.
     """
     if not samples:
         return None
 
     sector_boundary_distances = list(sector_boundary_distances or [None, None])
+    auth_gaps = dict(authoritative_sector_gaps_s or {})
 
     # Build numpy arrays once for the integrator.
     _dist_arr = np.asarray([s.get("distance_m") for s in samples], dtype=float)
@@ -3806,10 +3815,13 @@ def _summarize_telemetry_battle(
             marker["corner_name"] = None
             marker["location_label"] = fallback
 
-    # Build sector_reconciliation: sector gap minus marker contribution.
+    # Build sector_reconciliation. When authoritative sector gaps are
+    # supplied (FastF1 lap-time splits), those values are the single
+    # source of truth for sector_gap_s — matching exactly what the
+    # sector-breakdown panel shows. Otherwise fall back to integrating
+    # the telemetry samples over the sector window (legacy behaviour).
     sector_reconciliation: dict[str, dict] = {}
     if sector_boundary_distances[0] is not None:
-        # Compute sector gaps from the integrator over each sector window.
         for label, lo, hi in (
             ("Sector 1", 0.0, sector_boundary_distances[0]),
             ("Sector 2", sector_boundary_distances[0], sector_boundary_distances[1]),
@@ -3819,11 +3831,14 @@ def _summarize_telemetry_battle(
         ):
             if lo is None or hi is None:
                 continue
-            sector_gap = _integrate_time_gained_from_samples(
-                _dist_arr, _v_a_arr, _v_b_arr,
-                start_distance=float(lo),
-                end_distance=float(hi),
-            )
+            if label in auth_gaps and auth_gaps[label] is not None:
+                sector_gap = float(auth_gaps[label])
+            else:
+                sector_gap = _integrate_time_gained_from_samples(
+                    _dist_arr, _v_a_arr, _v_b_arr,
+                    start_distance=float(lo),
+                    end_distance=float(hi),
+                )
             sector_markers = [m for m in picked if m.get("sector") == label]
             marker_contribution = sum(m["time_gained_s"] for m in sector_markers)
             sector_reconciliation[label] = {
@@ -4105,6 +4120,15 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
 
     comparison_samples = telemetry.get("comparison", []) if telemetry else []
     sector_boundary_distances = telemetry.get("sector_boundary_distances", [None, None]) if telemetry else [None, None]
+    # Authoritative per-sector A-B time gap, A − B convention, from FastF1
+    # lap-time sector splits. Used downstream — single source of truth so
+    # the reconciliation panel's sector_gap_s matches the sector breakdown
+    # panel exactly.
+    authoritative_sector_gaps_s = {
+        "Sector 1": sector_rows[0][1],
+        "Sector 2": sector_rows[1][1],
+        "Sector 3": sector_rows[2][1],
+    }
     telemetry_summary = _summarize_telemetry_battle(
         comparison_samples,
         faster_driver,
@@ -4112,6 +4136,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
         driver_b_code,
         sector_boundary_distances=sector_boundary_distances,
         round_number=round_number,
+        authoritative_sector_gaps_s=authoritative_sector_gaps_s,
     )
     top_causes = (telemetry_summary.get("top_causes") or []) if telemetry_summary else []
     sector_reconciliation = (
