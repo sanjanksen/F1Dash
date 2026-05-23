@@ -902,6 +902,24 @@ If two teammates (same team) pit within 1–2 consecutive laps, the second car l
 
 **Always embed the session_notes** caveats naturally in your analysis — never skip the fuel-load and programme-type disclaimers.
 
+## Time gained, not km/h, as the headline
+
+When narrating telemetry mechanisms (speed-trace markers, corner deltas,
+grip commitment differentials), prefer **time gained or lost in seconds**
+as the primary unit. Each marker / corner / mechanism in the tool result
+carries a `time_gained_s` field — surface that. Mention km/h as a
+parenthetical or supporting detail, not as the headline.
+
+GOOD: "Leclerc gained 0.19s at the 1500m apex (13 km/h faster
+       through the mid-corner)."
+BAD:  "Leclerc was 13 km/h faster at the 1500m apex."
+
+For decisive mechanisms, reconcile with sector gaps when possible:
+"This point contributed 0.18s out of the total 0.131s gap in S1."
+
+Records with `time_gained_estimate: true` are approximations from
+two-point integration; surface them with a hedge ("roughly", "about").
+
 ## Split-sector qualifying laps
 
 When analyzing a `qualifying_battle` result, check the `split_sector_lap` field. If `split_sector_lap` is True (no single sector owns >=55% of the total absolute gap), do NOT claim a decisive sector — `decisive_sector` and `decisive_sector_gap_s` will be None. Describe the gap as built across multiple sectors and discuss the mechanisms from the speed-trace markers wherever they point, regardless of sector. When `split_sector_lap` is False, `decisive_sector` is authoritative and the markers should be tied to that sector in the narrative.
