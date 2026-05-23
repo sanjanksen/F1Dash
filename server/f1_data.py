@@ -3851,31 +3851,16 @@ def _summarize_telemetry_battle(
             marker["corner_name"] = None
             marker["location_label"] = fallback
 
-    # Per-sector conservation: when authoritative sector gaps are
-    # supplied (FastF1 lap-time sector splits, the ground truth), the
-    # summed marker magnitude inside a sector is bounded by
-    # |sector_gap|. Markers exceeding that envelope are proportionally
-    # scaled down so the narrated marker time-gain can never exceed
-    # what the sector actually produced. We never inflate.
-    if auth_gaps:
-        sectors_seen = {m.get("sector") for m in picked if m.get("sector")}
-        for label in sectors_seen:
-            gap = auth_gaps.get(label)
-            if gap is None:
-                continue
-            sec_markers = [m for m in picked if m.get("sector") == label]
-            named_sum = sum(m["time_gained_s"] for m in sec_markers)
-            if abs(named_sum) <= abs(gap) + 1e-6:
-                continue
-            scale = abs(gap) / abs(named_sum) if abs(named_sum) > 0 else 0.0
-            for m in sec_markers:
-                m["time_gained_s"] = m["time_gained_s"] * scale
+    # NOTE: per-sector conservation cap + sector_reconciliation construction
+    # were moved out of this function (to apply_sector_conservation_and_build_reconciliation
+    # below) so they run AFTER analyze_qualifying_battle finalizes top_causes
+    # (e.g. after inserting the synthesized energy-fade cause). Doing it here
+    # would build reconciliation from a stale marker set.
 
-    # Build sector_reconciliation. When authoritative sector gaps are
-    # supplied (FastF1 lap-time splits), those values are the single
-    # source of truth for sector_gap_s — matching exactly what the
-    # sector-breakdown panel shows. Otherwise fall back to integrating
-    # the telemetry samples over the sector window (legacy behaviour).
+    # Build sector_reconciliation. Note: this initial pass uses the picker's
+    # markers BEFORE any energy-fade synthesis. analyze_qualifying_battle will
+    # rebuild it after finalising top_causes via
+    # apply_sector_conservation_and_build_reconciliation.
     sector_reconciliation: dict[str, dict] = {}
     if sector_boundary_distances[0] is not None:
         for label, lo, hi in (
@@ -3920,6 +3905,84 @@ def _summarize_telemetry_battle(
             }
 
     return {"top_causes": picked, "sector_reconciliation": sector_reconciliation}
+
+
+def apply_sector_conservation_and_build_reconciliation(
+    top_causes: list[dict],
+    auth_gaps: dict[str, float] | None,
+    sector_boundary_distances: list | tuple | None,
+    sample_distances: list | None = None,
+) -> dict:
+    """Re-apply per-sector conservation cap to top_causes IN PLACE and
+    return a fresh sector_reconciliation dict.
+
+    Must be called AFTER top_causes is finalized (after energy-fade
+    synthesis). The cap scales markers proportionally so their summed
+    magnitude in a sector doesn't exceed |sector_gap_s|. The reconciliation
+    dict is built from the final, capped markers — guaranteeing the
+    displayed marker_contribution_s actually matches the sum of the
+    markers visible to the user.
+
+    sector_gap_s in the returned reconciliation uses GAIN convention
+    (positive = driver_a gained), negated from the FastF1 TIME-DELTA
+    input so it matches time_gained_s on markers.
+    """
+    auth_gaps = dict(auth_gaps or {})
+    # Conservation cap: scale markers' time_gained_s if a sector's named
+    # sum magnitude exceeds the authoritative |sector_gap|.
+    if auth_gaps and top_causes:
+        sectors_seen = {m.get("sector") for m in top_causes if m.get("sector")}
+        for label in sectors_seen:
+            gap = auth_gaps.get(label)
+            if gap is None:
+                continue
+            sec_markers = [m for m in top_causes if m.get("sector") == label]
+            named_sum = sum(
+                m.get("time_gained_s") or 0.0 for m in sec_markers
+            )
+            if abs(named_sum) <= abs(gap) + 1e-6:
+                continue
+            scale = abs(gap) / abs(named_sum) if abs(named_sum) > 0 else 0.0
+            for m in sec_markers:
+                tg = m.get("time_gained_s")
+                if tg is not None:
+                    m["time_gained_s"] = tg * scale
+
+    # Build sector_reconciliation from final top_causes.
+    reconciliation: dict[str, dict] = {}
+    if not sector_boundary_distances or sector_boundary_distances[0] is None:
+        return reconciliation
+    b1, b2 = sector_boundary_distances[0], sector_boundary_distances[1] if len(sector_boundary_distances) > 1 else None
+    max_dist = max(sample_distances) if sample_distances else None
+    sector_ranges = [
+        ("Sector 1", 0.0, b1),
+        ("Sector 2", b1, b2),
+        ("Sector 3", b2, max_dist),
+    ]
+    for label, lo, hi in sector_ranges:
+        if lo is None or hi is None:
+            continue
+        if label in auth_gaps and auth_gaps[label] is not None:
+            # auth_gaps is FastF1 TIME-DELTA (positive = A slower).
+            # Convert to GAIN convention (positive = A gained) so
+            # sector_gap_s and marker_contribution_s share the same sign.
+            sector_gap = -float(auth_gaps[label])
+        else:
+            sector_gap = None
+        sec_markers = [m for m in top_causes if m.get("sector") == label]
+        marker_contribution = sum(
+            m.get("time_gained_s") or 0.0 for m in sec_markers
+        )
+        reconciliation[label] = {
+            "sector_gap_s": round(sector_gap, 4) if sector_gap is not None else None,
+            "marker_contribution_s": round(marker_contribution, 4),
+            "residual_s": (
+                round(sector_gap - marker_contribution, 4)
+                if sector_gap is not None else None
+            ),
+            "markers": sec_markers,
+        }
+    return reconciliation
 
 
 def _downsample_speed_trace(samples: list[dict], *, step: int = 200) -> list[dict]:
@@ -4374,6 +4437,19 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
             top_causes = [energy_cause, *non_energy_causes][:4]
             # Keep lap order for downstream rendering / sector grouping.
             top_causes.sort(key=lambda tc: tc.get("distance_m") or 0)
+
+    # Rebuild sector_reconciliation now that top_causes is finalized
+    # (energy-fade cause may have replaced an earlier picker selection).
+    # This guarantees marker_contribution_s actually sums the displayed
+    # markers — no more stale reconciliation from the pre-energy set.
+    _sample_distances = [s.get("distance_m") for s in comparison_samples
+                         if s.get("distance_m") is not None]
+    sector_reconciliation = apply_sector_conservation_and_build_reconciliation(
+        top_causes,
+        authoritative_sector_gaps_s,
+        sector_boundary_distances,
+        sample_distances=_sample_distances,
+    )
 
     # Primary = largest |time_gained_s| marker (or fall back to first when
     # time_gained_s is missing). `top_causes` itself stays in lap order.

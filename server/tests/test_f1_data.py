@@ -969,13 +969,22 @@ def test_sector_marker_contribution_bounded_by_authoritative_sector_gap():
             "gear_a": 3, "gear_b": 3,
         })
     # Pretend FastF1 says Sector 1 was worth only +0.030s for A.
-    auth = {"Sector 1": 0.030, "Sector 2": 0.0, "Sector 3": 0.0}
+    # FastF1 TIME-DELTA convention: positive = A slower → use -0.030 for A faster.
+    # The test wants A-favorable plants (LEC dominates S1), so use -0.030 (A faster by 0.030).
+    auth = {"Sector 1": -0.030, "Sector 2": 0.0, "Sector 3": 0.0}
     result = f1_data._summarize_telemetry_battle(
         samples, "LEC", "LEC", "NOR",
         sector_boundary_distances=[2000, 4000],
         authoritative_sector_gaps_s=auth,
     )
     assert result is not None
+    # Apply conservation cap via the post-finalization helper (mirrors how
+    # analyze_qualifying_battle calls it after energy-fade synthesis).
+    f1_data.apply_sector_conservation_and_build_reconciliation(
+        result["top_causes"], auth,
+        sector_boundary_distances=[2000, 4000],
+        sample_distances=[s["distance_m"] for s in samples],
+    )
     s1_markers = [c for c in result["top_causes"] if c.get("sector") == "Sector 1"]
     summed = sum(c["time_gained_s"] for c in s1_markers)
     assert abs(summed) <= abs(auth["Sector 1"]) + 1e-6, (
