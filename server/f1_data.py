@@ -1011,6 +1011,60 @@ def _compute_time_gained_over_window(
     return (1.0 / v_b - 1.0 / v_a) * float(window_distance_m)
 
 
+_TRAPEZOIDAL_SAFE_MIN_KPH = 30.0
+_TRAPEZOIDAL_MAX_SEG_WIDTH_M = 150.0
+_TRAPEZOIDAL_MAX_SEG_CONTRIB_S = 0.25
+
+
+def _trapezoidal_time_gained_segments(
+    distance,
+    speed_winner_kph,
+    speed_loser_kph,
+):
+    """Shared trapezoidal quadrature for time-gained-by-winner.
+
+    Returns ``(sorted_distance, seg_mids, seg_contrib)`` where ``seg_contrib[i]``
+    is the trapezoidal time-gain contribution (seconds, positive = winner
+    gained) over the segment between sorted samples ``i`` and ``i+1``, clipped
+    to a physically plausible per-segment magnitude. Returns ``None`` when
+    fewer than 2 samples are available.
+
+    Why trapezoidal: end-of-step rectangular quadrature at ~100 m sample
+    spacing treats an instantaneous apex sample as if it persisted across
+    the whole segment, generating ~1.5 s artefacts. Trapezoidal averages
+    the endpoints. We additionally cap segment width at 150 m so pathological
+    data gaps do not leak through, and cap |contribution| at 0.25 s so any
+    residual single-sample artefact stays bounded.
+    """
+    distance_arr = np.asarray(distance, dtype=float)
+    sw = np.asarray(speed_winner_kph, dtype=float)
+    sl = np.asarray(speed_loser_kph, dtype=float)
+    n = min(len(distance_arr), len(sw), len(sl))
+    if n < 2:
+        return None
+    distance_arr = distance_arr[:n]
+    sw = sw[:n]
+    sl = sl[:n]
+
+    order = np.argsort(distance_arr)
+    distance_arr = distance_arr[order]
+    sw = sw[order]
+    sl = sl[order]
+
+    inv_sw = 1.0 / (np.clip(sw, _TRAPEZOIDAL_SAFE_MIN_KPH, None) / 3.6)
+    inv_sl = 1.0 / (np.clip(sl, _TRAPEZOIDAL_SAFE_MIN_KPH, None) / 3.6)
+
+    seg_widths = np.clip(np.diff(distance_arr), 0.0, _TRAPEZOIDAL_MAX_SEG_WIDTH_M)
+    seg_per_m = 0.5 * ((inv_sl[:-1] + inv_sl[1:]) - (inv_sw[:-1] + inv_sw[1:]))
+    seg_contrib = np.clip(
+        seg_per_m * seg_widths,
+        -_TRAPEZOIDAL_MAX_SEG_CONTRIB_S,
+        _TRAPEZOIDAL_MAX_SEG_CONTRIB_S,
+    )
+    seg_mids = 0.5 * (distance_arr[:-1] + distance_arr[1:])
+    return distance_arr, seg_mids, seg_contrib
+
+
 def _integrate_time_gained_from_samples(
     distance,
     speed_winner_kph,
@@ -1023,74 +1077,24 @@ def _integrate_time_gained_from_samples(
     Optionally restricts integration to [start_distance, end_distance].
     Returns seconds (positive = winner gained time).
 
-    Uses the trapezoidal rule for ``∫ (1/v_loser - 1/v_winner) ds``: each
-    segment between adjacent samples contributes
-
-        seg_contrib = 0.5 * ((1/v_l[i] + 1/v_l[i+1]) - (1/v_w[i] + 1/v_w[i+1]))
-                      * (d[i+1] - d[i])
-
-    The prior implementation used end-of-step rectangular quadrature
-    (``per_meter[i] * step[i]``) which, at 100 m sample spacing through a
-    braking zone, treats the instantaneous apex speed as if it persisted
-    for the whole segment. That over-attributes "time gained" — e.g. an
-    apex sample at 80 km/h with a 270 km/h predecessor produces ~1.5 s
-    of fake time-gain on a single segment.
-
-    To stay robust to (a) callers that pass unsorted samples and (b)
-    pathological data gaps where two adjacent samples sit hundreds of
-    metres apart, we sort by distance up front and cap the per-segment
-    contribution at a physically plausible bound.
+    Uses the trapezoidal rule for ``∫ (1/v_loser - 1/v_winner) ds`` via
+    :func:`_trapezoidal_time_gained_segments`. See that helper for the
+    rationale behind sorting, the 150 m segment-width cap, and the 0.25 s
+    per-segment magnitude cap.
 
     Returns None when fewer than 2 samples or the requested window
     contains no segments.
     """
-    distance_arr = np.asarray(distance, dtype=float)
-    sw = np.asarray(speed_winner_kph, dtype=float)
-    sl = np.asarray(speed_loser_kph, dtype=float)
-    n = min(len(distance_arr), len(sw), len(sl))
-    if n < 2:
+    segs = _trapezoidal_time_gained_segments(
+        distance, speed_winner_kph, speed_loser_kph,
+    )
+    if segs is None:
         return None
-    distance_arr = distance_arr[:n]
-    sw = sw[:n]
-    sl = sl[:n]
-
-    # Sort by distance so segments reflect physical adjacency, not array
-    # order. Cheap insurance against unsorted callers.
-    order = np.argsort(distance_arr)
-    distance_arr = distance_arr[order]
-    sw = sw[order]
-    sl = sl[order]
-
-    SAFE_MIN_KPH = 30.0
-    inv_sw = 1.0 / (np.clip(sw, SAFE_MIN_KPH, None) / 3.6)
-    inv_sl = 1.0 / (np.clip(sl, SAFE_MIN_KPH, None) / 3.6)
-
-    seg_widths = np.diff(distance_arr)
-    # Pathological data gaps (e.g. dropped telemetry leaving a 500 m hole)
-    # should not be filled in with sustained speed deltas. Sample spacing
-    # is normally ~100 m; cap at 150 m so genuine spacing is unaffected
-    # but multi-hundred-metre gaps stop leaking through.
-    MAX_REASONABLE_SEG_M = 150.0
-    seg_widths = np.clip(seg_widths, 0.0, MAX_REASONABLE_SEG_M)
-
-    seg_per_m = 0.5 * ((inv_sl[:-1] + inv_sl[1:]) - (inv_sw[:-1] + inv_sw[1:]))
-    seg_contrib = seg_per_m * seg_widths
-
-    # Trapezoidal quadrature still over-attributes time at sparse braking
-    # samples — an apex sample alone can give a sub-second segment even
-    # after averaging. Cap each segment at a physically plausible bound.
-    # A 30 km/h delta sustained over 150 m at a 100 km/h apex yields about
-    # 0.16 s; real telemetry rarely exceeds that per segment. We use 0.25 s
-    # so legitimate heavy-braking segments survive but rectangular-rule
-    # artefacts (~1.5 s) get clipped.
-    MAX_SEG_CONTRIB_S = 0.25
-    seg_contrib = np.clip(seg_contrib, -MAX_SEG_CONTRIB_S, MAX_SEG_CONTRIB_S)
+    distance_arr, seg_mids, seg_contrib = segs
 
     if start_distance is not None or end_distance is not None:
         lo = start_distance if start_distance is not None else float(distance_arr[0])
         hi = end_distance if end_distance is not None else float(distance_arr[-1])
-        # Match segments whose midpoint falls in the window.
-        seg_mids = 0.5 * (distance_arr[:-1] + distance_arr[1:])
         mask = (seg_mids >= lo) & (seg_mids <= hi)
         if not mask.any():
             return None
@@ -1105,18 +1109,19 @@ def _pick_speed_trace_markers(
     max_markers: int = 3,
     min_contribution_fraction: float = 0.15,
 ) -> list[dict]:
-    """Rank speed-trace candidate points by integrated time contribution.
+    """Rank speed-trace candidate segments by integrated time contribution.
 
     A 13 km/h delta at a 110 km/h apex builds more time per meter than a
     16 km/h delta at a 330 km/h straight, so km/h magnitude is the wrong
-    ranking signal. Instead rank by
+    ranking signal. Each candidate is a *segment* between adjacent samples
+    with contribution computed by trapezoidal quadrature (see
+    :func:`_trapezoidal_time_gained_segments`); positive = A gained time on B.
 
-        contribution[i] = (1/v_b[i] - 1/v_a[i]) * step_distance[i]
-
-    (positive = A gained time on B). Drops candidates below
-    ``min_contribution_fraction`` of the total positive contribution and
-    enforces a 200m minimum spacing between picks so adjacent samples
-    describing the same event do not crowd out distinct mechanisms.
+    Drops candidates below ``min_contribution_fraction`` of the peak
+    contribution and enforces a 200 m minimum spacing between picks so
+    adjacent samples describing the same event do not crowd out distinct
+    mechanisms. Marker ``distance_m`` is the segment midpoint; ``speed_a``
+    and ``speed_b`` are the corresponding endpoint averages.
 
     Inputs are kph; distance is metres.
     """
@@ -1130,18 +1135,23 @@ def _pick_speed_trace_markers(
     speed_a = speed_a[:n]
     speed_b = speed_b[:n]
 
-    SAFE_MIN_SPEED_KPH = 30.0
-    sa = np.clip(speed_a, SAFE_MIN_SPEED_KPH, None) / 3.6
-    sb = np.clip(speed_b, SAFE_MIN_SPEED_KPH, None) / 3.6
+    segs = _trapezoidal_time_gained_segments(distance, speed_a, speed_b)
+    if segs is None:
+        return []
+    sorted_distance, seg_mids, seg_contrib = segs
+    # Build endpoint-averaged speeds aligned to segments (in the same
+    # distance-sorted order returned by the helper).
+    order = np.argsort(distance)
+    sorted_a = speed_a[order]
+    sorted_b = speed_b[order]
+    seg_speed_a = 0.5 * (sorted_a[:-1] + sorted_a[1:])
+    seg_speed_b = 0.5 * (sorted_b[:-1] + sorted_b[1:])
 
-    per_meter_delta = (1.0 / sb) - (1.0 / sa)
-    first_step = distance[1] - distance[0]
-    steps = np.diff(distance, prepend=distance[0] - first_step)
-    contributions = per_meter_delta * np.abs(steps)
-
-    max_contribution = float(contributions.max()) if contributions.size else 0.0
-    # Absolute floor (~5ms per sample) drops pure measurement noise where no
-    # individual point carries a meaningful time delta even if many samples
+    contributions = seg_contrib
+    abs_contrib = np.abs(contributions)
+    max_contribution = float(abs_contrib.max()) if abs_contrib.size else 0.0
+    # Absolute floor (~5ms per segment) drops pure measurement noise where no
+    # individual segment carries a meaningful time delta even if many segments
     # accumulate to a non-zero lap-wide total.
     MIN_ABSOLUTE_CONTRIBUTION_S = 0.005
     if max_contribution < MIN_ABSOLUTE_CONTRIBUTION_S:
@@ -1156,13 +1166,13 @@ def _pick_speed_trace_markers(
     )
 
     MIN_SPACING_M = 200.0
-    order = np.argsort(-contributions)
+    order_idx = np.argsort(-abs_contrib)
     picked: list[int] = []
-    for idx in order:
-        contribution = float(contributions[idx])
+    for idx in order_idx:
+        contribution = float(abs_contrib[idx])
         if contribution < threshold:
             break
-        if any(abs(float(distance[idx]) - float(distance[p])) < MIN_SPACING_M for p in picked):
+        if any(abs(float(seg_mids[idx]) - float(seg_mids[p])) < MIN_SPACING_M for p in picked):
             continue
         picked.append(int(idx))
         if len(picked) >= max_markers:
@@ -1171,10 +1181,10 @@ def _pick_speed_trace_markers(
     out: list[dict] = []
     for idx in picked:
         out.append({
-            "distance_m": float(distance[idx]),
-            "speed_a": float(speed_a[idx]),
-            "speed_b": float(speed_b[idx]),
-            "delta_kph": float(speed_a[idx] - speed_b[idx]),
+            "distance_m": float(seg_mids[idx]),
+            "speed_a": float(seg_speed_a[idx]),
+            "speed_b": float(seg_speed_b[idx]),
+            "delta_kph": float(seg_speed_a[idx] - seg_speed_b[idx]),
             "time_contribution_s": float(contributions[idx]),
         })
     return out

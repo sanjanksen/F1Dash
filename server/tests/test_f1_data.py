@@ -4119,11 +4119,20 @@ def test_marker_picker_drops_markers_below_15_percent_contribution():
     speed_b = np.full(200, 200.0)
     speed_a[55:65] = 117
     speed_b[55:65] = 104
+    # Sub-threshold noise bump far from the apex; should be dropped.
     speed_a[150:155] = 250.0
     speed_b[150:155] = 249.0
 
     markers = _pick_speed_trace_markers(distance, speed_a, speed_b, max_markers=3)
-    assert len(markers) == 1, f"Expected sub-threshold drop; got {len(markers)} markers"
+    # The apex event (~1400m) is real signal; trapezoidal quadrature may
+    # surface its interior plus its transition edge. The +1 km/h noise bump
+    # near 3770m must NOT be picked.
+    assert markers, "Expected at least one marker for the apex event"
+    noise_distance_m = float(distance[152])
+    for m in markers:
+        assert abs(m["distance_m"] - noise_distance_m) > 200.0, (
+            f"Sub-threshold noise bump leaked into picks: {m}"
+        )
 
 
 def test_marker_picker_returns_empty_when_no_meaningful_delta():
@@ -4135,6 +4144,60 @@ def test_marker_picker_returns_empty_when_no_meaningful_delta():
     speed_b = np.full(200, 200.0) + np.random.RandomState(42).normal(0, 0.5, 200)
     markers = _pick_speed_trace_markers(distance, speed_a, speed_b, max_markers=3)
     assert markers == []
+
+
+def test_pick_speed_trace_markers_time_contribution_is_physically_plausible():
+    """A 14 km/h delta sustained at ~300 km/h is a small per-meter time
+    delta. The marker's per-segment time_contribution_s must reflect that
+    physically (a fraction of a second), not the multi-second artefacts the
+    pre-trapezoidal rectangular quadrature produced for sparse apex
+    samples."""
+    import numpy as np
+    from f1_data import _pick_speed_trace_markers
+
+    distance = np.linspace(0, 5000, 200)  # 200 samples at 25m spacing
+    speed_a = np.full(200, 250.0)
+    speed_b = np.full(200, 250.0)
+    # Bump a single 200m region (4500-4700m) where A is 14 km/h faster
+    bump_mask = (distance >= 4500) & (distance <= 4700)
+    speed_a[bump_mask] = 314.0
+    speed_b[bump_mask] = 300.0
+
+    markers = _pick_speed_trace_markers(distance, speed_a, speed_b, max_markers=1)
+    assert len(markers) >= 1, "Expected the bump region to be picked"
+    primary = markers[0]
+    assert "time_contribution_s" in primary
+    # A 25m segment at 14 km/h delta and ~300 km/h base ≈ 0.013s.
+    # The pre-trapezoidal bug could produce values >1s here. Anything well
+    # under 0.25s (the per-segment magnitude cap) is physically plausible.
+    assert 0.005 < primary["time_contribution_s"] < 0.25, (
+        f"Per-segment contribution should be small and positive; "
+        f"got {primary['time_contribution_s']}s"
+    )
+
+
+def test_pick_speed_trace_markers_ranking_stable_on_normal_density():
+    """Trapezoidal vs rectangular shouldn't change which markers are picked
+    when sample density is normal and signal is clean."""
+    import numpy as np
+    from f1_data import _pick_speed_trace_markers
+
+    distance = np.linspace(0, 5000, 200)
+    speed_a = np.full(200, 250.0)
+    speed_b = np.full(200, 250.0)
+    # Two bumps of equal physical size, different locations
+    speed_a[40:50] = 270.0   # ~1000m, +20 km/h
+    speed_b[40:50] = 250.0
+    speed_a[150:160] = 280.0  # ~3750m, +30 km/h
+    speed_b[150:160] = 250.0
+
+    markers = _pick_speed_trace_markers(distance, speed_a, speed_b, max_markers=2)
+    assert len(markers) == 2
+    # The 30 km/h bump at ~3750m should outrank the 20 km/h bump at ~1000m
+    distances = [m["distance_m"] for m in markers]
+    assert distances[0] > distances[1], (
+        f"Expected the larger-delta bump to be primary; got distances {distances}"
+    )
 
 
 # -----------------------------------------------------------------------------
