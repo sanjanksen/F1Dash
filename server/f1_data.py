@@ -985,6 +985,88 @@ def _pick_fastest_lap(driver_laps):
     raise ValueError("No valid lap time found")
 
 
+def _pick_speed_trace_markers(
+    distance,
+    speed_a,
+    speed_b,
+    max_markers: int = 3,
+    min_contribution_fraction: float = 0.15,
+) -> list[dict]:
+    """Rank speed-trace candidate points by integrated time contribution.
+
+    A 13 km/h delta at a 110 km/h apex builds more time per meter than a
+    16 km/h delta at a 330 km/h straight, so km/h magnitude is the wrong
+    ranking signal. Instead rank by
+
+        contribution[i] = (1/v_b[i] - 1/v_a[i]) * step_distance[i]
+
+    (positive = A gained time on B). Drops candidates below
+    ``min_contribution_fraction`` of the total positive contribution and
+    enforces a 200m minimum spacing between picks so adjacent samples
+    describing the same event do not crowd out distinct mechanisms.
+
+    Inputs are kph; distance is metres.
+    """
+    distance = np.asarray(distance, dtype=float)
+    speed_a = np.asarray(speed_a, dtype=float)
+    speed_b = np.asarray(speed_b, dtype=float)
+    n = min(len(distance), len(speed_a), len(speed_b))
+    if n < 2:
+        return []
+    distance = distance[:n]
+    speed_a = speed_a[:n]
+    speed_b = speed_b[:n]
+
+    SAFE_MIN_SPEED_KPH = 30.0
+    sa = np.clip(speed_a, SAFE_MIN_SPEED_KPH, None) / 3.6
+    sb = np.clip(speed_b, SAFE_MIN_SPEED_KPH, None) / 3.6
+
+    per_meter_delta = (1.0 / sb) - (1.0 / sa)
+    first_step = distance[1] - distance[0]
+    steps = np.diff(distance, prepend=distance[0] - first_step)
+    contributions = per_meter_delta * np.abs(steps)
+
+    max_contribution = float(contributions.max()) if contributions.size else 0.0
+    # Absolute floor (~5ms per sample) drops pure measurement noise where no
+    # individual point carries a meaningful time delta even if many samples
+    # accumulate to a non-zero lap-wide total.
+    MIN_ABSOLUTE_CONTRIBUTION_S = 0.005
+    if max_contribution < MIN_ABSOLUTE_CONTRIBUTION_S:
+        return []
+    # Threshold against the peak contribution: real telemetry spreads time
+    # gains across many adjacent 100m samples, so no single sample ever
+    # carries 15% of the lap-wide integrated total. We want to drop
+    # *secondary* markers that are dwarfed by the primary one.
+    threshold = max(
+        min_contribution_fraction * max_contribution,
+        MIN_ABSOLUTE_CONTRIBUTION_S,
+    )
+
+    MIN_SPACING_M = 200.0
+    order = np.argsort(-contributions)
+    picked: list[int] = []
+    for idx in order:
+        contribution = float(contributions[idx])
+        if contribution < threshold:
+            break
+        if any(abs(float(distance[idx]) - float(distance[p])) < MIN_SPACING_M for p in picked):
+            continue
+        picked.append(int(idx))
+        if len(picked) >= max_markers:
+            break
+
+    out: list[dict] = []
+    for idx in picked:
+        out.append({
+            "distance_m": float(distance[idx]),
+            "speed_a": float(speed_a[idx]),
+            "speed_b": float(speed_b[idx]),
+            "delta_kph": float(speed_a[idx] - speed_b[idx]),
+            "time_contribution_s": float(contributions[idx]),
+        })
+    return out
+
+
 def _pick_driver(laps, code: str):
     """Call pick_drivers([code]) (FastF1 3.8+) or fall back to pick_driver(code)."""
     pick = getattr(laps, 'pick_drivers', None)
@@ -3437,7 +3519,19 @@ def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_
     strongest_min_speed = max(min_speed_candidates, key=lambda s: abs(s.get("delta_speed") or 0), default=None)
     strongest_traction = max(traction_candidates, key=lambda s: abs(s.get("delta_speed") or 0), default=None)
 
-    # Rank all found cause types by their peak speed delta magnitude
+    # Rank cause types by per-meter time contribution, not raw |delta_kph|.
+    # A 13 km/h delta at a 110 km/h apex costs more time per meter than a
+    # 16 km/h delta at a 330 km/h straight; ranking by magnitude alone would
+    # bias picks toward high-speed sections where the time impact is small.
+    def _time_per_meter(sample) -> float:
+        sa = max(float(sample.get("speed_a") or 0), 30.0) / 3.6
+        sb = max(float(sample.get("speed_b") or 0), 30.0) / 3.6
+        if sa <= 0 or sb <= 0:
+            return 0.0
+        # Positive when faster_driver gained time on the slower driver.
+        per_m = (1.0 / sb - 1.0 / sa) if faster_is_a else (1.0 / sa - 1.0 / sb)
+        return max(per_m, 0.0)
+
     ranked = []
     for cause_type, sample in (
         ("straight_line_speed", strongest_speed),
@@ -3447,9 +3541,11 @@ def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_
     ):
         if sample is None:
             continue
+        magnitude = abs(sample.get("delta_speed") or 0)
         ranked.append({
             "cause_type": cause_type,
-            "magnitude": abs(sample.get("delta_speed") or 0),
+            "magnitude": magnitude,
+            "rank_weight": _time_per_meter(sample),
             "distance_m": sample.get("distance_m"),
             "delta_speed_kph": sample.get("delta_speed"),
             "throttle_a": sample.get("throttle_a"),
@@ -3460,7 +3556,7 @@ def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_
             "gear_b": sample.get("gear_b"),
         })
 
-    ranked.sort(key=lambda x: x["magnitude"], reverse=True)
+    ranked.sort(key=lambda x: x.get("rank_weight", 0.0), reverse=True)
     top_causes = ranked[:3]
 
     if not top_causes:
@@ -3798,10 +3894,20 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
                 "Under the 2026 rules the electrical contribution is much larger, so if one car reaches the taper in deployment earlier, "
                 "it can remain flat-out but stop accelerating as hard late on the straight."
             )
+            # Express the energy cause's rank_weight in the same time-per-meter
+            # units as _summarize_telemetry_battle now uses, so this cause
+            # competes fairly with braking/min_speed/traction. The fade event
+            # occurs at full-throttle top speed (~290 kph slow-car nominal);
+            # we approximate per-meter time loss = Δv * 3.6 / v² and keep the
+            # historical +15% boost that priorities energy explanations.
+            ENERGY_NOMINAL_SLOW_KPH = 290.0
+            v_slow_ms = ENERGY_NOMINAL_SLOW_KPH / 3.6
+            v_fast_ms = max((ENERGY_NOMINAL_SLOW_KPH + abs(delta_speed)) / 3.6, 1.0)
+            energy_time_per_m = max((1.0 / v_slow_ms) - (1.0 / v_fast_ms), 0.0)
             energy_cause = {
                 "cause_type": "straight_line_speed_energy_limited",
                 "magnitude": abs(delta_speed),
-                "rank_weight": abs(delta_speed) * 1.15,
+                "rank_weight": energy_time_per_m * 1.15,
                 "distance_m": energy_distance,
                 "delta_speed_kph": delta_speed,
                 "throttle_a": None,

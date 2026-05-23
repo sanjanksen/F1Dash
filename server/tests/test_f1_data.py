@@ -4031,3 +4031,66 @@ class TestMiniSectors:
 
         out = _build_mini_sector_comparison("VER", "NOR", a_segments, b_segments)
         assert out["segments"][0]["winner"] == "tie"
+
+
+# -----------------------------------------------------------------------------
+# Speed-trace marker picker — time-contribution ranking
+# -----------------------------------------------------------------------------
+# Inventory:
+#   - Helper: _pick_speed_trace_markers(distance, speed_a, speed_b,
+#                                        max_markers=3,
+#                                        min_contribution_fraction=0.15)
+#   - Inputs: numpy arrays / list-likes of distance (m) and speeds (kph)
+#   - Output: list[dict] with keys distance_m, speed_a, speed_b, delta_kph,
+#             time_contribution_s. Returned in descending contribution order.
+#   - The cross-category re-rank inside _summarize_telemetry_battle should use
+#     the per-meter time-contribution metric, not absolute |delta_kph|.
+
+def test_marker_picker_prefers_low_speed_time_loss_over_high_speed_kmh_delta():
+    """A 13 km/h delta at 110 km/h apex must outrank a 16 km/h delta at
+    330 km/h straight because the apex point costs more time per meter."""
+    from f1_data import _pick_speed_trace_markers
+    import numpy as np
+
+    distance = np.linspace(0, 5000, 200)
+    speed_a = np.full(200, 200.0)
+    speed_a[55:65] = 117   # apex region
+    speed_a[175:185] = 337  # top-speed region
+
+    speed_b = np.full(200, 200.0)
+    speed_b[55:65] = 104   # 13 km/h slower at apex
+    speed_b[175:185] = 321  # 16 km/h slower at top end
+
+    markers = _pick_speed_trace_markers(distance, speed_a, speed_b, max_markers=2)
+    assert markers, "Expected at least one marker"
+    primary = markers[0]
+    assert primary["distance_m"] < 2000, (
+        f"Expected primary marker in low-speed apex; got {primary['distance_m']}m"
+    )
+
+
+def test_marker_picker_drops_markers_below_15_percent_contribution():
+    from f1_data import _pick_speed_trace_markers
+    import numpy as np
+
+    distance = np.linspace(0, 5000, 200)
+    speed_a = np.full(200, 200.0)
+    speed_b = np.full(200, 200.0)
+    speed_a[55:65] = 117
+    speed_b[55:65] = 104
+    speed_a[150:155] = 250.0
+    speed_b[150:155] = 249.0
+
+    markers = _pick_speed_trace_markers(distance, speed_a, speed_b, max_markers=3)
+    assert len(markers) == 1, f"Expected sub-threshold drop; got {len(markers)} markers"
+
+
+def test_marker_picker_returns_empty_when_no_meaningful_delta():
+    from f1_data import _pick_speed_trace_markers
+    import numpy as np
+
+    distance = np.linspace(0, 5000, 200)
+    speed_a = np.full(200, 200.0)
+    speed_b = np.full(200, 200.0) + np.random.RandomState(42).normal(0, 0.5, 200)
+    markers = _pick_speed_trace_markers(distance, speed_a, speed_b, max_markers=3)
+    assert markers == []
