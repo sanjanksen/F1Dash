@@ -8,7 +8,7 @@ from features.base import Feature, register_feature
 @register_feature
 class DriverStrategyFeature(Feature):
     name = "get_driver_strategy"
-    applies_to = ()
+    applies_to = ("driver", "race_session")
     triggered_by_modes = frozenset({"race_pace_comparison"})
     description = (
         "PRIMITIVE TOOL. Tyre strategy and stints for one driver or the whole field. "

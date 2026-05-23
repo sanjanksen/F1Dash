@@ -41,7 +41,7 @@ def _build_deg_trend_chart_widget(result: dict) -> dict:
 @register_feature
 class StintDegradationFeature(Feature):
     name = "analyze_stint_degradation"
-    applies_to = ("driver",)
+    applies_to = ("driver", "race_session")
     description = (
         "DEEP ANALYSIS PRIMITIVE. Compute tyre degradation model for a driver's race stints. "
         "Fits linear regression on fuel-corrected lap times vs tyre age per stint compound. "
