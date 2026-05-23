@@ -1018,6 +1018,8 @@ def test_analyze_qualifying_battle_derives_causal_summary():
                 "x": 0.0,
                 "y": 0.0,
                 "delta_speed": 4.0,
+                "speed_a": 254.0,
+                "speed_b": 250.0,
                 "throttle_a": 100.0,
                 "throttle_b": 100.0,
                 "brake_a": False,
@@ -1030,6 +1032,8 @@ def test_analyze_qualifying_battle_derives_causal_summary():
                 "x": 100.0,
                 "y": 60.0,
                 "delta_speed": 12.0,
+                "speed_a": 292.0,
+                "speed_b": 280.0,
                 "throttle_a": 100.0,
                 "throttle_b": 100.0,
                 "brake_a": False,
@@ -1037,7 +1041,8 @@ def test_analyze_qualifying_battle_derives_causal_summary():
                 "gear_a": 8,
                 "gear_b": 8,
             },
-        ]
+        ],
+        "sector_boundary_distances": [1500, 4000],
     }
     energy = {
         "comparative_signal": {
@@ -1089,7 +1094,13 @@ def test_analyze_qualifying_battle_derives_causal_summary():
     assert result["decisive_corner"] == "Turn 1"
     assert result["energy_relevant"] is True
     assert "2026 rules" in result["energy_context_explanation"]
-    assert result["telemetry_summary"]["top_causes"][0]["distance_m"] == 1400
+    # Marker picker is two-sided and lap-ordered. The 1400m point must
+    # appear somewhere in top_causes; ordering follows distance now.
+    assert any(
+        tc.get("distance_m") == 1400 for tc in result["telemetry_summary"]["top_causes"]
+    )
+    # cause_explanations is impact-ranked; the largest time contribution
+    # at 1400m is the energy-limited straight-line marker.
     assert result["cause_explanations"][0]["location_context"]["label"] == "Exit of Turn 1"
     assert "1400m" not in result["cause_explanations"][0]["explanation"]
     assert "on the run out of Turn 1" in result["cause_explanations"][0]["explanation"]

@@ -3566,157 +3566,184 @@ def _get_comparable_qualifying_laps(round_number: int, driver_codes: list[str], 
     raise ValueError("No comparable qualifying segment found for both drivers.")
 
 
-def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_a: str, driver_b: str) -> dict | None:
+def _classify_cause_type_at_sample(sample: dict, gain_is_a: bool) -> str:
+    """Classify the dominant mechanism at a sample, given which driver
+    gained time at that point. Mirrors the categorisation rules used by
+    the legacy four-bucket picker but operates on a single sample plus
+    the local gain direction.
+    """
+    def _gainer(key):
+        return sample.get(f"{key}_a") if gain_is_a else sample.get(f"{key}_b")
+
+    def _loser(key):
+        return sample.get(f"{key}_b") if gain_is_a else sample.get(f"{key}_a")
+
+    g_throttle = float(_gainer("throttle") or 0)
+    l_throttle = float(_loser("throttle") or 0)
+    g_brake = bool(_gainer("brake") or False)
+    l_brake = bool(_loser("brake") or False)
+
+    # Braking: loser on brake while gainer is still carrying speed.
+    if l_brake and not g_brake:
+        return "braking"
+    # Full-throttle both sides → straight-line speed.
+    if g_throttle >= 95 and l_throttle >= 95 and not g_brake and not l_brake:
+        return "straight_line_speed"
+    # Traction: gainer back to high throttle, loser still rolling on.
+    if g_throttle >= 70 and (g_throttle - l_throttle) >= 15 and not g_brake:
+        return "traction"
+    # Mid-corner / direction change.
+    if g_throttle < 40 and not g_brake:
+        return "minimum_speed"
+    if l_throttle < 40 and not l_brake:
+        return "minimum_speed"
+    # Fall-through bucket — generic.
+    return "minimum_speed"
+
+
+def _sector_label_for_distance(
+    dist_m: float | None,
+    sector_boundary_distances: list | tuple,
+) -> str | None:
+    if dist_m is None:
+        return None
+    b1 = sector_boundary_distances[0] if len(sector_boundary_distances) > 0 else None
+    b2 = sector_boundary_distances[1] if len(sector_boundary_distances) > 1 else None
+    if b1 is None:
+        return None
+    if dist_m <= b1:
+        return "Sector 1"
+    if b2 is None or dist_m <= b2:
+        return "Sector 2"
+    return "Sector 3"
+
+
+def _summarize_telemetry_battle(
+    samples: list[dict],
+    faster_driver: str,
+    driver_a: str,
+    driver_b: str,
+    sector_boundary_distances: list | tuple | None = None,
+    top_k: int = 4,
+    min_spacing_m: float = 200.0,
+) -> dict | None:
+    """Two-sided telemetry-battle summary.
+
+    Ranks ALL samples by absolute local time contribution (A − B
+    convention) and picks the top K with min_spacing_m separation.
+    Markers can come from EITHER driver — the gainer is recorded per
+    marker. Per-marker time contribution uses
+    ``_integrate_time_gained_around_extremum`` so a 14 km/h delta at
+    300 km/h doesn't get over-attributed by a fixed-width window.
+    """
     if not samples:
         return None
 
-    faster_is_a = faster_driver == driver_a
+    sector_boundary_distances = list(sector_boundary_distances or [None, None])
 
-    def sample_favors_faster(sample) -> bool:
-        delta_speed = sample.get("delta_speed") or 0
-        return (delta_speed > 0) if faster_is_a else (delta_speed < 0)
-
-    def _fast(sample, key):
-        suffix = "a" if faster_is_a else "b"
-        return sample.get(f"{key}_{suffix}")
-
-    def _slow(sample, key):
-        suffix = "b" if faster_is_a else "a"
-        return sample.get(f"{key}_{suffix}")
-
-    def _full_throttle(sample) -> bool:
-        return (
-            (_fast(sample, "throttle") or 0) >= 95
-            and (_slow(sample, "throttle") or 0) >= 95
-            and not (_fast(sample, "brake") or False)
-            and not (_slow(sample, "brake") or False)
-        )
-
-    speed_candidates = [
-        s for s in samples
-        if sample_favors_faster(s)
-        and abs(s.get("delta_speed") or 0) >= 5
-        and _full_throttle(s)
-    ]
-    braking_candidates = [
-        s for s in samples
-        if sample_favors_faster(s)
-        and (
-            (faster_is_a and s.get("brake_b") and not s.get("brake_a"))
-            or ((not faster_is_a) and s.get("brake_a") and not s.get("brake_b"))
-        )
-    ]
-    min_speed_candidates = [
-        s for s in samples
-        if sample_favors_faster(s)
-        and not _full_throttle(s)
-        and (
-            ((s.get("throttle_a") or 0) < 40 and not s.get("brake_a"))
-            or ((s.get("throttle_b") or 0) < 40 and not s.get("brake_b"))
-        )
-    ]
-    traction_candidates = [
-        s for s in samples
-        if sample_favors_faster(s)
-        and not _full_throttle(s)
-        and (_fast(s, "throttle") or 0) >= 70
-        and ((_fast(s, "throttle") or 0) - (_slow(s, "throttle") or 0)) >= 15
-        and not (_fast(s, "brake") or False)
-    ]
-
-    strongest_speed = max(speed_candidates, key=lambda s: abs(s.get("delta_speed") or 0), default=None)
-    strongest_braking = max(braking_candidates, key=lambda s: abs(s.get("delta_speed") or 0), default=None)
-    strongest_min_speed = max(min_speed_candidates, key=lambda s: abs(s.get("delta_speed") or 0), default=None)
-    strongest_traction = max(traction_candidates, key=lambda s: abs(s.get("delta_speed") or 0), default=None)
-
-    # Rank cause types by per-meter time contribution, not raw |delta_kph|.
-    # A 13 km/h delta at a 110 km/h apex costs more time per meter than a
-    # 16 km/h delta at a 330 km/h straight; ranking by magnitude alone would
-    # bias picks toward high-speed sections where the time impact is small.
-    def _time_per_meter(sample) -> float:
-        sa = max(float(sample.get("speed_a") or 0), 30.0) / 3.6
-        sb = max(float(sample.get("speed_b") or 0), 30.0) / 3.6
-        if sa <= 0 or sb <= 0:
-            return 0.0
-        # Positive when faster_driver gained time on the slower driver.
-        per_m = (1.0 / sb - 1.0 / sa) if faster_is_a else (1.0 / sa - 1.0 / sb)
-        return max(per_m, 0.0)
-
-    # Pre-extract sample arrays for per-sample time-gain integration around
-    # each cause. We use a 200m window centered on the cause distance and
-    # always integrate from A's perspective: time_gained_s > 0 means A
-    # gained time on B at that point; < 0 means B gained on A. This matches
-    # the overall_gap_s / sector gap_s sign conventions and lets the JSX
-    # attribute each cause to the correct driver regardless of who was
-    # faster overall on the lap.
+    # Build numpy arrays once for the integrator.
     _dist_arr = np.asarray([s.get("distance_m") for s in samples], dtype=float)
     _v_a_arr = np.asarray([s.get("speed_a") or 0 for s in samples], dtype=float)
     _v_b_arr = np.asarray([s.get("speed_b") or 0 for s in samples], dtype=float)
 
-    def _time_gained_for_cause(sample) -> float | None:
-        dist = sample.get("distance_m")
-        if dist is None:
-            return None
-        # Prefer per-sample integration over a 200m window when we have
-        # enough samples. Fall back to two-point approximation otherwise.
-        # Always integrate as A-vs-B (helper convention: arg1 is "winner",
-        # arg2 is "loser", positive output means arg1 gained time).
-        if len(_dist_arr) >= 2:
-            integrated = _integrate_time_gained_from_samples(
-                _dist_arr, _v_a_arr, _v_b_arr,
-                start_distance=float(dist) - 100.0,
-                end_distance=float(dist) + 100.0,
-            )
-            if integrated is not None:
-                return integrated
-        v_a = sample.get("speed_a")
-        v_b = sample.get("speed_b")
-        if v_a is None or v_b is None:
-            return None
-        # Two-point fallback: take the faster driver as winner_kph for the
-        # helper (which requires winner >= loser), then re-sign by who.
-        winner_kph = max(v_a, v_b)
-        loser_kph = min(v_a, v_b)
-        magnitude = _compute_time_gained_over_window(winner_kph, loser_kph, 200.0)
-        if magnitude is None:
-            return None
-        sign = 1.0 if v_a >= v_b else -1.0
-        return sign * magnitude
-
-    ranked = []
-    for cause_type, sample in (
-        ("straight_line_speed", strongest_speed),
-        ("braking", strongest_braking),
-        ("minimum_speed", strongest_min_speed),
-        ("traction", strongest_traction),
-    ):
-        if sample is None:
-            continue
-        magnitude = abs(sample.get("delta_speed") or 0)
-        ranked.append({
-            "cause_type": cause_type,
-            "magnitude": magnitude,
-            "rank_weight": _time_per_meter(sample),
-            "distance_m": sample.get("distance_m"),
-            "delta_speed_kph": sample.get("delta_speed"),
-            "speed_a": sample.get("speed_a"),
-            "speed_b": sample.get("speed_b"),
-            "time_gained_s": _time_gained_for_cause(sample),
-            "throttle_a": sample.get("throttle_a"),
-            "throttle_b": sample.get("throttle_b"),
-            "brake_a": sample.get("brake_a"),
-            "brake_b": sample.get("brake_b"),
-            "gear_a": sample.get("gear_a"),
-            "gear_b": sample.get("gear_b"),
-        })
-
-    ranked.sort(key=lambda x: x.get("rank_weight", 0.0), reverse=True)
-    top_causes = ranked[:3]
-
-    if not top_causes:
+    # Compute per-sample local time contribution via the extremum walker.
+    # When the walker isn't available (fewer than 2 samples) bail.
+    if len(samples) < 2:
         return None
 
-    return {"top_causes": top_causes}
+    candidates: list[dict] = []
+    for s in samples:
+        dist = s.get("distance_m")
+        if dist is None:
+            continue
+        v_a = s.get("speed_a")
+        v_b = s.get("speed_b")
+        if v_a is None or v_b is None:
+            continue
+        # Skip degenerate near-zero deltas before integration to keep the
+        # candidate pool focused on physically meaningful moments.
+        if abs(float(v_a) - float(v_b)) < 1.0:
+            continue
+        contrib = _integrate_time_gained_around_extremum(
+            _dist_arr, _v_a_arr, _v_b_arr, center_distance_m=float(dist),
+        )
+        if contrib is None or abs(contrib) < 1e-4:
+            continue
+        gain_is_a = contrib > 0
+        cause_type = _classify_cause_type_at_sample(s, gain_is_a)
+        sector_label = _sector_label_for_distance(dist, sector_boundary_distances)
+        candidates.append({
+            "cause_type": cause_type,
+            "distance_m": dist,
+            "delta_speed_kph": s.get("delta_speed"),
+            "magnitude": abs(s.get("delta_speed") or 0),
+            "speed_a": s.get("speed_a"),
+            "speed_b": s.get("speed_b"),
+            "time_gained_s": contrib,
+            "gainer_driver": driver_a if gain_is_a else driver_b,
+            "sector": sector_label,
+            "throttle_a": s.get("throttle_a"),
+            "throttle_b": s.get("throttle_b"),
+            "brake_a": s.get("brake_a"),
+            "brake_b": s.get("brake_b"),
+            "gear_a": s.get("gear_a"),
+            "gear_b": s.get("gear_b"),
+        })
+
+    if not candidates:
+        return None
+
+    # Rank by absolute time contribution (largest first) and pick top K
+    # with min_spacing_m enforced so two markers can't describe the same
+    # physical event.
+    candidates.sort(key=lambda c: abs(c["time_gained_s"]), reverse=True)
+    picked: list[dict] = []
+    for cand in candidates:
+        if any(abs(cand["distance_m"] - p["distance_m"]) < min_spacing_m for p in picked):
+            continue
+        picked.append(cand)
+        if len(picked) >= top_k:
+            break
+
+    if not picked:
+        return None
+
+    # Re-rank picked markers in lap order so widgets/prose surface them
+    # left-to-right around the lap. The "primary" remains the largest by
+    # absolute time gain — we expose both orderings.
+    picked.sort(key=lambda c: c["distance_m"])
+
+    # Build sector_reconciliation: sector gap minus marker contribution.
+    sector_reconciliation: dict[str, dict] = {}
+    if sector_boundary_distances[0] is not None:
+        # Compute sector gaps from the integrator over each sector window.
+        for label, lo, hi in (
+            ("Sector 1", 0.0, sector_boundary_distances[0]),
+            ("Sector 2", sector_boundary_distances[0], sector_boundary_distances[1]),
+            ("Sector 3",
+                sector_boundary_distances[1] if sector_boundary_distances[1] is not None else None,
+                float(_dist_arr.max()) if _dist_arr.size else None),
+        ):
+            if lo is None or hi is None:
+                continue
+            sector_gap = _integrate_time_gained_from_samples(
+                _dist_arr, _v_a_arr, _v_b_arr,
+                start_distance=float(lo),
+                end_distance=float(hi),
+            )
+            sector_markers = [m for m in picked if m.get("sector") == label]
+            marker_contribution = sum(m["time_gained_s"] for m in sector_markers)
+            sector_reconciliation[label] = {
+                "sector_gap_s": round(sector_gap, 4) if sector_gap is not None else None,
+                "marker_contribution_s": round(marker_contribution, 4),
+                "residual_s": (
+                    round(sector_gap - marker_contribution, 4)
+                    if sector_gap is not None else None
+                ),
+                "markers": sector_markers,
+            }
+
+    return {"top_causes": picked, "sector_reconciliation": sector_reconciliation}
 
 
 def _downsample_speed_trace(samples: list[dict], *, step: int = 200) -> list[dict]:
@@ -3985,8 +4012,17 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
 
     comparison_samples = telemetry.get("comparison", []) if telemetry else []
     sector_boundary_distances = telemetry.get("sector_boundary_distances", [None, None]) if telemetry else [None, None]
-    telemetry_summary = _summarize_telemetry_battle(comparison_samples, faster_driver, driver_a_code, driver_b_code)
+    telemetry_summary = _summarize_telemetry_battle(
+        comparison_samples,
+        faster_driver,
+        driver_a_code,
+        driver_b_code,
+        sector_boundary_distances=sector_boundary_distances,
+    )
     top_causes = (telemetry_summary.get("top_causes") or []) if telemetry_summary else []
+    sector_reconciliation = (
+        telemetry_summary.get("sector_reconciliation") or {}
+    ) if telemetry_summary else {}
 
     def _sector_for_distance(dist_m):
         if dist_m is None or sector_boundary_distances[0] is None:
@@ -4121,6 +4157,10 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
                 "speed_a": None,
                 "speed_b": None,
                 "time_gained_s": energy_time_gained_s,
+                "gainer_driver": (
+                    driver_b_code if (faded_driver == driver_a_code) else driver_a_code
+                ),
+                "sector": _sector_label_for_distance(energy_distance, sector_boundary_distances),
                 "throttle_a": None,
                 "throttle_b": None,
                 "brake_a": False,
@@ -4133,11 +4173,16 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
                 if tc.get("cause_type") != "straight_line_speed"
                 or abs((tc.get("distance_m") or 0) - (energy_distance or 0)) > 300
             ]
-            reranked_causes = [energy_cause, *non_energy_causes]
-            reranked_causes.sort(key=lambda tc: tc.get("rank_weight", tc.get("magnitude", 0)), reverse=True)
-            top_causes = reranked_causes[:3]
+            top_causes = [energy_cause, *non_energy_causes][:4]
+            # Keep lap order for downstream rendering / sector grouping.
+            top_causes.sort(key=lambda tc: tc.get("distance_m") or 0)
 
-    primary_cause = top_causes[0] if top_causes else None
+    # Primary = largest |time_gained_s| marker (or fall back to first when
+    # time_gained_s is missing). `top_causes` itself stays in lap order.
+    def _abs_time(tc):
+        tg = tc.get("time_gained_s")
+        return abs(tg) if tg is not None else 0.0
+    primary_cause = max(top_causes, key=_abs_time) if top_causes else None
     decisive_distance = primary_cause["distance_m"] if primary_cause else None
     cause_type = primary_cause["cause_type"] if primary_cause else "mixed"
     primary_location_context = (
@@ -4150,12 +4195,15 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
         primary_location_context,
     )
 
-    # Build multi-cause explanation list (up to 3 mechanisms with their telemetry evidence)
+    # Build multi-cause explanation list. Rank by absolute time contribution
+    # so "Primary" / "Secondary" / "Tertiary" labels reflect *time impact*,
+    # not lap order. Lap-ordered top_causes stay intact for sector grouping.
+    causes_ranked_by_impact = sorted(top_causes, key=_abs_time, reverse=True)
     cause_explanations = []
-    for i, tc in enumerate(top_causes):
+    for i, tc in enumerate(causes_ranked_by_impact):
         location_context = (
             primary_location_context
-            if i == 0 and primary_location_context is not None
+            if tc is primary_cause and primary_location_context is not None
             else _telemetry_location_context(round_number, tc["distance_m"], tc["cause_type"])
         )
         cause_explanations.append({
@@ -4166,9 +4214,10 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
             "speed_a": tc.get("speed_a"),
             "speed_b": tc.get("speed_b"),
             "time_gained_s": tc.get("time_gained_s"),
+            "gainer_driver": tc.get("gainer_driver"),
             "gear_a": tc.get("gear_a"),
             "gear_b": tc.get("gear_b"),
-            "sector": _sector_for_distance(tc["distance_m"]),
+            "sector": _sector_for_distance(tc["distance_m"]) or tc.get("sector"),
             "location_context": location_context,
             "explanation": _cause_explanation(tc["cause_type"], tc["distance_m"], location_context),
         })
@@ -4180,12 +4229,19 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
     ]
     if decisive_sector_gap is not None:
         strongest_evidence.append(f"{decisive_sector} accounts for {abs(decisive_sector_gap):.3f}s of the gap.")
-    for i, tc in enumerate(top_causes):
+    for i, tc in enumerate(cause_explanations):
         prefix = "Primary" if i == 0 else ("Secondary" if i == 1 else "Tertiary")
+        delta_kph = tc.get("delta_speed_kph")
+        delta_phrase = f"{abs(delta_kph):.1f} kph speed separation" if delta_kph is not None else "speed separation"
+        time_phrase = (
+            f" ({abs(tc['time_gained_s']):.3f}s)" if tc.get("time_gained_s") is not None else ""
+        )
+        gainer = tc.get("gainer_driver")
+        gainer_phrase = f" — {gainer} gained" if gainer else ""
         strongest_evidence.append(
-            f"{prefix} mechanism — {tc['cause_type']}: "
-            f"{abs(tc['delta_speed_kph']):.1f} kph speed separation"
-            f"{_location_phrase(tc.get('distance_m'), cause_explanations[i]['location_context'] if i < len(cause_explanations) else None)}."
+            f"{prefix} mechanism — {tc['cause_type']}{gainer_phrase}: "
+            f"{delta_phrase}{time_phrase}"
+            f"{_location_phrase(tc.get('distance_m'), tc.get('location_context'))}."
         )
     if energy_reason:
         strongest_evidence.append(energy_reason)
@@ -4266,6 +4322,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
         "cause_type": cause_type,
         "cause_explanation": cause_explanation,
         "cause_explanations": cause_explanations,
+        "sector_reconciliation": sector_reconciliation,
         "telemetry_summary": telemetry_summary,
         "energy_relevant": energy_relevant,
         "energy_reason": energy_reason,
