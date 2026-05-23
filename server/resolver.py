@@ -330,6 +330,40 @@ def _match_event(normalized: str) -> dict | None:
     return match_circuit_from_text(normalized, _cached_circuits())
 
 
+def _fill_round_number_from_circuit(resolved: dict, normalized: str) -> dict:
+    """If round_number isn't set but a circuit/country/event reference is
+    present, look it up in the cached current-season schedule and fill in
+    round_number, event_name, country."""
+    if resolved.get("round_number") is not None:
+        return resolved
+    circuits = _cached_circuits()
+    if not circuits:
+        return resolved
+
+    country = (resolved.get("country") or "").lower()
+    event = (resolved.get("event_name") or "").lower()
+
+    match = None
+    if country:
+        match = next((c for c in circuits if (c.get("country") or "").lower() == country), None)
+    if not match and event:
+        match = next((c for c in circuits if (c.get("event_name") or "").lower() == event), None)
+    if not match:
+        try:
+            from circuit_profiles import match_circuit_from_text
+            match = match_circuit_from_text(normalized, circuits)
+        except Exception:
+            pass
+
+    if match:
+        resolved["round_number"] = match.get("round")
+        if not resolved.get("country"):
+            resolved["country"] = match.get("country")
+        if not resolved.get("event_name"):
+            resolved["event_name"] = match.get("event_name")
+    return resolved
+
+
 def _suggest_tool(entity_type: str | None, scope: str | None, session_type: str | None = None) -> str | None:
     if scope == "fp":
         return "get_fp_summary"
@@ -496,7 +530,7 @@ def _base_context(message: str) -> dict:
     else:
         _suggested_tool = _suggest_tool(entity_type, scope, session_type)
 
-    return {
+    base = {
         "raw_message": message,
         "normalized_message": normalized,
         "entity_type": entity_type,
@@ -522,6 +556,7 @@ def _base_context(message: str) -> dict:
             analysis_mode is not None,
         ]),
     }
+    return _fill_round_number_from_circuit(base, normalized)
 
 
 def _merge_with_previous_context(current: dict, previous: dict | None) -> dict:

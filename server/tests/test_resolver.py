@@ -734,3 +734,33 @@ def test_resolver_sets_session_type_Q_for_qualifying_questions(
         f"Expected Q/SQ session_type for question {question!r}, "
         f"got {resolved.get('session_type')!r}"
     )
+
+
+@patch('resolver._extract_entities_llm', return_value={})
+@patch('resolver.get_drivers', return_value=[])
+@patch('circuits_cache.get_circuits')
+def test_resolver_fills_round_number_from_circuit_name(mock_circuits, mock_drivers, mock_llm):
+    """If a circuit name appears in the message, round_number should be filled
+    from the cached schedule even when Haiku extraction returned nothing."""
+    mock_circuits.return_value = [
+        {"round": 7, "event_name": "Emilia Romagna Grand Prix", "circuit_name": "Imola", "country": "Italy"},
+        {"round": 13, "event_name": "Italian Grand Prix", "circuit_name": "Monza", "country": "Italy"},
+    ]
+    resolved = resolver.resolve_query_context("compare drivers at Imola", None)
+    assert resolved.get("round_number") == 7, (
+        f"Expected round_number filled from Imola; got resolved={resolved}"
+    )
+    assert resolved.get("country") == "Italy"
+
+
+@patch('resolver._extract_entities_llm', return_value={"drivers": [], "team": None, "event_country": "Italy", "round": None})
+@patch('resolver.get_drivers', return_value=[])
+@patch('circuits_cache.get_circuits')
+def test_resolver_fills_round_number_when_llm_only_sets_country(mock_circuits, mock_drivers, mock_llm):
+    """If Haiku set event_country but not round, the helper resolves round."""
+    mock_circuits.return_value = [
+        {"round": 13, "event_name": "Italian Grand Prix", "circuit_name": "Monza", "country": "Italy"},
+    ]
+    resolved = resolver.resolve_query_context("how was qualifying", None)
+    assert resolved.get("round_number") == 13
+    assert resolved.get("country") == "Italy"
