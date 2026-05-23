@@ -95,8 +95,13 @@ function traceCoversCauses(points, causes) {
 }
 
 function causeWinner(cause, driverA, driverB, fasterDriver) {
-  // Trust time_gained_s sign when present — it's the authoritative measure.
-  // (km/h sign can disagree on rounding edge cases.)
+  // Prefer the backend-provided gainer_driver field — the two-sided
+  // picker already resolved which driver gained at this point.
+  if (typeof cause.gainer_driver === 'string' && cause.gainer_driver) {
+    return cause.gainer_driver
+  }
+  // Trust time_gained_s sign when present — authoritative for legacy
+  // payloads that don't carry gainer_driver.
   if (typeof cause.time_gained_s === 'number' && Math.abs(cause.time_gained_s) >= 0.005) {
     return cause.time_gained_s > 0 ? driverA : driverB
   }
@@ -161,6 +166,10 @@ function MechanismRow({ cause, active, driverA, driverB, fasterDriver, onMouseEn
   const kphSupport = typeof delta_speed_kph === 'number' ? `${Math.abs(delta_speed_kph).toFixed(1)} kph` : null
   const mechanism = CAUSE_LABELS[cause_type] ?? cause_type ?? 'Mixed'
   const description = causeDescription(cause, driverA, driverB, fasterDriver)
+  const gainer = causeWinner(cause, driverA, driverB, fasterDriver)
+  const gainerIsA = gainer === driverA
+  const gainerColor = gainerIsA ? COLOR_A : COLOR_B
+  const sectorLabel = cause.sector
 
   return (
     <div
@@ -174,10 +183,24 @@ function MechanismRow({ cause, active, driverA, driverB, fasterDriver, onMouseEn
           <div className="mt-0.5 font-mono-data text-xs text-muted-foreground">
             {locationLabel(cause)}
           </div>
+          {sectorLabel ? (
+            <div className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground/80">
+              {sectorLabel}
+            </div>
+          ) : null}
         </div>
         <div>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-sm font-medium text-foreground">{mechanism}</div>
+            <div className="flex items-center gap-2">
+              <span
+                className="font-mono-data text-sm font-semibold"
+                style={{ color: gainerColor }}
+              >
+                {gainer}
+              </span>
+              <span className="text-xs text-muted-foreground">gained</span>
+              <div className="text-sm font-medium text-foreground">{mechanism}</div>
+            </div>
             <div className="text-right">
               <div className="font-mono-data text-sm font-semibold text-foreground">
                 {timeHeadline ?? (kphSupport ?? '-')}
@@ -192,6 +215,62 @@ function MechanismRow({ cause, active, driverA, driverB, fasterDriver, onMouseEn
         </div>
       </div>
     </div>
+  )
+}
+
+function SectorReconciliationPanel({ reconciliation, driverA, driverB }) {
+  if (!reconciliation || typeof reconciliation !== 'object') return null
+  const entries = Object.entries(reconciliation).filter(([, v]) => v && typeof v === 'object')
+  if (!entries.length) return null
+
+  return (
+    <section className="py-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h4 className="text-sm font-medium text-foreground">Sector reconciliation</h4>
+        <div className="text-xs text-muted-foreground">Marker contributions vs sector gaps</div>
+      </div>
+      <div className="mt-3 space-y-2">
+        {entries.map(([sector, data]) => {
+          const sectorGap = data?.sector_gap_s
+          const markerContribution = data?.marker_contribution_s
+          const residual = data?.residual_s
+          const sectorWinner =
+            typeof sectorGap === 'number' && sectorGap !== 0
+              ? sectorGap > 0
+                ? driverA
+                : driverB
+              : null
+          const sectorColor = sectorWinner === driverA ? COLOR_A : sectorWinner === driverB ? COLOR_B : 'hsl(var(--muted-foreground))'
+          return (
+            <div key={sector} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2 text-xs">
+              <div className="font-medium text-muted-foreground">{sector}</div>
+              <div className="space-y-0.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span>
+                    {sectorWinner ? (
+                      <>
+                        <span style={{ color: sectorColor }} className="font-mono-data font-semibold">{sectorWinner}</span>
+                        <span className="text-muted-foreground"> +{Math.abs(sectorGap).toFixed(3)}s</span>
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground">Level</span>
+                    )}
+                  </span>
+                  <span className="font-mono-data text-muted-foreground">
+                    {typeof markerContribution === 'number'
+                      ? `markers ${markerContribution >= 0 ? '+' : ''}${markerContribution.toFixed(3)}s`
+                      : ''}
+                    {typeof residual === 'number'
+                      ? `, residual ${residual >= 0 ? '+' : ''}${residual.toFixed(3)}s`
+                      : ''}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 
@@ -269,10 +348,14 @@ export default function QualifyingBattleWidget({ widget }) {
     ? (widget.focus_window_trace?.length ? widget.focus_window_trace : widget.speed_trace)
     : widget.speed_trace
   const energyAlreadyExplained = topCauses.some((cause) => cause.cause_type === 'straight_line_speed_energy_limited')
+  const hasReconciliation = widget.sector_reconciliation &&
+    typeof widget.sector_reconciliation === 'object' &&
+    Object.keys(widget.sector_reconciliation).length > 0
   const hasDetails = Boolean(
     tracePoints?.length ||
     widget.zone_summary ||
     topCauses.length ||
+    hasReconciliation ||
     (widget.energy_relevant && widget.energy_reason && !energyAlreadyExplained) ||
     widget.grip_commitment ||
     widget.style_comparison,
@@ -397,6 +480,14 @@ export default function QualifyingBattleWidget({ widget }) {
 
                 {widget.zone_summary ? (
                   <div className="py-4 text-sm leading-6 text-muted-foreground">{widget.zone_summary}</div>
+                ) : null}
+
+                {widget.sector_reconciliation && Object.keys(widget.sector_reconciliation).length > 0 ? (
+                  <SectorReconciliationPanel
+                    reconciliation={widget.sector_reconciliation}
+                    driverA={driverA}
+                    driverB={driverB}
+                  />
                 ) : null}
 
                 {topCauses.length > 0 && (

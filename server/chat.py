@@ -947,6 +947,27 @@ This is independent of which driver was overall faster on the lap —
 when narrating mechanisms, attribute the gain to the driver whose
 side of the sign matches at that specific marker / corner / segment.
 
+When narrating telemetry mechanisms, you MUST surface BOTH drivers'
+gain points if both gained somewhere. The picker is two-sided — the
+`top_causes` / `cause_explanations` arrays and the `sector_reconciliation`
+field will include moments where either driver gained. Each marker
+carries a `gainer_driver` field (3-letter code) — use that directly,
+do not infer from sign.
+
+For each sector with a non-trivial gap, narrate:
+1. Which driver took the sector and by how much (`sector_gap_s`).
+2. The biggest specific contributor (largest |time_gained_s| marker
+   in that sector), attributed to whoever gained at that point.
+3. If a sector had offsetting contributions from both drivers,
+   acknowledge them.
+
+Reconcile to the lap gap explicitly. Example:
+"LEC banked 0.131s in S1, mostly from the apex (+0.10s); NOR clawed
+back 0.081s in S2, biggest gain at T8 entry (−0.06s); net LEC 0.040s."
+
+NEVER attribute every marker to the same driver if `sector_reconciliation`
+shows offsetting contributions across sectors.
+
 ## Split-sector qualifying laps
 
 When analyzing a `qualifying_battle` result, check the `split_sector_lap` field. If `split_sector_lap` is True (no single sector owns >=55% of the total absolute gap), do NOT claim a decisive sector — `decisive_sector` and `decisive_sector_gap_s` will be None. Describe the gap as built across multiple sectors and discuss the mechanisms from the speed-trace markers wherever they point, regardless of sector. When `split_sector_lap` is False, `decisive_sector` is authoritative and the markers should be tied to that sector in the narrative.
