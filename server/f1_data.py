@@ -4467,6 +4467,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
         cause_type,
         primary_cause["distance_m"] if primary_cause else None,
         primary_location_context,
+        gainer_driver=(primary_cause.get("gainer_driver") if primary_cause else None),
     )
 
     # Build multi-cause explanation list. Rank by absolute time contribution
@@ -4551,9 +4552,10 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
             if primary_location_plain
             else (f" at roughly {primary_cause['distance_m']}m" if primary_cause.get("distance_m") is not None else "")
         )
+        zone_summary_driver = primary_cause.get("gainer_driver") or faster_driver
         zone_summary = (
             f"{' '.join(location_bits) if location_bits else 'Key zone'}: "
-            f"{faster_driver} has a {abs(primary_cause['delta_speed_kph']):.1f} kph speed advantage "
+            f"{zone_summary_driver} has a {abs(primary_cause['delta_speed_kph']):.1f} kph speed advantage "
             f"{advantage_location}."
         )
         strongest_evidence.append(zone_summary)

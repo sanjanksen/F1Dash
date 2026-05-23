@@ -4,7 +4,7 @@ import SpeedTraceChart from './SpeedTraceChart.jsx'
 import TrackMap from './TrackMap.jsx'
 import { Badge } from '../ui/badge.jsx'
 import { CornerAnalysisPanel } from './CornerAnalysisWidget.jsx'
-import { formatTimeDelta, formatTimeMagnitude } from './formatTimeDelta.js'
+import { formatTimeMagnitude } from './formatTimeDelta.js'
 
 const COLOR_A = 'hsl(var(--primary))'
 const COLOR_B = 'hsl(var(--speed))'
