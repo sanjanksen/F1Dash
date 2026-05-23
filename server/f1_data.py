@@ -3537,18 +3537,38 @@ def _cause_explanation(
     driver_a_code: str | None = None,
     driver_b_code: str | None = None,
     is_teammate_comparison: bool = False,
+    corner_name: str | None = None,
+    location_label: str | None = None,
 ) -> str:
     """Build the per-marker prose. ``gainer_driver`` is the driver who
     gained at THIS specific marker — narrate from their perspective
     even when they are not the overall-faster driver on the lap.
-    """
-    def _specific_plain(lc: dict | None) -> str | None:
-        if not lc or lc.get("phase") == "lap_region":
-            return None
-        return lc.get("plain")
 
-    readable_location = _specific_plain(location_context)
-    loc = f" {readable_location}" if readable_location else (f" around {dist}m" if dist is not None else "")
+    Prefers corner-aware labels (``corner_name`` / ``location_label`` from
+    the marker dict) over the raw distance phrasing in
+    ``location_context.plain``.
+    """
+    def _location_phrase() -> str:
+        # 1. Explicit corner name from marker (highest priority).
+        if corner_name:
+            return f" at {corner_name}"
+        # 2. Explicit location_label from marker, IF it's not the
+        #    'around <distance>m' fallback form.
+        if location_label and not location_label.startswith("around "):
+            if "straight" in location_label.lower():
+                return f" on the {location_label}"
+            return f" at {location_label}"
+        # 3. location_context.plain (named phrase from corner context).
+        if location_context and location_context.get("phase") != "lap_region":
+            plain = location_context.get("plain")
+            if plain:
+                return f" {plain}"
+        # 4. Distance-only fallback.
+        if dist is not None:
+            return f" around {dist}m"
+        return ""
+
+    loc = _location_phrase()
     gainer = gainer_driver or faster_driver
     loser = driver_b_code if gainer == driver_a_code else driver_a_code
     if ct == "straight_line_speed":
@@ -4484,6 +4504,8 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
         driver_a_code=driver_a_code,
         driver_b_code=driver_b_code,
         is_teammate_comparison=is_teammate_comparison,
+        corner_name=(primary_cause.get("corner_name") if primary_cause else None),
+        location_label=(primary_cause.get("location_label") if primary_cause else None),
     )
 
     # Build multi-cause explanation list. Rank by absolute time contribution
@@ -4522,6 +4544,8 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
                 driver_a_code=driver_a_code,
                 driver_b_code=driver_b_code,
                 is_teammate_comparison=is_teammate_comparison,
+                corner_name=tc.get("corner_name"),
+                location_label=tc.get("location_label"),
             ),
         })
 

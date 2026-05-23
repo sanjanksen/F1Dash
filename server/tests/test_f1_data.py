@@ -4817,3 +4817,61 @@ def test_classify_decisive_sector_handles_zero_gap():
     result = _classify_decisive_sector(s1_gap_s=0.0, s2_gap_s=0.0, s3_gap_s=0.0)
     assert result["decisive_sector"] is None
     assert result["split_sector_lap"] is False
+
+
+def test_cause_explanation_uses_corner_name_when_provided():
+    """When the caller passes the marker's resolved corner_name, the
+    explanation must surface it instead of 'around <distance>m'."""
+    from f1_data import _cause_explanation
+    # location_context with no corner-aware fields (this is what
+    # _telemetry_location_context returns when no nearby corner matches).
+    location_context = {"plain": "around 3100m", "label": "around 3100m"}
+    text = _cause_explanation(
+        "minimum_speed", 3100, location_context,
+        gainer_driver="LEC",
+        faster_driver="LEC",
+        driver_a_code="LEC",
+        driver_b_code="VER",
+        corner_name="T10",
+        location_label="T10 apex",
+    )
+    assert "T10" in text, f"Expected 'T10' in explanation; got: {text}"
+    assert "around 3100m" not in text, (
+        f"Should not use raw distance when corner_name is given: {text}"
+    )
+
+
+def test_cause_explanation_uses_straight_label_when_provided():
+    """When the marker is on a straight (location_label like 'T11 → T12 straight'),
+    use that label instead of distance."""
+    from f1_data import _cause_explanation
+    location_context = {"plain": "around 4500m", "label": "around 4500m"}
+    text = _cause_explanation(
+        "straight_line_speed", 4500, location_context,
+        gainer_driver="LEC",
+        faster_driver="LEC",
+        driver_a_code="LEC",
+        driver_b_code="VER",
+        corner_name=None,
+        location_label="T11 → T12 straight",
+    )
+    assert "straight" in text.lower(), f"Expected straight label; got: {text}"
+    assert "around 4500m" not in text, (
+        f"Should not use raw distance when location_label is given: {text}"
+    )
+
+
+def test_cause_explanation_falls_back_to_distance_when_no_corner_or_label():
+    """When neither corner_name nor a named location_label is provided,
+    fall back to the distance phrasing in location_context.plain."""
+    from f1_data import _cause_explanation
+    location_context = {"plain": "around 3100m", "label": "around 3100m"}
+    text = _cause_explanation(
+        "minimum_speed", 3100, location_context,
+        gainer_driver="LEC",
+        faster_driver="LEC",
+        driver_a_code="LEC",
+        driver_b_code="VER",
+        # corner_name + location_label deliberately omitted (None default)
+    )
+    assert "3100" in text, f"Expected distance fallback; got: {text}"
