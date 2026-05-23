@@ -113,16 +113,15 @@ function causeWinner(cause, driverA, driverB, fasterDriver) {
 }
 
 function locationLabel(cause) {
-  // Prefer the marker's own corner-aware location_label, then the
-  // location_context label, finally a raw-distance fallback. Vague
-  // "late/middle/early in the lap" phrasing has been removed in favour
-  // of a real anchor (corner name or distance).
-  return (
-    cause.location_label
-    ?? cause.corner_name
-    ?? cause.location_context?.label
-    ?? (cause.distance_m != null ? `${cause.distance_m}m` : 'distance n/a')
-  )
+  // For the marker card's location chip. No prepositions — just the label.
+  // Prefer the resolved corner_name, then location_label (which may be the
+  // 'around <distance>m' fallback form when no corner matched), then the
+  // location_context label, finally a raw-distance fallback.
+  if (cause.corner_name) return cause.corner_name
+  if (cause.location_label) return cause.location_label
+  if (cause.location_context?.label) return cause.location_context.label
+  if (typeof cause.distance_m === 'number') return `around ${cause.distance_m}m`
+  return 'distance n/a'
 }
 
 function locationPlain(cause) {
