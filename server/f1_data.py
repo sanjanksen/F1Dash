@@ -985,6 +985,80 @@ def _pick_fastest_lap(driver_laps):
     raise ValueError("No valid lap time found")
 
 
+def _compute_time_gained_over_window(
+    v_winner_kph: float | None,
+    v_loser_kph: float | None,
+    window_distance_m: float | None,
+) -> float | None:
+    """Time the winner gains over the loser by sustaining v_winner_kph over
+    v_loser_kph for window_distance_m of distance.
+
+    Two-point constant-speed approximation. Use
+    `_integrate_time_gained_from_samples` when per-sample telemetry is
+    available — it integrates the per-meter contribution exactly rather
+    than assuming a constant speed delta.
+
+    Returns seconds, or None when either speed is missing / below a safe
+    minimum (30 km/h) or the window is non-positive.
+    """
+    SAFE_MIN_KPH = 30.0
+    if (v_winner_kph is None or v_loser_kph is None
+            or v_winner_kph < SAFE_MIN_KPH or v_loser_kph < SAFE_MIN_KPH
+            or window_distance_m is None or window_distance_m <= 0):
+        return None
+    v_a = v_winner_kph / 3.6
+    v_b = v_loser_kph / 3.6
+    return (1.0 / v_b - 1.0 / v_a) * float(window_distance_m)
+
+
+def _integrate_time_gained_from_samples(
+    distance,
+    speed_winner_kph,
+    speed_loser_kph,
+    start_distance: float | None = None,
+    end_distance: float | None = None,
+) -> float | None:
+    """Per-sample integration of time-gained-by-winner over distance.
+
+    Optionally restricts integration to [start_distance, end_distance].
+    Returns seconds (positive = winner gained time). Uses the same
+    contribution math as `_pick_speed_trace_markers`:
+
+        per_meter[i] = 1/v_loser_ms[i] - 1/v_winner_ms[i]
+        time_gained = sum(per_meter[i] * step[i])
+
+    Returns None when fewer than 2 samples or the requested window
+    contains no samples.
+    """
+    distance_arr = np.asarray(distance, dtype=float)
+    sw = np.asarray(speed_winner_kph, dtype=float)
+    sl = np.asarray(speed_loser_kph, dtype=float)
+    n = min(len(distance_arr), len(sw), len(sl))
+    if n < 2:
+        return None
+    distance_arr = distance_arr[:n]
+    sw = sw[:n]
+    sl = sl[:n]
+
+    SAFE_MIN_KPH = 30.0
+    sw_clip = np.clip(sw, SAFE_MIN_KPH, None) / 3.6
+    sl_clip = np.clip(sl, SAFE_MIN_KPH, None) / 3.6
+
+    per_meter = (1.0 / sl_clip) - (1.0 / sw_clip)
+    first_step = distance_arr[1] - distance_arr[0]
+    steps = np.diff(distance_arr, prepend=distance_arr[0] - first_step)
+    contrib = per_meter * np.abs(steps)
+
+    if start_distance is not None or end_distance is not None:
+        lo = start_distance if start_distance is not None else float(distance_arr[0])
+        hi = end_distance if end_distance is not None else float(distance_arr[-1])
+        mask = (distance_arr >= lo) & (distance_arr <= hi)
+        if not mask.any():
+            return None
+        contrib = contrib[mask]
+    return float(contrib.sum())
+
+
 def _pick_speed_trace_markers(
     distance,
     speed_a,

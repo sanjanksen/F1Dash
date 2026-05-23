@@ -4096,6 +4096,112 @@ def test_marker_picker_returns_empty_when_no_meaningful_delta():
     assert markers == []
 
 
+# -----------------------------------------------------------------------------
+# Time-gained helpers — _compute_time_gained_over_window /
+# _integrate_time_gained_from_samples
+# -----------------------------------------------------------------------------
+
+def test_compute_time_gained_over_window_apex_vs_straight():
+    """Same km/h delta over same distance yields more time at low speed
+    than at high speed — the headline truth this whole refactor is built on."""
+    from f1_data import _compute_time_gained_over_window
+
+    apex = _compute_time_gained_over_window(
+        v_winner_kph=117.0, v_loser_kph=104.0, window_distance_m=50.0,
+    )
+    straight = _compute_time_gained_over_window(
+        v_winner_kph=337.0, v_loser_kph=321.0, window_distance_m=50.0,
+    )
+    assert apex is not None and straight is not None
+    assert apex > straight, "Apex delta should yield more time over same distance"
+    assert 0.10 < apex < 0.30
+    assert 0.01 < straight < 0.05
+
+
+def test_compute_time_gained_over_window_zero_when_equal_speeds():
+    from f1_data import _compute_time_gained_over_window
+    out = _compute_time_gained_over_window(200, 200, 100)
+    assert out == 0.0
+
+
+def test_compute_time_gained_over_window_returns_none_for_invalid_speeds():
+    from f1_data import _compute_time_gained_over_window
+    assert _compute_time_gained_over_window(None, 100, 50) is None
+    assert _compute_time_gained_over_window(100, None, 50) is None
+    assert _compute_time_gained_over_window(0, 100, 50) is None
+    assert _compute_time_gained_over_window(100, 0, 50) is None
+    assert _compute_time_gained_over_window(20, 100, 50) is None  # < 30 km/h
+    assert _compute_time_gained_over_window(100, 100, 0) is None
+    assert _compute_time_gained_over_window(100, 100, -5) is None
+
+
+def test_integrate_time_gained_from_samples_synthetic_bump():
+    """200-sample trace with a 10-sample winner_speed bump produces a
+    deterministic, positive time-gained value."""
+    from f1_data import _integrate_time_gained_from_samples
+    import numpy as np
+
+    distance = np.linspace(0, 5000, 200)
+    speed_winner = np.full(200, 200.0)
+    speed_loser = np.full(200, 200.0)
+    speed_winner[100:110] = 130.0
+    speed_loser[100:110] = 117.0
+
+    out = _integrate_time_gained_from_samples(distance, speed_winner, speed_loser)
+    assert out is not None
+    assert out > 0.0
+
+    # Sanity-check against the analytical expected: per-sample step ~25.13m,
+    # 10 samples at v_loser=117, v_winner=130 → ~ (1/117 - 1/130) * (3.6) * 251.3
+    # = (0.000855 - 0.00770) → cancel — let me re-derive in m/s:
+    # v_loser_ms = 32.5, v_winner_ms = 36.11
+    # per_m = 1/32.5 - 1/36.11 = 0.0308 - 0.0277 = 0.00307 s/m
+    # total step = ~251m → ~0.77s
+    assert 0.5 < out < 1.2
+
+
+def test_integrate_time_gained_from_samples_window_restriction():
+    """Restricting the window to only the bump region produces the same
+    value as the full integration (the rest of the trace contributes 0)."""
+    from f1_data import _integrate_time_gained_from_samples
+    import numpy as np
+
+    distance = np.linspace(0, 5000, 200)
+    speed_winner = np.full(200, 200.0)
+    speed_loser = np.full(200, 200.0)
+    speed_winner[100:110] = 130.0
+    speed_loser[100:110] = 117.0
+
+    full = _integrate_time_gained_from_samples(distance, speed_winner, speed_loser)
+    windowed = _integrate_time_gained_from_samples(
+        distance, speed_winner, speed_loser,
+        start_distance=float(distance[100]) - 1.0,
+        end_distance=float(distance[109]) + 1.0,
+    )
+    assert full is not None and windowed is not None
+    assert abs(full - windowed) < 1e-6
+
+
+def test_integrate_time_gained_from_samples_window_outside_returns_none():
+    from f1_data import _integrate_time_gained_from_samples
+    import numpy as np
+
+    distance = np.linspace(0, 5000, 200)
+    speed_winner = np.full(200, 200.0)
+    speed_loser = np.full(200, 199.0)
+    out = _integrate_time_gained_from_samples(
+        distance, speed_winner, speed_loser,
+        start_distance=10000.0, end_distance=20000.0,
+    )
+    assert out is None
+
+
+def test_integrate_time_gained_from_samples_returns_none_below_two_samples():
+    from f1_data import _integrate_time_gained_from_samples
+    assert _integrate_time_gained_from_samples([], [], []) is None
+    assert _integrate_time_gained_from_samples([100.0], [200.0], [199.0]) is None
+
+
 def test_classify_decisive_sector_when_one_dominates():
     """If one sector owns >=55% of total absolute gap, decisive_sector is set
     and split_sector_lap is False."""
