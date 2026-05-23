@@ -1749,7 +1749,7 @@ def _run_anthropic_analysis(question: str, resolved: dict, plan: dict, evidence:
     client = _get_anthropic_client()
     response = _call_anthropic(
         client,
-        model="claude-opus-4-7",
+        model="claude-sonnet-4-6",
         max_tokens=1200,
         system=ANALYSIS_SYSTEM_PROMPT,
         messages=[{
@@ -1791,7 +1791,7 @@ def _answer_anthropic(message: str, history: list[dict], resolved_context: dict 
     for _ in range(MAX_TOOL_ROUNDS):
         response = _call_anthropic(
             client,
-            model="claude-opus-4-7",
+            model="claude-sonnet-4-6",
             max_tokens=4096,
             system=request_system_prompt,
             tools=TOOL_DEFINITIONS,

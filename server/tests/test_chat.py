@@ -684,8 +684,8 @@ def test_run_anthropic_analysis_uses_current_model():
     assert "claude-opus-4-5" not in source, (
         "chat.py still references deprecated model claude-opus-4-5"
     )
-    assert "claude-opus-4-7" in source, (
-        "chat.py must reference the current model claude-opus-4-7"
+    assert "claude-sonnet-4-6" in source, (
+        "chat.py must reference the current analyzer model claude-sonnet-4-6"
     )
 
 
