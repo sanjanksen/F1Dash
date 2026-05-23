@@ -19,12 +19,6 @@ def test_safety_car_periods_registered_after_discover():
     assert "get_safety_car_periods" in FEATURE_REGISTRY
 
 
-def test_safety_car_periods_relevance_high_for_sc_keyword():
-    feat = _load_feat()
-    assert feat.is_relevant_for("Was there a safety car?", {}) >= 0.5
-    assert feat.is_relevant_for("Show the lap times", {}) < 0.5
-
-
 def test_safety_car_periods_no_widget():
     feat = _load_feat()
     assert feat.make_widget({"any": "thing"}) == {}

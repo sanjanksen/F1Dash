@@ -19,12 +19,6 @@ def test_team_performance_registered_after_discover():
     assert "analyze_team_performance" in FEATURE_REGISTRY
 
 
-def test_team_performance_relevance_high_for_team_compare():
-    feat = _load_feat()
-    assert feat.is_relevant_for("Which teammate was stronger as a team?", {}) >= 0.5
-    assert feat.is_relevant_for("Show the standings", {}) < 0.5
-
-
 def test_team_performance_make_widget_delegates_subkey():
     feat = _load_feat()
     sample = {

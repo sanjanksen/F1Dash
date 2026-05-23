@@ -30,12 +30,6 @@ class DriverStyleProfileFeature(Feature):
         "required": ["driver_a"],
     }
 
-    def is_relevant_for(self, question: str, resolved: dict | None) -> float:
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
-
     def execute(self, **args) -> dict:
         from driver_styles import get_driver_style, get_comparison_framing
         driver_a = args["driver_a"]

@@ -1,8 +1,7 @@
 """Feature base class + registration decorator.
 
-Each feature is a subclass of Feature with the five-method contract:
+Each feature is a subclass of Feature with the four-method contract:
     - applies_to: tuple of entity-type strings (cheap broad filter)
-    - is_relevant_for(question, resolved) -> float in [0, 1]
     - execute(**args) -> dict (the actual analysis)
     - make_widget(result) -> dict (widget payload)
     - should_show_widget(result) -> bool
@@ -37,10 +36,6 @@ class Feature(ABC):
                 f"Feature subclass {cls.__name__} must set class attribute "
                 f"`name` to a string"
             )
-
-    @abstractmethod
-    def is_relevant_for(self, question: str, resolved: dict | None) -> float:
-        """Return relevance in [0, 1]. >= 0.5 fires by default."""
 
     @abstractmethod
     def execute(self, **args) -> dict:

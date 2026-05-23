@@ -25,12 +25,6 @@ class CleanPaceSummaryFeature(Feature):
         "required": ["round_number", "session_type"],
     }
 
-    def is_relevant_for(self, question, resolved):
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
-
     def execute(self, **args):
         return f1_data.get_clean_pace_summary(
             args["round_number"],
@@ -68,12 +62,6 @@ class TrackPositionComparisonFeature(Feature):
         "required": ["round_number", "session_type", "driver_a", "driver_b"],
     }
 
-    def is_relevant_for(self, question, resolved):
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
-
     def execute(self, **args):
         return f1_data.get_track_position_comparison(
             args["round_number"],
@@ -105,12 +93,6 @@ class QualifyingProgressionFeature(Feature):
         "required": ["round_number"],
     }
 
-    def is_relevant_for(self, question, resolved):
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
-
     def execute(self, **args):
         return f1_data.get_qualifying_progression(args["round_number"])
 
@@ -135,12 +117,6 @@ class SessionFastestLapsFeature(Feature):
         },
         "required": ["round_number", "session_type"],
     }
-
-    def is_relevant_for(self, question, resolved):
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
 
     def execute(self, **args):
         return f1_data.get_session_fastest_laps(args["round_number"], args["session_type"])
@@ -180,12 +156,6 @@ class SpeedTrapLeaderboardFeature(Feature):
         },
         "required": ["round_number", "session_type"],
     }
-
-    def is_relevant_for(self, question, resolved):
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
 
     def execute(self, **args):
         return f1_data.get_speed_trap_leaderboard(

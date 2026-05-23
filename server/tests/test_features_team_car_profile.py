@@ -19,12 +19,6 @@ def test_team_car_profile_registered_after_discover():
     assert "get_team_car_profile" in FEATURE_REGISTRY
 
 
-def test_team_car_profile_relevance_high_for_car_keyword():
-    feat = _load_feat()
-    assert feat.is_relevant_for("What are McLaren's car characteristics?", {}) >= 0.5
-    assert feat.is_relevant_for("Who is leading the championship?", {}) < 0.5
-
-
 def test_team_car_profile_no_widget():
     feat = _load_feat()
     assert feat.make_widget({"any": "thing"}) == {}

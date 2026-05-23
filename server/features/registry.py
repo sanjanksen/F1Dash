@@ -1,11 +1,10 @@
-"""Feature discovery, candidate filtering, and relevance ranking."""
+"""Feature discovery and candidate filtering."""
 from __future__ import annotations
 
 import importlib
 import logging
 import pkgutil
 import time
-from typing import Iterable
 
 from features.base import Feature, FEATURE_REGISTRY, audit_log
 
@@ -112,65 +111,25 @@ def features_for_mode(mode: str | None, resolved: dict | None) -> list[Feature]:
     return out
 
 
-def rank_by_relevance(
-    question: str,
-    resolved: dict | None,
-    candidates: Iterable[Feature],
-) -> list[tuple[Feature, float]]:
-    """Ask each candidate is_relevant_for, return [(feature, score)] sorted desc.
-
-    Scores are clamped to [0.0, 1.0]. Predicate exceptions are caught and
-    treated as 0.0 (skip the feature).
-    """
-    scored: list[tuple[Feature, float]] = []
-    for feat in candidates:
-        try:
-            raw = float(feat.is_relevant_for(question, resolved))
-        except Exception as e:
-            logger.warning(
-                "is_relevant_for raised for %s: %s",
-                feat.name, type(e).__name__,
-            )
-            raw = 0.0
-        score = max(0.0, min(1.0, raw))
-        scored.append((feat, score))
-    scored.sort(key=lambda x: x[1], reverse=True)
-    return scored
-
-
 def run_pipeline(
     question: str,
     resolved: dict | None,
     args_by_feature: dict[str, dict] | None = None,
-    threshold: float = 0.5,
 ) -> list[tuple[Feature, dict, dict | None]]:
-    """End-to-end registry pipeline: candidates → rank → execute → widget gate → audit.
+    """End-to-end registry pipeline: candidates -> execute -> widget gate -> audit.
 
     Returns one (feature, execute_result, widget_or_none) per feature that
-    cleared applies_to AND scored at or above `threshold`. The audit log is
-    populated as a side effect for both fired and skipped features.
+    cleared applies_to. The audit log is populated as a side effect for
+    every fired feature.
 
-    feature.execute() exceptions are caught — the entry's result becomes
+    feature.execute() exceptions are caught -- the entry's result becomes
     {"available": False, "error": <ExceptionType>} and the widget gate
     decides whether to emit a widget for it (usually False).
     """
     args_by_feature = args_by_feature or {}
     out: list[tuple[Feature, dict, dict | None]] = []
 
-    cands = candidates_for(resolved)
-    for feat, score in rank_by_relevance(question, resolved, cands):
-        if score < threshold:
-            audit_log(
-                feature_name=feat.name,
-                question=question,
-                applies_to_passed=True,
-                relevance_score=score,
-                executed=False,
-                widget_emitted=False,
-                duration_ms=0,
-            )
-            continue
-
+    for feat in candidates_for(resolved):
         args = args_by_feature.get(feat.name, {})
         t0 = time.time()
         try:
@@ -207,7 +166,6 @@ def run_pipeline(
             feature_name=feat.name,
             question=question,
             applies_to_passed=True,
-            relevance_score=score,
             executed=True,
             widget_emitted=widget is not None,
             duration_ms=duration_ms,

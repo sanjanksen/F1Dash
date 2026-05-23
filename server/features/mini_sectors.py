@@ -2,7 +2,7 @@
 
 This is the pilot feature for the registry refactor. The underlying
 analysis function stays in f1_data.py; this module wraps it with the
-applies_to + is_relevant_for + make_widget + should_show_widget surface
+applies_to + make_widget + should_show_widget surface
 the registry expects.
 """
 from __future__ import annotations
@@ -68,12 +68,6 @@ class MiniSectorsFeature(Feature):
         },
         "required": list(_REQUIRED_ARGS),
     }
-
-    def is_relevant_for(self, question: str, resolved: dict | None) -> float:
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
 
     def execute(self, **args) -> dict:
         return f1_data.compare_mini_sectors(

@@ -19,12 +19,6 @@ def test_driver_style_profile_registered_after_discover():
     assert "get_driver_style_profile" in FEATURE_REGISTRY
 
 
-def test_driver_style_profile_relevance_high_for_style_keyword():
-    feat = _load_feat()
-    assert feat.is_relevant_for("What's Norris's driving style?", {}) >= 0.5
-    assert feat.is_relevant_for("Who has the most points?", {}) < 0.5
-
-
 def test_driver_style_profile_no_widget():
     feat = _load_feat()
     assert feat.make_widget({"any": "thing"}) == {}

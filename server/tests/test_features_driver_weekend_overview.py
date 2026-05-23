@@ -19,12 +19,6 @@ def test_driver_weekend_overview_registered_after_discover():
     assert "get_driver_weekend_overview" in FEATURE_REGISTRY
 
 
-def test_driver_weekend_overview_relevance_high_for_weekend_keyword():
-    feat = _load_feat()
-    assert feat.is_relevant_for("How was Russell's weekend?", {}) >= 0.5
-    assert feat.is_relevant_for("Show the lap times", {}) < 0.5
-
-
 def test_driver_weekend_overview_no_widget():
     feat = _load_feat()
     assert feat.make_widget({"any": "thing"}) == {}

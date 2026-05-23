@@ -19,12 +19,6 @@ def test_race_report_registered_after_discover():
     assert "get_race_report" in FEATURE_REGISTRY
 
 
-def test_race_report_relevance_high_for_race_recap():
-    feat = _load_feat()
-    assert feat.is_relevant_for("What happened in the race?", {}) >= 0.5
-    assert feat.is_relevant_for("Show the standings", {}) < 0.5
-
-
 def test_race_report_no_widget():
     feat = _load_feat()
     assert feat.make_widget({"any": "thing"}) == {}

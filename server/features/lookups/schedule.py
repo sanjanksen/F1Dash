@@ -20,12 +20,6 @@ class SeasonScheduleFeature(Feature):
         "required": [],
     }
 
-    def is_relevant_for(self, question, resolved):
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
-
     def execute(self, **args):
         return f1_data.get_circuits()
 

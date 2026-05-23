@@ -24,12 +24,6 @@ class DriverLapTimesFeature(Feature):
         "required": ["round_number", "session_type", "driver_code"],
     }
 
-    def is_relevant_for(self, question, resolved):
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
-
     def execute(self, **args):
         return f1_data.get_driver_lap_times(args["round_number"], args["session_type"], args["driver_code"])
 
@@ -60,12 +54,6 @@ class LapTelemetryFeature(Feature):
         },
         "required": ["round_number", "session_type", "driver_code"],
     }
-
-    def is_relevant_for(self, question, resolved):
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
 
     def execute(self, **args):
         return f1_data.get_lap_telemetry(
@@ -98,12 +86,6 @@ class SectorComparisonFeature(Feature):
         },
         "required": ["round_number", "session_type", "driver_a", "driver_b"],
     }
-
-    def is_relevant_for(self, question, resolved):
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
 
     def execute(self, **args):
         return f1_data.get_sector_comparison(
@@ -139,12 +121,6 @@ class TelemetryComparisonFeature(Feature):
         },
         "required": ["round_number", "session_type", "driver_a", "driver_b"],
     }
-
-    def is_relevant_for(self, question, resolved):
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
 
     def execute(self, **args):
         return f1_data.get_telemetry_comparison(

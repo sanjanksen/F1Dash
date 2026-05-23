@@ -19,12 +19,6 @@ def test_race_cornering_profile_registered_after_discover():
     assert "analyze_race_cornering_profile" in FEATURE_REGISTRY
 
 
-def test_race_cornering_profile_relevance_high_for_race_cornering_keyword():
-    feat = _load_feat()
-    assert feat.is_relevant_for("Compare race cornering between Norris and Verstappen", {}) >= 0.5
-    assert feat.is_relevant_for("How many points does Norris have?", {}) < 0.5
-
-
 def test_race_cornering_profile_no_widget():
     feat = _load_feat()
     assert feat.make_widget({"any": "thing"}) == {}

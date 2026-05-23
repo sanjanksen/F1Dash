@@ -26,12 +26,6 @@ class TeamCarProfileFeature(Feature):
         "required": ["team_name"],
     }
 
-    def is_relevant_for(self, question: str, resolved: dict | None) -> float:
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
-
     def execute(self, **args) -> dict:
         from team_car_profiles import get_team_car_profile
         team_name = args["team_name"]

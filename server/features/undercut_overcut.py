@@ -58,12 +58,6 @@ class UndercutOvercutFeature(Feature):
         "required": list(_REQUIRED_ARGS),
     }
 
-    def is_relevant_for(self, question: str, resolved: dict | None) -> float:
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
-
     def execute(self, **args) -> dict:
         round_number = args.get("round_number")
         if round_number is None:

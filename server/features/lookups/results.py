@@ -22,12 +22,6 @@ class RaceResultsFeature(Feature):
         "required": ["round_number"],
     }
 
-    def is_relevant_for(self, question, resolved):
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
-
     def execute(self, **args):
         return f1_data.get_race_results(args["round_number"])
 
@@ -53,12 +47,6 @@ class QualifyingResultsFeature(Feature):
         "required": ["round_number"],
     }
 
-    def is_relevant_for(self, question, resolved):
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
-
     def execute(self, **args):
         return f1_data.get_qualifying_results(args["round_number"])
 
@@ -82,12 +70,6 @@ class SprintResultsFeature(Feature):
         },
         "required": ["round_number"],
     }
-
-    def is_relevant_for(self, question, resolved):
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
 
     def execute(self, **args):
         return f1_data.get_sprint_results(args["round_number"])
@@ -117,12 +99,6 @@ class SprintQualifyingResultsFeature(Feature):
         "required": ["round_number"],
     }
 
-    def is_relevant_for(self, question, resolved):
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
-
     def execute(self, **args):
         return f1_data.get_sprint_qualifying_results(args["round_number"])
 
@@ -151,12 +127,6 @@ class SessionResultsFeature(Feature):
         },
         "required": ["round_number", "session_type"],
     }
-
-    def is_relevant_for(self, question, resolved):
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
 
     def execute(self, **args):
         return f1_data.get_session_results(args["round_number"], args["session_type"])

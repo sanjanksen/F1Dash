@@ -19,12 +19,6 @@ def test_search_editorial_registered_after_discover():
     assert "search_editorial_content" in FEATURE_REGISTRY
 
 
-def test_search_editorial_relevance_high_for_news_keyword():
-    feat = _load_feat()
-    assert feat.is_relevant_for("Any recent news on the upgrades?", {}) >= 0.5
-    assert feat.is_relevant_for("Show the lap times", {}) < 0.5
-
-
 def test_search_editorial_no_widget():
     feat = _load_feat()
     assert feat.make_widget({"any": "thing"}) == {}

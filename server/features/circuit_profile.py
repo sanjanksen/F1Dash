@@ -57,12 +57,6 @@ class CircuitProfileFeature(Feature):
         "required": ["country"],
     }
 
-    def is_relevant_for(self, question: str, resolved: dict | None) -> float:
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
-
     def execute(self, **args) -> dict:
         from circuit_profiles import get_circuit_profile
         profile = get_circuit_profile(args["country"], args.get("event_name", ""))

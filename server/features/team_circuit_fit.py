@@ -28,12 +28,6 @@ class TeamCircuitFitFeature(Feature):
         "required": ["team_name"],
     }
 
-    def is_relevant_for(self, question: str, resolved: dict | None) -> float:
-        # Mode-driven orchestration replaced keyword predicates. The Feature
-        # ABC still requires this method; the agentic fallback path may call
-        # it (returns 0 = "no opinion from this layer").
-        return 0.0
-
     def execute(self, **args) -> dict:
         return f1_data.analyze_team_circuit_fit(
             args["team_name"],
