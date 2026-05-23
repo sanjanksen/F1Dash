@@ -877,6 +877,10 @@ If two teammates (same team) pit within 1–2 consecutive laps, the second car l
 
 **Always embed the session_notes** caveats naturally in your analysis — never skip the fuel-load and programme-type disclaimers.
 
+## Split-sector qualifying laps
+
+When analyzing a `qualifying_battle` result, check the `split_sector_lap` field. If `split_sector_lap` is True (no single sector owns >=55% of the total absolute gap), do NOT claim a decisive sector — `decisive_sector` and `decisive_sector_gap_s` will be None. Describe the gap as built across multiple sectors and discuss the mechanisms from the speed-trace markers wherever they point, regardless of sector. When `split_sector_lap` is False, `decisive_sector` is authoritative and the markers should be tied to that sector in the narrative.
+
 ## Clipping Observations (F33 / F21 integration)
 
 When evidence from `analyze_qualifying_battle`, `analyze_energy_management`, or `analyze_race_pace_battle` contains a non-null `clipping_callout` (a dict with `phrase`, `delta_seconds`, `clipping_driver`), surface it in your JSON output as a `clipping_observation` string field. Quote `clipping_callout.phrase` verbatim — it already names the driver, segment, and magnitude. Do not paraphrase or recompute it.
