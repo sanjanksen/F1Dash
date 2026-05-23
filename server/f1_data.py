@@ -6020,12 +6020,14 @@ def compare_corner_profiles(
             if magnitude is None:
                 time_gained_s = None
             else:
-                # Positive when fp (faster lap) is the corner winner here.
+                # Signed: positive = driver_a gained at this corner, negative = driver_b gained.
+                # Aggregated below as a signed sum so the rollup reads as net driver_a
+                # advantage across corners (matches qualifying_battle top_causes convention).
                 sign = 1.0 if apex_a >= apex_b else -1.0
-                time_gained_s = round(sign * magnitude, 4)
+                signed_delta = sign * magnitude
+                time_gained_s = round(signed_delta, 4)
                 any_time_gained = True
-                if sign > 0:
-                    total_time_gained_s += magnitude
+                total_time_gained_s += signed_delta
         else:
             time_gained_s = None
 
