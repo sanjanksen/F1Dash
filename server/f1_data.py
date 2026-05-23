@@ -3569,15 +3569,14 @@ def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_
 
     # Pre-extract sample arrays for per-sample time-gain integration around
     # each cause. We use a 200m window centered on the cause distance and
-    # always integrate winner-vs-loser (so time_gained_s is positive when
-    # the faster driver actually gained at this point).
+    # always integrate from A's perspective: time_gained_s > 0 means A
+    # gained time on B at that point; < 0 means B gained on A. This matches
+    # the overall_gap_s / sector gap_s sign conventions and lets the JSX
+    # attribute each cause to the correct driver regardless of who was
+    # faster overall on the lap.
     _dist_arr = np.asarray([s.get("distance_m") for s in samples], dtype=float)
-    if faster_is_a:
-        _v_winner = np.asarray([s.get("speed_a") or 0 for s in samples], dtype=float)
-        _v_loser = np.asarray([s.get("speed_b") or 0 for s in samples], dtype=float)
-    else:
-        _v_winner = np.asarray([s.get("speed_b") or 0 for s in samples], dtype=float)
-        _v_loser = np.asarray([s.get("speed_a") or 0 for s in samples], dtype=float)
+    _v_a_arr = np.asarray([s.get("speed_a") or 0 for s in samples], dtype=float)
+    _v_b_arr = np.asarray([s.get("speed_b") or 0 for s in samples], dtype=float)
 
     def _time_gained_for_cause(sample) -> float | None:
         dist = sample.get("distance_m")
@@ -3585,9 +3584,11 @@ def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_
             return None
         # Prefer per-sample integration over a 200m window when we have
         # enough samples. Fall back to two-point approximation otherwise.
+        # Always integrate as A-vs-B (helper convention: arg1 is "winner",
+        # arg2 is "loser", positive output means arg1 gained time).
         if len(_dist_arr) >= 2:
             integrated = _integrate_time_gained_from_samples(
-                _dist_arr, _v_winner, _v_loser,
+                _dist_arr, _v_a_arr, _v_b_arr,
                 start_distance=float(dist) - 100.0,
                 end_distance=float(dist) + 100.0,
             )
@@ -3595,9 +3596,17 @@ def _summarize_telemetry_battle(samples: list[dict], faster_driver: str, driver_
                 return integrated
         v_a = sample.get("speed_a")
         v_b = sample.get("speed_b")
-        v_winner = v_a if faster_is_a else v_b
-        v_loser = v_b if faster_is_a else v_a
-        return _compute_time_gained_over_window(v_winner, v_loser, 200.0)
+        if v_a is None or v_b is None:
+            return None
+        # Two-point fallback: take the faster driver as winner_kph for the
+        # helper (which requires winner >= loser), then re-sign by who.
+        winner_kph = max(v_a, v_b)
+        loser_kph = min(v_a, v_b)
+        magnitude = _compute_time_gained_over_window(winner_kph, loser_kph, 200.0)
+        if magnitude is None:
+            return None
+        sign = 1.0 if v_a >= v_b else -1.0
+        return sign * magnitude
 
     ranked = []
     for cause_type, sample in (
@@ -4015,12 +4024,19 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
             energy_winner_kph = ENERGY_NOMINAL_SLOW_KPH + abs(delta_speed)
             # Two-point approximation over a 200m window — synthetic cause
             # has no per-sample telemetry of its own, so we use the same
-            # window as the standard cause-level fallback.
-            energy_time_gained_s = _compute_time_gained_over_window(
+            # window as the standard cause-level fallback. Signed by A's
+            # perspective: faded_driver=B (delta_speed>0) → A gained, sign=+.
+            # faded_driver=A (delta_speed<0) → B gained, sign=-.
+            energy_time_magnitude = _compute_time_gained_over_window(
                 v_winner_kph=energy_winner_kph,
                 v_loser_kph=ENERGY_NOMINAL_SLOW_KPH,
                 window_distance_m=200.0,
             )
+            if energy_time_magnitude is None:
+                energy_time_gained_s = None
+            else:
+                energy_sign = 1.0 if faded_driver == driver_b_code else -1.0
+                energy_time_gained_s = energy_sign * energy_time_magnitude
             energy_cause = {
                 "cause_type": "straight_line_speed_energy_limited",
                 "magnitude": abs(delta_speed),

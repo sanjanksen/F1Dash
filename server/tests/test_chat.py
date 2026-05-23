@@ -602,7 +602,9 @@ def test_widgets_from_preloaded_supports_corner_comparison():
             "event": "Japanese Grand Prix",
             "session": "Q",
             "gain_location_summary": [{"corner": "T3"}],
-            "braking_point_delta_m": 8.0,
+            "avg_straight_speed_a_kph": 312.0,
+            "avg_straight_speed_b_kph": 305.0,
+            "total_time_gained_s": 0.18,
         },
     })
 

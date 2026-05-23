@@ -778,7 +778,11 @@ def test_telemetry_battle_does_not_classify_full_throttle_delta_as_traction():
 
 def test_telemetry_battle_top_causes_carry_time_gained_s():
     """Each top_causes entry must carry time_gained_s and speed_a/speed_b
-    so downstream surfaces can render time-first prose."""
+    so downstream surfaces can render time-first prose.
+
+    Sign convention: signed driver_a − driver_b. Positive = A gained at
+    that point, negative = B gained. Matches overall_gap_s / sector gap_s.
+    """
     samples = [
         {
             "distance_m": 600,
@@ -811,10 +815,58 @@ def test_telemetry_battle_top_causes_carry_time_gained_s():
         assert "time_gained_s" in cause
         assert "speed_a" in cause
         assert "speed_b" in cause
-        # All listed candidates favor ANT (faster) at this distance, so
-        # time_gained_s must be positive or zero.
+        # A (ANT) is faster at every candidate point here, so the signed
+        # time_gained_s is positive (A gained).
         if cause["time_gained_s"] is not None:
             assert cause["time_gained_s"] >= 0.0
+
+
+def test_telemetry_battle_time_gained_s_negative_when_b_gains_locally():
+    """When B is the overall faster driver but A is briefly faster at one
+    point, that cause's signed time_gained_s for the B-favorable points
+    must be negative (B gained, from A's perspective). Validates that the
+    sign tracks driver_a − driver_b, not faster-driver-vs-slower."""
+    # B (RUS) is the overall faster driver: B is faster at distance 600
+    # (delta_speed = speed_a - speed_b < 0). A (ANT) is briefly faster at
+    # 1500 (delta_speed > 0). The candidate that favors the *faster_driver*
+    # at each distance is the one ranked into top_causes; here that means
+    # the 600m point favors B → its signed time_gained_s < 0.
+    samples = [
+        {
+            "distance_m": 600,
+            "delta_speed": -25.0,
+            "speed_a": 255.0,
+            "speed_b": 280.0,
+            "throttle_a": 100.0,
+            "throttle_b": 100.0,
+            "brake_a": False,
+            "brake_b": False,
+            "gear_a": 8,
+            "gear_b": 8,
+        },
+        {
+            "distance_m": 1500,
+            "delta_speed": -13.0,
+            "speed_a": 104.0,
+            "speed_b": 117.0,
+            "throttle_a": 35.0,
+            "throttle_b": 35.0,
+            "brake_a": False,
+            "brake_b": False,
+            "gear_a": 3,
+            "gear_b": 3,
+        },
+    ]
+    result = f1_data._summarize_telemetry_battle(samples, "RUS", "ANT", "RUS")
+    assert result is not None
+    assert result["top_causes"], "expected at least one cause favoring the faster driver"
+    for cause in result["top_causes"]:
+        # All ranked causes favor B (faster_driver=RUS); signed convention
+        # is A − B, so each cause's time_gained_s must be negative or zero.
+        if cause["time_gained_s"] is not None:
+            assert cause["time_gained_s"] <= 0.0, (
+                f"Expected negative time_gained_s for B-favoring cause; got {cause}"
+            )
 
 
 def test_telemetry_location_context_places_traction_after_previous_corner():
