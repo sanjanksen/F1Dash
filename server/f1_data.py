@@ -5286,6 +5286,12 @@ def _profile_corner_zone(zone_samples: list[dict]) -> dict:
             traction_point_m = s.get('distance_m')
             break
 
+    entry_dist = zone_samples[0].get('distance_m')
+    exit_dist = zone_samples[-1].get('distance_m')
+    corner_length_m = None
+    if entry_dist is not None and exit_dist is not None:
+        corner_length_m = max(float(exit_dist) - float(entry_dist), 0.0)
+
     return {
         'entry_speed_kph': entry_speed,
         'apex_speed_kph': apex_speed,
@@ -5293,6 +5299,9 @@ def _profile_corner_zone(zone_samples: list[dict]) -> dict:
         'braking_point_m': braking_point_m,
         'apex_gear': apex_gear,
         'traction_point_m': traction_point_m,
+        'entry_distance_m': entry_dist,
+        'exit_distance_m': exit_dist,
+        'corner_length_m': corner_length_m,
     }
 
 
@@ -5989,13 +5998,60 @@ def compare_corner_profiles(
     fps = profile_a['corner_profiles'] if faster == driver_a.upper() else profile_b['corner_profiles']
     sps = profile_b['corner_profiles'] if faster == driver_a.upper() else profile_a['corner_profiles']
 
+    # Two-point time-gained approximation: assume the apex speed differential
+    # is sustained over 0.4 * corner_length_m of the corner zone. The 0.4
+    # heuristic reflects that a corner's speed minimum (apex) is held for a
+    # fraction of the total zone length — the entry/exit transitions are
+    # accelerating or braking phases where the per-meter delta is smaller.
+    # When corner_length_m is unavailable, fall back to 80m (typical mid-speed
+    # corner) and flag the record as an estimate.
+    CORNER_TIME_WINDOW_FRACTION = 0.4
+    CORNER_DEFAULT_LENGTH_M = 80.0
+
     corner_deltas: dict[str, dict] = {}
+    total_time_gained_s = 0.0
+    any_time_gained = False
     for key in fps:
         if key not in sps:
             continue
         fp = fps[key]
         sp = sps[key]
         cause = _classify_corner_delta(fp, sp)
+        apex_a = fp.get('apex_speed_kph')
+        apex_b = sp.get('apex_speed_kph')
+
+        # Prefer the faster corner zone's length (the faster driver finished
+        # the zone faster, but both define the same physical corner).
+        fp_len = fp.get('corner_length_m')
+        sp_len = sp.get('corner_length_m')
+        if fp_len is not None and sp_len is not None:
+            corner_length_m = (float(fp_len) + float(sp_len)) / 2.0
+        elif fp_len is not None:
+            corner_length_m = float(fp_len)
+        elif sp_len is not None:
+            corner_length_m = float(sp_len)
+        else:
+            corner_length_m = None
+        time_gained_estimate = corner_length_m is None or corner_length_m <= 0
+        effective_length = corner_length_m if (corner_length_m and corner_length_m > 0) else CORNER_DEFAULT_LENGTH_M
+        window_m = effective_length * CORNER_TIME_WINDOW_FRACTION
+
+        if apex_a is not None and apex_b is not None:
+            winner_kph = max(apex_a, apex_b)
+            loser_kph = min(apex_a, apex_b)
+            magnitude = _compute_time_gained_over_window(winner_kph, loser_kph, window_m)
+            if magnitude is None:
+                time_gained_s = None
+            else:
+                # Positive when fp (faster lap) is the corner winner here.
+                sign = 1.0 if apex_a >= apex_b else -1.0
+                time_gained_s = round(sign * magnitude, 4)
+                any_time_gained = True
+                if sign > 0:
+                    total_time_gained_s += magnitude
+        else:
+            time_gained_s = None
+
         corner_deltas[key] = {
             'cause': cause,
             'entry_delta_kph': round((fp.get('entry_speed_kph') or 0) - (sp.get('entry_speed_kph') or 0), 1),
@@ -6005,6 +6061,9 @@ def compare_corner_profiles(
             'slower_braking_point_m': sp.get('braking_point_m'),
             'faster_apex_gear': fp.get('apex_gear'),
             'slower_apex_gear': sp.get('apex_gear'),
+            'corner_length_m': corner_length_m,
+            'time_gained_s': time_gained_s,
+            'time_gained_estimate': bool(time_gained_estimate),
         }
 
     cause_counts: dict[str, int] = {}
@@ -6044,6 +6103,9 @@ def compare_corner_profiles(
             'cause': v['cause'],
             'apex_delta_kph': v['apex_delta_kph'],
             'exit_delta_kph': v['exit_delta_kph'],
+            'time_gained_s': v.get('time_gained_s'),
+            'time_gained_estimate': v.get('time_gained_estimate'),
+            'corner_length_m': v.get('corner_length_m'),
         }
         for k, v in top_corners
     ]
@@ -6063,6 +6125,7 @@ def compare_corner_profiles(
         'cause_breakdown': cause_counts,
         'setup_direction_inference': setup_direction,
         'gain_location_summary': gain_location_summary,
+        'total_time_gained_s': round(total_time_gained_s, 4) if any_time_gained else None,
         'lap_summary_a': profile_a.get('lap_summary', {}),
         'lap_summary_b': profile_b.get('lap_summary', {}),
         'avg_straight_speed_a_kph': round(avg_str_a, 1) if avg_str_a else None,

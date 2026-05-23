@@ -30,6 +30,7 @@ def _build_corner_comparison_widget(result: dict) -> dict:
         "cause_breakdown": result.get("cause_breakdown") or {},
         "avg_straight_speed_a_kph": result.get("avg_straight_speed_a_kph"),
         "avg_straight_speed_b_kph": result.get("avg_straight_speed_b_kph"),
+        "total_time_gained_s": result.get("total_time_gained_s"),
     }
 
 
