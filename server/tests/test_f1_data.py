@@ -1024,8 +1024,11 @@ def test_telemetry_location_context_falls_back_when_corner_data_missing():
     with patch("f1_data.get_circuit_corners", side_effect=ValueError("no corners")):
         result = f1_data._telemetry_location_context(1, 500, "traction")
 
-    assert result["label"] == "Early in the lap"
-    assert result["plain"] == "early in the lap"
+    # Vague "early/middle/late in the lap" labels were dropped; the
+    # fallback now anchors to the raw distance so marker prose still has
+    # a hook even when circuit corner data isn't available.
+    assert result["label"] == "around 500m"
+    assert result["plain"] == "around 500m"
     assert result["phase"] == "lap_region"
 
 
@@ -1034,11 +1037,143 @@ def test_telemetry_location_context_falls_back_for_non_finite_distance():
         result = f1_data._telemetry_location_context(1, float("nan"), "traction")
 
     assert result["phase"] == "lap_region"
-    assert result["label"] == "Key part of the lap"
-    assert result["plain"] == "in a key part of the lap"
+    assert result["label"] == "Distance unavailable"
+    assert result["plain"] == "at an unknown point on the lap"
     assert result["previous_corner"] is None
     assert result["next_corner"] is None
     mock_corners.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _resolve_corner_for_distance — marker corner-label resolver
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_corner_for_distance_returns_corner_when_within_radius():
+    corners = [
+        {"number": 1, "distance_m": 300},
+        {"number": 2, "distance_m": 650},
+    ]
+    with patch("f1_data.get_circuit_corners", return_value=corners):
+        # 720m is within ±150m of Turn 2 (650m)
+        result = f1_data._resolve_corner_for_distance(1, 720)
+
+    assert result["corner_number"] == 2
+    assert result["corner_name"] == "Turn 2"
+    assert result["location_label"] == "Turn 2"
+
+
+def test_resolve_corner_for_distance_returns_straight_between_corners():
+    corners = [
+        {"number": 8, "distance_m": 2000},
+        {"number": 9, "distance_m": 3000},
+    ]
+    with patch("f1_data.get_circuit_corners", return_value=corners):
+        # 2500m is between T8 and T9, outside the ±150m corner footprint
+        result = f1_data._resolve_corner_for_distance(1, 2500)
+
+    assert result["corner_number"] is None
+    assert result["corner_name"] is None
+    assert result["location_label"] == "Turn 8 → Turn 9 straight"
+
+
+def test_resolve_corner_for_distance_falls_back_when_corner_data_missing():
+    with patch("f1_data.get_circuit_corners", side_effect=ValueError("no corners")):
+        result = f1_data._resolve_corner_for_distance(1, 4700)
+
+    # No crash; raw distance phrase keeps the marker anchored.
+    assert result["corner_number"] is None
+    assert result["corner_name"] is None
+    assert result["location_label"] == "around 4700m"
+
+
+def test_resolve_corner_for_distance_handles_corner_label_suffix():
+    corners = [
+        {"number": 8, "label": "a", "distance_m": 2000},
+    ]
+    with patch("f1_data.get_circuit_corners", return_value=corners):
+        result = f1_data._resolve_corner_for_distance(1, 2050)
+
+    assert result["corner_name"] == "Turn 8a"
+    assert result["location_label"] == "Turn 8a"
+
+
+def test_summarize_telemetry_battle_enriches_markers_with_corner_labels():
+    """Picked markers must carry corner_number / corner_name / location_label
+    so the widget can display 'Turn 11' instead of 'around 4700m'."""
+    import numpy as np
+    distance = np.linspace(0, 5000, 500).tolist()
+    samples = []
+    for d in distance:
+        sa = 200.0
+        sb = 200.0
+        if 1480 <= d <= 1520:
+            sa = 188.0  # A gains here (apex)
+        samples.append({
+            "distance_m": d,
+            "delta_speed": sa - sb,
+            "speed_a": sa,
+            "speed_b": sb,
+            "throttle_a": 80.0,
+            "throttle_b": 80.0,
+            "brake_a": False,
+            "brake_b": False,
+            "gear_a": 5,
+            "gear_b": 5,
+        })
+
+    corners = [
+        {"number": 5, "distance_m": 1500},
+        {"number": 6, "distance_m": 4500},
+    ]
+    with patch("f1_data.get_circuit_corners", return_value=corners):
+        result = f1_data._summarize_telemetry_battle(
+            samples,
+            "ANT",
+            "ANT",
+            "RUS",
+            sector_boundary_distances=[1700, 3300],
+            round_number=42,
+        )
+
+    assert result is not None
+    apex_markers = [m for m in result["top_causes"] if 1400 <= m["distance_m"] <= 1600]
+    assert apex_markers, "Expected at least one marker near the synthetic apex"
+    for m in apex_markers:
+        assert m["corner_number"] == 5
+        assert m["corner_name"] == "Turn 5"
+        assert m["location_label"] == "Turn 5"
+
+
+def test_summarize_telemetry_battle_falls_back_when_no_round_number():
+    """Without a round_number, the corner enrichment can't run — markers
+    must still carry location_label keys (distance fallback)."""
+    import numpy as np
+    distance = np.linspace(0, 5000, 500).tolist()
+    samples = []
+    for d in distance:
+        sa = 200.0
+        sb = 200.0
+        if 1480 <= d <= 1520:
+            sa = 188.0
+        samples.append({
+            "distance_m": d,
+            "delta_speed": sa - sb,
+            "speed_a": sa,
+            "speed_b": sb,
+            "throttle_a": 80.0,
+            "throttle_b": 80.0,
+            "brake_a": False,
+            "brake_b": False,
+        })
+
+    result = f1_data._summarize_telemetry_battle(samples, "ANT", "ANT", "RUS")
+
+    assert result is not None
+    for m in result["top_causes"]:
+        assert m["corner_number"] is None
+        assert m["corner_name"] is None
+        assert m["location_label"].startswith("around ")
 
 
 def test_comparative_fade_requires_late_clip_window():

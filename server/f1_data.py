@@ -3410,18 +3410,90 @@ def _is_finite_distance(distance_m: int | float | None) -> bool:
         return False
 
 
-def _lap_region(distance_m: int | float | None) -> tuple[str, str]:
+def _distance_fallback_label(distance_m: int | float | None) -> tuple[str, str]:
+    """Pure distance fallback when no circuit corner data is available.
+
+    Vague "late/middle/early in the lap" phrasing was misleading — replaced
+    with a raw distance phrase so the marker still anchors to *somewhere*.
+    """
     if not _is_finite_distance(distance_m):
-        return "Key part of the lap", "in a key part of the lap"
-    if distance_m is None or distance_m < 1000:
-        return "Early in the lap", "early in the lap"
-    if distance_m < 3500:
-        return "Middle of the lap", "in the middle of the lap"
-    return "Late in the lap", "late in the lap"
+        return "Distance unavailable", "at an unknown point on the lap"
+    return f"around {int(distance_m)}m", f"around {int(distance_m)}m"
+
+
+def _resolve_corner_for_distance(
+    round_number: int,
+    distance_m: int | float | None,
+) -> dict:
+    """Resolve a telemetry distance to a named-corner / straight label.
+
+    Returns a dict with keys:
+      - corner_number: int | None (set when the distance lies between a
+        corner's entry and exit range)
+      - corner_name:   str | None (e.g. "Turn 11")
+      - location_label: str | None (e.g. "Turn 11", "T8 → T9 straight",
+        "around 4700m" when corner data is unavailable)
+
+    Falls back gracefully when ``get_circuit_corners`` raises or returns
+    no corners — never crashes. The returned ``location_label`` is what
+    callers should prefer; it always includes a meaningful anchor.
+    """
+    fallback_label, _fallback_plain = _distance_fallback_label(distance_m)
+    empty = {"corner_number": None, "corner_name": None, "location_label": fallback_label}
+    if not _is_finite_distance(distance_m):
+        return empty
+    try:
+        corners = get_circuit_corners(round_number)
+    except Exception:
+        return empty
+    valid_corners = sorted(
+        [c for c in corners if c.get("distance_m") is not None],
+        key=lambda c: c["distance_m"],
+    )
+    if not valid_corners:
+        return empty
+
+    # A corner from ``get_circuit_corners`` only carries a single
+    # distance_m (its apex/marker position). Treat ±150m around that as
+    # the corner's footprint — close enough for marker copy and matches
+    # the granularity FastF1 returns.
+    CORNER_RADIUS_M = 150.0
+    for corner in valid_corners:
+        if abs(corner["distance_m"] - float(distance_m)) <= CORNER_RADIUS_M:
+            label = _corner_label(corner)
+            return {
+                "corner_number": corner.get("number"),
+                "corner_name": label,
+                "location_label": label or fallback_label,
+            }
+
+    # Between corners → straight. Find bracketing pair.
+    previous_corner = None
+    next_corner = None
+    for corner in valid_corners:
+        if corner["distance_m"] <= distance_m:
+            previous_corner = corner
+        if next_corner is None and corner["distance_m"] >= distance_m:
+            next_corner = corner
+    prev_label = _corner_label(previous_corner)
+    next_label = _corner_label(next_corner)
+    if prev_label and next_label:
+        straight = f"{prev_label} → {next_label} straight"
+    elif next_label:
+        straight = f"approach to {next_label}"
+    elif prev_label:
+        straight = f"run out of {prev_label}"
+    else:
+        straight = fallback_label
+    return {
+        "corner_number": None,
+        "corner_name": None,
+        "location_label": straight,
+    }
 
 
 def _base_location_context(distance_m: int | float | None) -> dict:
-    label, plain = _lap_region(distance_m)
+    label, plain = _distance_fallback_label(distance_m)
     return {
         "label": label,
         "plain": plain,
@@ -3626,6 +3698,7 @@ def _summarize_telemetry_battle(
     sector_boundary_distances: list | tuple | None = None,
     top_k: int = 4,
     min_spacing_m: float = 200.0,
+    round_number: int | None = None,
 ) -> dict | None:
     """Two-sided telemetry-battle summary.
 
@@ -3712,6 +3785,26 @@ def _summarize_telemetry_battle(
     # left-to-right around the lap. The "primary" remains the largest by
     # absolute time gain — we expose both orderings.
     picked.sort(key=lambda c: c["distance_m"])
+
+    # Enrich each picked marker with a corner / straight label so widget
+    # prose can say "Turn 11" instead of "around 4700m". Best-effort:
+    # the resolver returns a distance-fallback label if corner data is
+    # unavailable for the round.
+    if round_number is not None:
+        for marker in picked:
+            corner_info = _resolve_corner_for_distance(round_number, marker["distance_m"])
+            marker["corner_number"] = corner_info["corner_number"]
+            marker["corner_name"] = corner_info["corner_name"]
+            marker["location_label"] = corner_info["location_label"]
+    else:
+        # No round context — still set the keys so consumers don't need
+        # to guard for missing fields. location_label falls back to the
+        # raw distance phrase.
+        for marker in picked:
+            fallback, _ = _distance_fallback_label(marker["distance_m"])
+            marker["corner_number"] = None
+            marker["corner_name"] = None
+            marker["location_label"] = fallback
 
     # Build sector_reconciliation: sector gap minus marker contribution.
     sector_reconciliation: dict[str, dict] = {}
@@ -4018,6 +4111,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
         driver_a_code,
         driver_b_code,
         sector_boundary_distances=sector_boundary_distances,
+        round_number=round_number,
     )
     top_causes = (telemetry_summary.get("top_causes") or []) if telemetry_summary else []
     sector_reconciliation = (
@@ -4052,8 +4146,19 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
         readable_location = _specific_location_plain(location_context)
         return f" {readable_location}" if readable_location else (f" around {dist}m" if dist is not None else "")
 
-    def _cause_explanation(ct: str, dist: int | None, location_context: dict | None = None) -> str:
+    def _cause_explanation(
+        ct: str,
+        dist: int | None,
+        location_context: dict | None = None,
+        gainer_driver: str | None = None,
+    ) -> str:
+        """Build the per-marker prose. ``gainer_driver`` is the driver who
+        gained at THIS specific marker — narrate from their perspective
+        even when they are not the overall-faster driver on the lap.
+        """
         loc = _location_phrase(dist, location_context)
+        gainer = gainer_driver or faster_driver
+        loser = driver_b_code if gainer == driver_a_code else driver_a_code
         if ct == "straight_line_speed":
             if is_teammate_comparison:
                 return (
@@ -4062,44 +4167,44 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
                     f"a meaningful car performance gap."
                 )
             return (
-                f"{faster_driver} carries more speed at full throttle late on the straight{loc}, "
+                f"{gainer} carries more speed at full throttle late on the straight{loc}, "
                 f"opening the gap before the braking zone."
             )
         if ct == "straight_line_speed_energy_limited":
             return (
-                f"Late-straight deployment{loc}: {slower_driver} fades while still full throttle, "
-                f"so {faster_driver} keeps accelerating harder before the next braking zone."
+                f"Late-straight deployment{loc}: {loser} fades while still full throttle, "
+                f"so {gainer} keeps accelerating harder before the next braking zone."
             )
         if ct == "braking":
             if is_teammate_comparison:
                 return (
-                    f"Braking technique is the key difference{loc}: {earlier_braker} commits to the brake "
-                    f"earlier while {faster_driver} trails the braking point and carries more entry speed. "
+                    f"Braking technique is the key difference{loc}: {loser} commits to the brake "
+                    f"earlier while {gainer} trails the braking point and carries more entry speed. "
                     f"On identical hardware this is a pure driving style call."
                 )
             return (
-                f"Corner entry{loc}: {earlier_braker} is already on the brake while "
-                f"{faster_driver} is still carrying speed into the zone."
+                f"Corner entry{loc}: {loser} is already on the brake while "
+                f"{gainer} is still carrying speed into the zone."
             )
         if ct == "minimum_speed":
             if is_teammate_comparison:
                 return (
-                    f"Mid-corner minimum speed{loc}: {faster_driver} gives up less speed at the direction change. "
+                    f"Mid-corner minimum speed{loc}: {gainer} gives up less speed at the direction change. "
                     f"Between teammates this points to setup divergence (downforce level, diff, ride height) "
                     f"or a conscious style difference through the apex — not a car advantage."
                 )
             return (
-                f"{faster_driver} gives up less speed mid-corner{loc} and exits with more momentum."
+                f"{gainer} gives up less speed mid-corner{loc} and exits with more momentum."
             )
         if ct == "traction":
             if is_teammate_comparison:
                 return (
-                    f"Traction on exit{loc}: {faster_driver} gets back to full throttle earlier. "
+                    f"Traction on exit{loc}: {gainer} gets back to full throttle earlier. "
                     f"Between teammates this usually comes down to throttle application technique "
                     f"or diff settings — same rear end, different commitment level."
                 )
             return (
-                f"Traction on exit{loc}: {faster_driver} gets back to full speed earlier "
+                f"Traction on exit{loc}: {gainer} gets back to full speed earlier "
                 f"and carries that advantage down the following straight."
             )
         return "Mixed advantages — no single dominant mechanism."
@@ -4218,8 +4323,16 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
             "gear_a": tc.get("gear_a"),
             "gear_b": tc.get("gear_b"),
             "sector": _sector_for_distance(tc["distance_m"]) or tc.get("sector"),
+            "corner_number": tc.get("corner_number"),
+            "corner_name": tc.get("corner_name"),
+            "location_label": tc.get("location_label"),
             "location_context": location_context,
-            "explanation": _cause_explanation(tc["cause_type"], tc["distance_m"], location_context),
+            "explanation": _cause_explanation(
+                tc["cause_type"],
+                tc["distance_m"],
+                location_context,
+                gainer_driver=tc.get("gainer_driver"),
+            ),
         })
 
     decisive_corner = _nearest_corner_label(round_number, decisive_distance)

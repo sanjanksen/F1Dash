@@ -113,11 +113,31 @@ function causeWinner(cause, driverA, driverB, fasterDriver) {
 }
 
 function locationLabel(cause) {
-  return cause.location_context?.label ?? (cause.distance_m != null ? `${cause.distance_m}m` : 'distance n/a')
+  // Prefer the marker's own corner-aware location_label, then the
+  // location_context label, finally a raw-distance fallback. Vague
+  // "late/middle/early in the lap" phrasing has been removed in favour
+  // of a real anchor (corner name or distance).
+  return (
+    cause.location_label
+    ?? cause.corner_name
+    ?? cause.location_context?.label
+    ?? (cause.distance_m != null ? `${cause.distance_m}m` : 'distance n/a')
+  )
 }
 
 function locationPlain(cause) {
-  return cause.location_context?.plain ?? (typeof cause.distance_m === 'number' ? `at ${cause.distance_m}m` : '')
+  // Same precedence as locationLabel but choose phrasing that reads
+  // naturally inside a sentence (e.g. "at Turn 11").
+  if (cause.corner_name) return `at ${cause.corner_name}`
+  if (cause.location_label) {
+    // location_label can be "Turn 11", "T8 → T9 straight", or "around 4700m".
+    // "around 4700m" already reads inline; corner-style labels need "at ".
+    return cause.location_label.startsWith('around ')
+      ? cause.location_label
+      : `at ${cause.location_label}`
+  }
+  if (cause.location_context?.plain) return cause.location_context.plain
+  return typeof cause.distance_m === 'number' ? `around ${cause.distance_m}m` : ''
 }
 
 function causeDescription(cause, driverA, driverB, fasterDriver) {
@@ -162,7 +182,19 @@ function SectorBar({ label, sectorData, maxAbsGap, driverA, driverB }) {
 
 function MechanismRow({ cause, active, driverA, driverB, fasterDriver, onMouseEnter, onMouseLeave }) {
   const { cause_type, delta_speed_kph, explanation, time_gained_s } = cause
-  const timeHeadline = formatTimeMagnitude(time_gained_s)
+  // ``time_gained_s`` is signed (driver_a − driver_b). For the headline
+  // we want the GAINER's gain rendered as positive — the "X gained"
+  // badge already communicates direction. Showing "−0.24s" next to a
+  // "NOR gained" label was the sign-confusion bug.
+  const timeMagnitude = typeof time_gained_s === 'number'
+    ? formatTimeMagnitude(Math.abs(time_gained_s))
+    : null
+  // formatTimeMagnitude omits the leading "+"; add it for the gainer's
+  // gain so the value reads unambiguously as a positive delta in their
+  // favour ("+0.24s for NOR").
+  const timeHeadline = timeMagnitude && !timeMagnitude.startsWith('≈')
+    ? `+${timeMagnitude}`
+    : timeMagnitude
   const kphSupport = typeof delta_speed_kph === 'number' ? `${Math.abs(delta_speed_kph).toFixed(1)} kph` : null
   const mechanism = CAUSE_LABELS[cause_type] ?? cause_type ?? 'Mixed'
   const description = causeDescription(cause, driverA, driverB, fasterDriver)
