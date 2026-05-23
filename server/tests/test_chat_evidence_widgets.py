@@ -94,3 +94,71 @@ def test_evidence_cross_feature_orchestration_preserved():
     ]
     widgets = chat._widgets_from_analysis_evidence({}, evidence)
     assert any(w.get("type") == "qualifying_battle" for w in widgets)
+
+
+def test_grip_commitment_carries_time_gained_s_into_quali_battle():
+    """analyze_cornering_loads per_corner records with time_gained_s must
+    survive _make_grip_commitment_summary and the cross-feature merge into
+    the qualifying_battle widget."""
+    from features.registry import discover_features
+    discover_features()
+    import chat
+
+    cornering_result = {
+        "available": True,
+        "driver_a": "NOR", "driver_b": "PIA",
+        "event": "Imola GP", "session": "Q",
+        "summary": {
+            "NOR": {"avg_ggv_util_pct": 92.0, "avg_load_variance": 0.041,
+                    "avg_throttle_acceptance_pct": 38.0,
+                    "avg_corrections_per_corner": 2.1,
+                    "avg_envelope_time_pct": 21.0,
+                    "avg_entry_bravery_pct": 28.0,
+                    "avg_trail_brake_pct": 18.0},
+            "PIA": {"avg_ggv_util_pct": 88.0, "avg_load_variance": 0.058,
+                    "avg_throttle_acceptance_pct": 33.0,
+                    "avg_corrections_per_corner": 3.0,
+                    "avg_envelope_time_pct": 18.0,
+                    "avg_entry_bravery_pct": 24.0,
+                    "avg_trail_brake_pct": 16.0},
+        },
+        "per_corner": [
+            {
+                "corner_index": 3, "entry_dist_m": 1480,
+                "NOR": {"apex_speed_kph": 130.0},
+                "PIA": {"apex_speed_kph": 121.0},
+                "corner_length_m": 120.0,
+                "time_gained_s": 0.085,
+                "time_gained_estimate": False,
+            },
+            {
+                "corner_index": 7, "entry_dist_m": 2700,
+                "NOR": {"apex_speed_kph": 90.0},
+                "PIA": {"apex_speed_kph": 92.0},
+                "corner_length_m": 80.0,
+                "time_gained_s": -0.018,
+                "time_gained_estimate": False,
+            },
+        ],
+    }
+
+    evidence = [
+        {"tool": "analyze_cornering_loads", "result": cornering_result},
+        {"tool": "analyze_qualifying_battle", "result": {
+            "available": True,
+            "driver_a": "NOR", "driver_b": "PIA",
+            "faster_driver": "NOR",
+            "overall_gap_s": 0.12,
+            "decisive_sector": "Sector 1",
+            "decisive_sector_gap_s": 0.10,
+        }},
+    ]
+    widgets = chat._widgets_from_analysis_evidence({}, evidence)
+    quali = next(w for w in widgets if w.get("type") == "qualifying_battle")
+    grip = quali.get("grip_commitment")
+    assert grip is not None, "grip_commitment must be merged into the qualifying_battle widget"
+    records = grip.get("corner_time_records") or []
+    assert len(records) == 2
+    assert records[0]["time_gained_s"] == 0.085
+    assert records[1]["time_gained_s"] == -0.018
+    assert grip["total_time_gained_s"] is not None

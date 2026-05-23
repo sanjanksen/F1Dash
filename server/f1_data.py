@@ -6698,6 +6698,7 @@ def _corner_metrics(lat_g: np.ndarray, long_g: np.ndarray, speed_kph: np.ndarray
         "trail_brake_pct": trail_brake_pct,
         "entry_dist_m": round(float(seg_dist[0]), 0),
         "exit_dist_m": round(float(seg_dist[-1]), 0),
+        "apex_speed_kph": round(float(seg_v[apex_idx_local]), 1),
         "ggv_util_pct": ggv_util_pct,
         "envelope_time_pct": envelope_time_pct,
         "throttle_acceptance_pct": throttle_acceptance_pct,
@@ -6817,12 +6818,38 @@ def analyze_cornering_loads(round_number: int, session_type: str,
 
     aligned = _align_corners(corners_a, dist_a, corners_b, dist_b)
 
+    # Per-corner time-gained: two-point apex-speed approximation over
+    # 0.4 * corner_length_m. Same 0.4 heuristic used in compare_corner_profiles.
+    GRIP_CORNER_TIME_WINDOW_FRACTION = 0.4
+    GRIP_CORNER_DEFAULT_LENGTH_M = 80.0
+
     per_corner = []
     for i, (ca, cb) in enumerate(aligned):
         ma = _corner_metrics(lat_g_a, long_g_a, spd_a, dist_a, ca[0], ca[1],
                              envelope=envelope, throttle=throttle_a)
         mb = _corner_metrics(lat_g_b, long_g_b, spd_b, dist_b, cb[0], cb[1],
                              envelope=envelope, throttle=throttle_b)
+
+        apex_a = ma.get("apex_speed_kph")
+        apex_b = mb.get("apex_speed_kph")
+        # Corner length is the longer driver-zone (covers the full event).
+        len_a = (ma.get("exit_dist_m") or 0) - (ma.get("entry_dist_m") or 0)
+        len_b = (mb.get("exit_dist_m") or 0) - (mb.get("entry_dist_m") or 0)
+        corner_length_m = max(float(len_a), float(len_b)) if (len_a or len_b) else None
+        estimate = corner_length_m is None or corner_length_m <= 0
+        eff_len = corner_length_m if (corner_length_m and corner_length_m > 0) else GRIP_CORNER_DEFAULT_LENGTH_M
+        window_m = eff_len * GRIP_CORNER_TIME_WINDOW_FRACTION
+
+        time_gained_s = None
+        if apex_a is not None and apex_b is not None:
+            winner_kph = max(apex_a, apex_b)
+            loser_kph = min(apex_a, apex_b)
+            magnitude = _compute_time_gained_over_window(winner_kph, loser_kph, window_m)
+            if magnitude is not None:
+                # Positive = code_a (driver_a) gained time.
+                sign = 1.0 if apex_a >= apex_b else -1.0
+                time_gained_s = round(sign * magnitude, 4)
+
         per_corner.append({
             "corner_index": i + 1,
             "entry_dist_m": int(ma["entry_dist_m"]),
@@ -6836,6 +6863,9 @@ def analyze_cornering_loads(round_number: int, session_type: str,
             "envelope_time_delta_pct": round((ma.get("envelope_time_pct") or 0.0) - (mb.get("envelope_time_pct") or 0.0), 1),
             "throttle_acceptance_delta_pct": round((ma.get("throttle_acceptance_pct") or 0.0) - (mb.get("throttle_acceptance_pct") or 0.0), 1),
             "entry_bravery_delta_pct": round((ma.get("entry_bravery_pct") or 0.0) - (mb.get("entry_bravery_pct") or 0.0), 1),
+            "corner_length_m": corner_length_m,
+            "time_gained_s": time_gained_s,
+            "time_gained_estimate": bool(estimate),
         })
 
     # Summary stats

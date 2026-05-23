@@ -194,6 +194,29 @@ def _make_grip_commitment_summary(result: dict) -> dict | None:
         _row2("technique",  "corrections per corner",        corr_a, corr_b, "count", False, "smoother"),
     ] if r is not None]
 
+    per_corner = result.get("per_corner") or []
+    corner_time_records = []
+    total_time_gained_s = 0.0
+    any_time_gained = False
+    for c in per_corner:
+        tg = c.get("time_gained_s")
+        if tg is None:
+            continue
+        any_time_gained = True
+        corner_time_records.append({
+            "corner_index": c.get("corner_index"),
+            "entry_dist_m": c.get("entry_dist_m"),
+            "time_gained_s": tg,
+            "time_gained_estimate": bool(c.get("time_gained_estimate")),
+            "corner_length_m": c.get("corner_length_m"),
+            "apex_speed_a_kph": (c.get(driver_a) or {}).get("apex_speed_kph"),
+            "apex_speed_b_kph": (c.get(driver_b) or {}).get("apex_speed_kph"),
+        })
+        if tg > 0:
+            total_time_gained_s += tg
+        else:
+            total_time_gained_s -= abs(tg)
+
     return {
         "driver_a": driver_a,
         "driver_b": driver_b,
@@ -203,6 +226,8 @@ def _make_grip_commitment_summary(result: dict) -> dict | None:
         "data_rows": data_rows,
         "narrative": result.get("narrative"),
         "caveat": result.get("caveat"),
+        "corner_time_records": corner_time_records,
+        "total_time_gained_s": round(total_time_gained_s, 4) if any_time_gained else None,
     }
 
 
