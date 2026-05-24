@@ -4252,13 +4252,30 @@ def _classify_decisive_sector(
     return {"decisive_sector": None, "split_sector_lap": True}
 
 
+def _session_year(session) -> int:
+    """Extract the calendar year from a FastF1 session in a robust way.
+
+    Mock sessions in unit tests set `session.event = {'Year': 2025}`; real
+    FastF1 sessions expose it via `session.event['EventDate'].year`. Try
+    the explicit 'Year' key first, then fall back to EventDate.year.
+    """
+    try:
+        return int(session.event["Year"])
+    except (KeyError, TypeError, ValueError):
+        pass
+    try:
+        return int(session.event["EventDate"].year)
+    except (KeyError, AttributeError, TypeError, ValueError):
+        return 0
+
+
 def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, session_type: str = "Q") -> dict:
     """
     Backend-derived causal summary for a qualifying battle.
     Explains where the time was gained and the most likely mechanism.
     """
     session, compared_segment, chosen_laps = _get_comparable_qualifying_laps(round_number, [driver_a, driver_b], session_type)
-    year = int(session.event["Year"])
+    year = _session_year(session)
     lap_a = chosen_laps[driver_a.upper()]
     lap_b = chosen_laps[driver_b.upper()]
 

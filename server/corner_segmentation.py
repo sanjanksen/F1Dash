@@ -340,9 +340,18 @@ def _load_multiviewer_corners(session) -> list[dict]:
 
 
 def _load_reference_lap_xy(session) -> tuple[np.ndarray, np.ndarray]:
+    """Return the fastest lap's X/Y position in meters.
+
+    FastF1 publishes position data in units of decimeters (matching the
+    raw F1 timing-feed coordinate system). Divide by 10 so arc-length
+    integration matches MultiViewer's corner Distance values, which are
+    already in meters.
+    """
     lap = session.laps.pick_fastest()
     pos = lap.get_pos_data()
-    return np.asarray(pos["X"], dtype=float), np.asarray(pos["Y"], dtype=float)
+    x = np.asarray(pos["X"], dtype=float) * 0.1
+    y = np.asarray(pos["Y"], dtype=float) * 0.1
+    return x, y
 
 
 def _cache_path(year: int, round_number: int) -> str:

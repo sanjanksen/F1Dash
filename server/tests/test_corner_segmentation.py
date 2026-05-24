@@ -412,7 +412,10 @@ def test_get_corner_regions_writes_current_schema_on_rebuild(tmp_path, monkeypat
         for i, m in enumerate(mv)
     ]
     fake_lap = MagicMock()
-    fake_lap.get_pos_data.return_value = {"X": x, "Y": y}
+    # FastF1 publishes pos data in decimeters; _load_reference_lap_xy
+    # scales by 0.1 to get meters. Our synthetic fixture is already in
+    # meters, so we pre-multiply by 10 to match the real-FastF1 contract.
+    fake_lap.get_pos_data.return_value = {"X": x * 10.0, "Y": y * 10.0}
     fake_session.laps.pick_fastest.return_value = fake_lap
     with patch.object(cs, "_load_session", return_value=fake_session):
         cs.get_corner_regions(2025, 4)
