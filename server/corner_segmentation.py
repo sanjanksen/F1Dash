@@ -58,6 +58,34 @@ class CornerRegion:
     sign: int
 
 
+class SegmentationInputError(ValueError):
+    """Raised when input data is too sparse or corrupt to segment safely."""
+
+
+def _clean_xy(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Drop non-finite rows and zero-arc-length duplicates.
+
+    Raises SegmentationInputError if fewer than MIN_RAW_SAMPLES rows
+    survive — caller is expected to fall back to a legacy resolver.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    finite = np.isfinite(x) & np.isfinite(y)
+    x = x[finite]
+    y = y[finite]
+    if len(x) < 2:
+        raise SegmentationInputError(f"only {len(x)} finite samples")
+    keep = np.ones(len(x), dtype=bool)
+    keep[1:] = (x[1:] != x[:-1]) | (y[1:] != y[:-1])
+    x = x[keep]
+    y = y[keep]
+    if len(x) < MIN_RAW_SAMPLES:
+        raise SegmentationInputError(
+            f"only {len(x)} valid samples after cleaning (need >= {MIN_RAW_SAMPLES})"
+        )
+    return x, y
+
+
 def get_corner_regions(year: int, round_number: int) -> list[CornerRegion]:
     raise NotImplementedError
 
