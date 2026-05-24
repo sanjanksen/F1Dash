@@ -1238,6 +1238,50 @@ def test_resolve_corner_for_distance_handles_corner_label_suffix():
     assert result["location_label"] == "Turn 8a"
 
 
+def test_resolve_corner_for_distance_delegates_to_segmentation():
+    seg_return = {
+        "corner_number": 18,
+        "corner_name": "Turn 18",
+        "location_label": "Turn 18",
+    }
+    with patch("corner_segmentation.resolve_corner_for_distance", return_value=seg_return) as seg:
+        result = f1_data._resolve_corner_for_distance(6, 4900, year=2025)
+    seg.assert_called_once_with(2025, 6, 4900.0)
+    assert result["corner_number"] == 18
+
+
+def test_resolve_corner_for_distance_skips_segmentation_when_year_missing():
+    with patch("corner_segmentation.resolve_corner_for_distance") as seg, \
+         patch("f1_data.get_circuit_corners", return_value=[
+             {"number": 17, "distance_m": 4830},
+             {"number": 18, "distance_m": 4967},
+         ]):
+        result = f1_data._resolve_corner_for_distance(6, 4900)
+    seg.assert_not_called()
+    assert result["corner_number"] == 18
+
+
+def test_resolve_corner_for_distance_falls_back_on_segmentation_error():
+    with patch("corner_segmentation.resolve_corner_for_distance",
+               side_effect=RuntimeError("no pos data")), \
+         patch("f1_data.get_circuit_corners", return_value=[
+             {"number": 17, "distance_m": 4830},
+             {"number": 18, "distance_m": 4967},
+         ]):
+        result = f1_data._resolve_corner_for_distance(6, 4900, year=2025)
+    assert result["corner_number"] == 18
+
+
+def test_resolve_corner_for_distance_falls_back_on_empty_segmentation():
+    seg_return = {"corner_number": None, "corner_name": None, "location_label": None}
+    with patch("corner_segmentation.resolve_corner_for_distance", return_value=seg_return), \
+         patch("f1_data.get_circuit_corners", return_value=[
+             {"number": 18, "distance_m": 4967},
+         ]):
+        result = f1_data._resolve_corner_for_distance(6, 4900, year=2025)
+    assert result["corner_number"] == 18
+
+
 def test_resolve_corner_for_distance_picks_nearest_when_footprints_overlap():
     # Miami's T17 (4830m) and T18 (4967m) are 137m apart — both within
     # the ±150m radius of a marker at 4900m. The resolver must pick the

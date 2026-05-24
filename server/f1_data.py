@@ -3449,6 +3449,11 @@ def _resolve_corner_for_distance(
 ) -> dict:
     """Resolve a telemetry distance to a named-corner / straight label.
 
+    When ``year`` is provided and positive, delegates to the curvature-
+    based segmentation module. On any failure (or when segmentation
+    returns no useful label) falls back to the legacy nearest-apex
+    heuristic against FastF1's MultiViewer data.
+
     Returns a dict with keys:
       - corner_number: int | None (set when the distance lies between a
         corner's entry and exit range)
@@ -3464,6 +3469,20 @@ def _resolve_corner_for_distance(
     empty = {"corner_number": None, "corner_name": None, "location_label": fallback_label}
     if not _is_finite_distance(distance_m):
         return empty
+    # When year is known, prefer curvature-based segmentation.
+    if year is not None and year > 0:
+        try:
+            import corner_segmentation
+            seg_result = corner_segmentation.resolve_corner_for_distance(
+                year, round_number, float(distance_m)
+            )
+            if seg_result.get("location_label"):
+                return seg_result
+        except Exception as exc:  # noqa: BLE001 — log and fall back
+            logger.debug(
+                "corner_segmentation failed for year=%s round=%s d=%s: %s",
+                year, round_number, distance_m, exc,
+            )
     try:
         corners = get_circuit_corners(round_number)
     except Exception:
