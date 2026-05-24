@@ -66,3 +66,29 @@ def test_resample_returns_true_total_when_not_divisible():
     assert dx == pytest.approx(4.0)
     # True total length = 11m, not 12m (which would be s_new[-1] + spacing).
     assert total == pytest.approx(11.0)
+
+
+def test_curvature_is_zero_for_straight_line():
+    x = np.linspace(0, 100, 51)
+    y = np.zeros_like(x)
+    kappa = cs._compute_curvature(x, y, spacing_m=2.0)
+    assert np.all(np.abs(kappa[10:-10]) < 1e-3)
+
+
+def test_curvature_matches_circle_radius():
+    R = 50.0
+    arc_length = math.pi * R
+    s = np.arange(0.0, arc_length + 1e-9, 1.0)
+    theta = s / R
+    x = R * np.cos(theta)
+    y = R * np.sin(theta)
+    kappa = cs._compute_curvature(x, y, spacing_m=1.0)
+    interior = kappa[30:-30]
+    assert np.median(np.abs(interior)) == pytest.approx(1.0 / R, rel=0.05)
+
+
+def test_curvature_returns_zeros_for_too_few_samples():
+    x = np.array([0.0, 1.0, 2.0])
+    y = np.array([0.0, 0.0, 0.0])
+    kappa = cs._compute_curvature(x, y, spacing_m=1.0)
+    assert kappa.tolist() == [0.0, 0.0, 0.0]

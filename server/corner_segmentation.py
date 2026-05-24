@@ -22,6 +22,7 @@ from typing import Optional
 
 import numpy as np
 from scipy.interpolate import interp1d
+from scipy.signal import savgol_filter
 
 LOGGER = logging.getLogger(__name__)
 
@@ -109,6 +110,27 @@ def _resample_uniform(
     x_interp = interp1d(s, x, kind="cubic", assume_sorted=True)
     y_interp = interp1d(s, y, kind="cubic", assume_sorted=True)
     return x_interp(s_new), y_interp(s_new), s_new, float(spacing_m), total
+
+
+def _compute_curvature(
+    x: np.ndarray, y: np.ndarray, spacing_m: float
+) -> np.ndarray:
+    """Signed curvature κ(s) for uniformly resampled (x, y).
+
+    Sign convention: positive κ = left turn (counter-clockwise),
+    negative = right turn.
+    """
+    n = len(x)
+    window = min(SAVGOL_WINDOW, n if n % 2 == 1 else n - 1)
+    if window < 5 or window <= SAVGOL_POLY:
+        return np.zeros_like(x)
+    dx = savgol_filter(x, window, SAVGOL_POLY, deriv=1, delta=spacing_m)
+    dy = savgol_filter(y, window, SAVGOL_POLY, deriv=1, delta=spacing_m)
+    ddx = savgol_filter(x, window, SAVGOL_POLY, deriv=2, delta=spacing_m)
+    ddy = savgol_filter(y, window, SAVGOL_POLY, deriv=2, delta=spacing_m)
+    denom = (dx * dx + dy * dy) ** 1.5
+    denom = np.where(denom < 1e-9, 1e-9, denom)
+    return (dx * ddy - dy * ddx) / denom
 
 
 def get_corner_regions(year: int, round_number: int) -> list[CornerRegion]:
