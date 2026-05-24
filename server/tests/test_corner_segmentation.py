@@ -208,3 +208,58 @@ def test_detect_regions_does_not_merge_real_chicane():
     kappa[(s >= 170) & (s < 220)] = 0.02
     regions = cs._detect_regions(s, kappa, kappa_enter=0.015, kappa_exit=0.01, lap_length_m=300.0)
     assert len(regions) == 2
+
+
+def test_tag_regions_one_to_one_matching():
+    regions = [
+        (100.0, 130.0, 160.0, 1),
+        (400.0, 450.0, 500.0, -1),
+    ]
+    multiviewer = [
+        {"number": 1, "letter": "", "distance_m": 132.0},
+        {"number": 2, "letter": "", "distance_m": 451.0},
+    ]
+    tagged = cs._tag_regions(regions, multiviewer, lap_length_m=600.0)
+    assert tagged[0].corner_number == 1
+    assert tagged[1].corner_number == 2
+
+
+def test_tag_regions_does_not_duplicate_labels_when_apexes_are_close():
+    regions = [
+        (100.0, 120.0, 135.0, 1),
+        (140.0, 160.0, 175.0, 1),
+    ]
+    multiviewer = [
+        {"number": 4, "letter": "", "distance_m": 122.0},
+    ]
+    tagged = cs._tag_regions(regions, multiviewer, lap_length_m=300.0)
+    numbers = [r.corner_number for r in tagged]
+    assert numbers.count(4) == 1
+    assert numbers.count(None) == 1
+
+
+def test_tag_regions_handles_chicane_subcorners():
+    regions = [
+        (100.0, 120.0, 135.0, 1),
+        (140.0, 160.0, 175.0, -1),
+    ]
+    multiviewer = [
+        {"number": 4, "letter": "a", "distance_m": 122.0},
+        {"number": 4, "letter": "b", "distance_m": 162.0},
+    ]
+    tagged = cs._tag_regions(regions, multiviewer, lap_length_m=300.0)
+    assert tagged[0].label_suffix == "a"
+    assert tagged[1].label_suffix == "b"
+    assert tagged[0].corner_number == 4
+    assert tagged[1].corner_number == 4
+
+
+def test_tag_regions_handles_wrap_around_apex_for_distance_check():
+    regions = [
+        (950.0, 10.0, 50.0, 1),
+    ]
+    multiviewer = [
+        {"number": 1, "letter": "", "distance_m": 5.0},
+    ]
+    tagged = cs._tag_regions(regions, multiviewer, lap_length_m=1000.0)
+    assert tagged[0].corner_number == 1

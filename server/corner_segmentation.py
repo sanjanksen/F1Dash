@@ -223,6 +223,73 @@ def _detect_regions(
     return raw
 
 
+def _distance_inside_region(
+    region: tuple[float, float, float, int], distance: float, lap_length_m: float
+) -> bool:
+    entry, _apex, exit_, _sign = region
+    if entry <= exit_:
+        return entry <= distance <= exit_
+    return distance >= entry or distance <= exit_
+
+
+def _circular_apex_distance(apex_m: float, mv_dist_m: float, lap_length_m: float) -> float:
+    raw = abs(apex_m - mv_dist_m)
+    if lap_length_m <= 0:
+        return raw
+    return min(raw, lap_length_m - raw)
+
+
+def _tag_regions(
+    regions: list[tuple[float, float, float, int]],
+    multiviewer_corners: list[dict],
+    lap_length_m: float,
+) -> list[CornerRegion]:
+    """Greedy one-to-one match: each region claims at most one MV corner."""
+    unmatched_mv = list(multiviewer_corners)
+    assignments: list[Optional[dict]] = [None] * len(regions)
+
+    # Pass 1: regions with one or more MV corners inside.
+    for idx, region in enumerate(regions):
+        inside = [
+            c for c in unmatched_mv
+            if _distance_inside_region(region, float(c["distance_m"]), lap_length_m)
+        ]
+        if inside:
+            chosen = min(
+                inside,
+                key=lambda c: _circular_apex_distance(region[1], float(c["distance_m"]), lap_length_m),
+            )
+            assignments[idx] = chosen
+            unmatched_mv.remove(chosen)
+
+    # Pass 2: regions still without a match — closest unclaimed by circular distance.
+    for idx, region in enumerate(regions):
+        if assignments[idx] is not None or not unmatched_mv:
+            continue
+        chosen = min(
+            unmatched_mv,
+            key=lambda c: _circular_apex_distance(region[1], float(c["distance_m"]), lap_length_m),
+        )
+        if _circular_apex_distance(region[1], float(chosen["distance_m"]), lap_length_m) <= 250.0:
+            assignments[idx] = chosen
+            unmatched_mv.remove(chosen)
+
+    tagged: list[CornerRegion] = []
+    for region, chosen in zip(regions, assignments):
+        entry, apex, exit_, sign = region
+        tagged.append(
+            CornerRegion(
+                corner_number=(chosen.get("number") if chosen else None),
+                label_suffix=(chosen.get("letter") or "" if chosen else ""),
+                entry_m=entry,
+                apex_m=apex,
+                exit_m=exit_,
+                sign=sign,
+            )
+        )
+    return tagged
+
+
 def get_corner_regions(year: int, round_number: int) -> list[CornerRegion]:
     raise NotImplementedError
 
