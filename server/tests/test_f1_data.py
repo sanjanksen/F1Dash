@@ -498,10 +498,10 @@ def _make_mock_fastest_lap(driver="NOR", team="McLaren",
     })
 
 
-def _make_mock_session(fastest_laps_by_driver: dict, event_name="Monaco Grand Prix"):
+def _make_mock_session(fastest_laps_by_driver: dict, event_name="Monaco Grand Prix", year=2025):
     """Build a mock FastF1 session given {driver_code: pd.Series}."""
     mock_session = MagicMock()
-    mock_session.event = {'EventName': event_name}
+    mock_session.event = {'EventName': event_name, 'Year': year}
     mock_session.drivers = list(fastest_laps_by_driver.keys())
 
     def pick_drivers(codes):
@@ -1238,6 +1238,23 @@ def test_resolve_corner_for_distance_handles_corner_label_suffix():
     assert result["location_label"] == "Turn 8a"
 
 
+def test_resolve_corner_for_distance_picks_nearest_when_footprints_overlap():
+    # Miami's T17 (4830m) and T18 (4967m) are 137m apart — both within
+    # the ±150m radius of a marker at 4900m. The resolver must pick the
+    # closer apex (T18 @ 67m) rather than the first one in lap order
+    # (T17 @ 70m).
+    corners = [
+        {"number": 17, "distance_m": 4830},
+        {"number": 18, "distance_m": 4967},
+    ]
+    with patch("f1_data.get_circuit_corners", return_value=corners):
+        result = f1_data._resolve_corner_for_distance(1, 4900)
+
+    assert result["corner_number"] == 18
+    assert result["corner_name"] == "Turn 18"
+    assert result["location_label"] == "Turn 18"
+
+
 def test_summarize_telemetry_battle_enriches_markers_with_corner_labels():
     """Picked markers must carry corner_number / corner_name / location_label
     so the widget can display 'Turn 11' instead of 'around 4700m'."""
@@ -1507,8 +1524,10 @@ def test_get_circuit_corners():
     })
     mock_circuit_info = MagicMock()
     mock_circuit_info.corners = mock_corners_df
+    mock_session = MagicMock()
+    mock_session.get_circuit_info.return_value = mock_circuit_info
 
-    with patch('f1_data.fastf1.get_circuit_info', return_value=mock_circuit_info):
+    with patch('f1_data._load_session', return_value=mock_session):
         import f1_data
         result = f1_data.get_circuit_corners(8)
 
@@ -3052,7 +3071,7 @@ def test_analyze_qualifying_battle_accepts_sq_session_type():
     import pandas as pd
 
     mock_session = MagicMock()
-    mock_session.event = {"EventName": "Chinese Grand Prix"}
+    mock_session.event = {"EventName": "Chinese Grand Prix", "Year": 2025}
 
     def make_lap(time_s, s1, s2, s3):
         lap = MagicMock()

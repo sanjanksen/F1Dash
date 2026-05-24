@@ -3445,6 +3445,7 @@ def _distance_fallback_label(distance_m: int | float | None) -> tuple[str, str]:
 def _resolve_corner_for_distance(
     round_number: int,
     distance_m: int | float | None,
+    year: int | None = None,
 ) -> dict:
     """Resolve a telemetry distance to a named-corner / straight label.
 
@@ -3478,15 +3479,25 @@ def _resolve_corner_for_distance(
     # distance_m (its apex/marker position). Treat ±150m around that as
     # the corner's footprint — close enough for marker copy and matches
     # the granularity FastF1 returns.
+    # When corner footprints overlap (e.g. Miami T17 @ 4830m and T18 @
+    # 4967m are only 137m apart), pick the corner whose apex is nearest
+    # the distance — not whichever comes first in lap order.
     CORNER_RADIUS_M = 150.0
+    target = float(distance_m)
+    nearest_corner = None
+    nearest_delta = None
     for corner in valid_corners:
-        if abs(corner["distance_m"] - float(distance_m)) <= CORNER_RADIUS_M:
-            label = _corner_label(corner)
-            return {
-                "corner_number": corner.get("number"),
-                "corner_name": label,
-                "location_label": label or fallback_label,
-            }
+        delta = abs(corner["distance_m"] - target)
+        if delta <= CORNER_RADIUS_M and (nearest_delta is None or delta < nearest_delta):
+            nearest_corner = corner
+            nearest_delta = delta
+    if nearest_corner is not None:
+        label = _corner_label(nearest_corner)
+        return {
+            "corner_number": nearest_corner.get("number"),
+            "corner_name": label,
+            "location_label": label or fallback_label,
+        }
 
     # Between corners → straight. Find bracketing pair.
     previous_corner = None
@@ -3622,7 +3633,7 @@ def _cause_explanation(
     return "Mixed advantages — no single dominant mechanism."
 
 
-def _telemetry_location_context(round_number: int, distance_m: int | float | None, cause_type: str | None) -> dict:
+def _telemetry_location_context(round_number: int, distance_m: int | float | None, cause_type: str | None, year: int | None = None) -> dict:
     base = _base_location_context(distance_m)
     if not _is_finite_distance(distance_m):
         return base
@@ -3816,6 +3827,7 @@ def _summarize_telemetry_battle(
     min_spacing_m: float = 200.0,
     round_number: int | None = None,
     authoritative_sector_gaps_s: dict | None = None,
+    year: int | None = None,
 ) -> dict | None:
     """Two-sided telemetry-battle summary.
 
@@ -3932,7 +3944,7 @@ def _summarize_telemetry_battle(
     # unavailable for the round.
     if round_number is not None:
         for marker in picked:
-            corner_info = _resolve_corner_for_distance(round_number, marker["distance_m"])
+            corner_info = _resolve_corner_for_distance(round_number, marker["distance_m"], year=year)
             marker["corner_number"] = corner_info["corner_number"]
             marker["corner_name"] = corner_info["corner_name"]
             marker["location_label"] = corner_info["location_label"]
@@ -4227,6 +4239,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
     Explains where the time was gained and the most likely mechanism.
     """
     session, compared_segment, chosen_laps = _get_comparable_qualifying_laps(round_number, [driver_a, driver_b], session_type)
+    year = int(session.event["Year"])
     lap_a = chosen_laps[driver_a.upper()]
     lap_b = chosen_laps[driver_b.upper()]
 
@@ -4363,6 +4376,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
         sector_boundary_distances=sector_boundary_distances,
         round_number=round_number,
         authoritative_sector_gaps_s=authoritative_sector_gaps_s,
+        year=year,
     )
     top_causes = (telemetry_summary.get("top_causes") or []) if telemetry_summary else []
     sector_reconciliation = (
@@ -4492,7 +4506,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
     decisive_distance = primary_cause["distance_m"] if primary_cause else None
     cause_type = primary_cause["cause_type"] if primary_cause else "mixed"
     primary_location_context = (
-        _telemetry_location_context(round_number, primary_cause["distance_m"], primary_cause["cause_type"])
+        _telemetry_location_context(round_number, primary_cause["distance_m"], primary_cause["cause_type"], year=year)
         if primary_cause else None
     )
     cause_explanation = _cause_explanation(
@@ -4517,7 +4531,7 @@ def analyze_qualifying_battle(round_number: int, driver_a: str, driver_b: str, s
         location_context = (
             primary_location_context
             if tc is primary_cause and primary_location_context is not None
-            else _telemetry_location_context(round_number, tc["distance_m"], tc["cause_type"])
+            else _telemetry_location_context(round_number, tc["distance_m"], tc["cause_type"], year=year)
         )
         cause_explanations.append({
             "cause_type": tc["cause_type"],
