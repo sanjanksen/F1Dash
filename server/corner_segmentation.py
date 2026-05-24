@@ -133,6 +133,96 @@ def _compute_curvature(
     return (dx * ddy - dy * ddx) / denom
 
 
+def _nearest_idx(s: np.ndarray, value: float) -> int:
+    return int(np.argmin(np.abs(s - value)))
+
+
+def _finalize_region(
+    s: np.ndarray,
+    kappa: np.ndarray,
+    start_idx: int,
+    end_idx: int,
+) -> tuple[float, float, float, int]:
+    slice_ = kappa[start_idx : end_idx + 1]
+    apex_local = int(np.argmax(np.abs(slice_)))
+    apex_global = start_idx + apex_local
+    return (
+        float(s[start_idx]),
+        float(s[apex_global]),
+        float(s[end_idx]),
+        1 if kappa[apex_global] >= 0 else -1,
+    )
+
+
+def _detect_regions(
+    s: np.ndarray,
+    kappa: np.ndarray,
+    kappa_enter: float,
+    kappa_exit: float,
+    lap_length_m: float,
+) -> list[tuple[float, float, float, int]]:
+    """Walk κ(s) with hysteresis; merge wrap-around regions at s=0.
+
+    Order: hysteresis walk -> debounce-merge -> wrap-merge -> width-filter.
+
+    Each region is (entry_m, apex_m, exit_m, sign). For wrap-around
+    regions entry_m > exit_m. Sign is +1 for left turn, -1 for right.
+    """
+    abs_k = np.abs(kappa)
+    in_corner = False
+    start_idx = 0
+    raw: list[tuple[float, float, float, int]] = []
+    for i in range(len(s)):
+        if not in_corner and abs_k[i] >= kappa_enter:
+            in_corner = True
+            start_idx = i
+        elif in_corner and abs_k[i] < kappa_exit:
+            in_corner = False
+            raw.append(_finalize_region(s, kappa, start_idx, i - 1))
+    if in_corner:
+        raw.append(_finalize_region(s, kappa, start_idx, len(s) - 1))
+
+    # Debounce pass: merge same-sign adjacent regions with gap < DEBOUNCE_GAP_M.
+    # Done before the wrap-around merge so the wrap merge sees fully-merged halves.
+    merged: list[tuple[float, float, float, int]] = []
+    for region in raw:
+        if merged and merged[-1][3] == region[3] and region[0] - merged[-1][2] < DEBOUNCE_GAP_M:
+            prev = merged[-1]
+            prev_apex_k = abs(kappa[_nearest_idx(s, prev[1])])
+            cur_apex_k = abs(kappa[_nearest_idx(s, region[1])])
+            new_apex = prev[1] if prev_apex_k >= cur_apex_k else region[1]
+            merged[-1] = (prev[0], new_apex, region[2], prev[3])
+        else:
+            merged.append(region)
+    raw = merged
+
+    # Wrap-around merge: MUST run before the width filter — otherwise two
+    # 18m halves of a real wrap-around corner get filtered as noise before
+    # they can combine into a single 36m region.
+    if len(raw) >= 2:
+        first = raw[0]
+        last = raw[-1]
+        start_at_zero = first[0] <= 2.0
+        end_at_lap_end = last[2] >= lap_length_m - 2.0
+        same_sign = first[3] == last[3]
+        if start_at_zero and end_at_lap_end and same_sign:
+            entry = last[0]
+            exit_ = first[2]
+            apex = first[1] if abs(kappa[_nearest_idx(s, first[1])]) >= abs(kappa[_nearest_idx(s, last[1])]) else last[1]
+            raw = [(entry, apex, exit_, first[3])] + raw[1:-1]
+
+    # Width filter: runs after wrap-merge so a real wrap-around corner
+    # that produces two narrow halves keeps its full merged width.
+    def _region_width(region):
+        entry, _apex, exit_, _sign = region
+        if entry <= exit_:
+            return exit_ - entry
+        return (lap_length_m - entry) + exit_
+
+    raw = [r for r in raw if _region_width(r) >= MIN_REGION_WIDTH_M]
+    return raw
+
+
 def get_corner_regions(year: int, round_number: int) -> list[CornerRegion]:
     raise NotImplementedError
 

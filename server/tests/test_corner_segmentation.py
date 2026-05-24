@@ -92,3 +92,119 @@ def test_curvature_returns_zeros_for_too_few_samples():
     y = np.array([0.0, 0.0, 0.0])
     kappa = cs._compute_curvature(x, y, spacing_m=1.0)
     assert kappa.tolist() == [0.0, 0.0, 0.0]
+
+
+def test_detect_regions_picks_single_corner_from_kappa_bump():
+    s = np.arange(0, 280, 2.0)
+    kappa = np.zeros_like(s)
+    kappa[(s >= 100) & (s < 180)] = 0.02
+    regions = cs._detect_regions(s, kappa, kappa_enter=0.015, kappa_exit=0.01, lap_length_m=float(s[-1]))
+    assert len(regions) == 1
+    entry, apex, exit_, sign = regions[0]
+    assert entry == pytest.approx(100.0, abs=2.0)
+    assert exit_ == pytest.approx(178.0, abs=2.0)
+    assert 100.0 <= apex <= 180.0
+    assert sign == 1
+
+
+def test_detect_regions_separates_chicane_with_opposite_signs():
+    s = np.arange(0, 300, 2.0)
+    kappa = np.zeros_like(s)
+    kappa[(s >= 100) & (s < 140)] = 0.02
+    kappa[(s >= 160) & (s < 200)] = -0.02
+    regions = cs._detect_regions(s, kappa, kappa_enter=0.015, kappa_exit=0.01, lap_length_m=float(s[-1]))
+    assert len(regions) == 2
+    assert regions[0][3] == 1
+    assert regions[1][3] == -1
+
+
+def test_detect_regions_handles_open_region_at_lap_start():
+    s = np.arange(0, 200, 2.0)
+    kappa = np.zeros_like(s)
+    kappa[s < 50] = 0.02
+    regions = cs._detect_regions(s, kappa, kappa_enter=0.015, kappa_exit=0.01, lap_length_m=float(s[-1]))
+    assert len(regions) == 1
+    assert regions[0][0] == pytest.approx(0.0)
+
+
+def test_detect_regions_handles_open_region_at_lap_end():
+    s = np.arange(0, 200, 2.0)
+    kappa = np.zeros_like(s)
+    kappa[s >= 150] = 0.02
+    regions = cs._detect_regions(s, kappa, kappa_enter=0.015, kappa_exit=0.01, lap_length_m=float(s[-1]))
+    assert len(regions) == 1
+    entry, apex, exit_, sign = regions[0]
+    assert entry == pytest.approx(150.0, abs=2.0)
+    assert exit_ == pytest.approx(s[-1], abs=2.0)
+
+
+def test_detect_regions_merges_wrap_around_corner():
+    lap_length = 200.0
+    s = np.arange(0, lap_length, 2.0)
+    kappa = np.zeros_like(s)
+    kappa[s < 20] = 0.02
+    kappa[s >= 180] = 0.02
+    regions = cs._detect_regions(s, kappa, kappa_enter=0.015, kappa_exit=0.01, lap_length_m=lap_length)
+    assert len(regions) == 1
+    entry, apex, exit_, sign = regions[0]
+    assert entry == pytest.approx(180.0, abs=2.0)
+    assert exit_ == pytest.approx(18.0, abs=2.0)
+    assert sign == 1
+
+
+def test_detect_regions_does_not_merge_when_only_one_end_active():
+    s = np.arange(0, 200, 2.0)
+    kappa = np.zeros_like(s)
+    # 30m wide so it survives the MIN_REGION_WIDTH_M=20 filter.
+    kappa[s >= 168] = 0.02
+    regions = cs._detect_regions(s, kappa, kappa_enter=0.015, kappa_exit=0.01, lap_length_m=200.0)
+    assert len(regions) == 1
+    entry, apex, exit_, sign = regions[0]
+    assert entry == pytest.approx(168.0, abs=2.0)
+    assert exit_ <= 200.0
+    # Not a wrap-around — entry < exit.
+    assert entry < exit_
+
+
+def test_detect_regions_drops_too_narrow_regions():
+    s = np.arange(0, 200, 2.0)
+    kappa = np.zeros_like(s)
+    kappa[(s >= 30) & (s < 34)] = 0.02
+    kappa[(s >= 100) & (s < 150)] = 0.02
+    regions = cs._detect_regions(s, kappa, kappa_enter=0.015, kappa_exit=0.01, lap_length_m=200.0)
+    assert len(regions) == 1
+    assert regions[0][0] == pytest.approx(100.0, abs=2.0)
+
+
+def test_detect_regions_merges_same_sign_adjacent_after_brief_gap():
+    s = np.arange(0, 200, 2.0)
+    kappa = np.zeros_like(s)
+    kappa[(s >= 100) & (s < 150)] = 0.02
+    kappa[s == 120] = 0.005
+    regions = cs._detect_regions(s, kappa, kappa_enter=0.015, kappa_exit=0.01, lap_length_m=200.0)
+    assert len(regions) == 1
+    entry, apex, exit_, sign = regions[0]
+    assert entry == pytest.approx(100.0, abs=2.0)
+    assert exit_ == pytest.approx(148.0, abs=2.0)
+
+
+def test_detect_regions_wrap_around_corner_survives_width_filter():
+    lap_length = 200.0
+    s = np.arange(0, lap_length, 2.0)
+    kappa = np.zeros_like(s)
+    kappa[s < 18] = 0.02
+    kappa[s >= 182] = 0.02
+    regions = cs._detect_regions(s, kappa, kappa_enter=0.015, kappa_exit=0.01, lap_length_m=lap_length)
+    assert len(regions) == 1
+    entry, apex, exit_, sign = regions[0]
+    assert entry == pytest.approx(182.0, abs=2.0)
+    assert exit_ == pytest.approx(16.0, abs=2.0)
+
+
+def test_detect_regions_does_not_merge_real_chicane():
+    s = np.arange(0, 300, 2.0)
+    kappa = np.zeros_like(s)
+    kappa[(s >= 100) & (s < 140)] = 0.02
+    kappa[(s >= 170) & (s < 220)] = 0.02
+    regions = cs._detect_regions(s, kappa, kappa_enter=0.015, kappa_exit=0.01, lap_length_m=300.0)
+    assert len(regions) == 2
