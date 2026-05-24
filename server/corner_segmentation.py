@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass
 from typing import Optional
 
 import numpy as np
+from scipy.interpolate import interp1d
 
 LOGGER = logging.getLogger(__name__)
 
@@ -84,6 +85,30 @@ def _clean_xy(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
             f"only {len(x)} valid samples after cleaning (need >= {MIN_RAW_SAMPLES})"
         )
     return x, y
+
+
+def _cumulative_arc_length(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    dx = np.diff(x)
+    dy = np.diff(y)
+    seg = np.sqrt(dx * dx + dy * dy)
+    return np.concatenate(([0.0], np.cumsum(seg)))
+
+
+def _resample_uniform(
+    x: np.ndarray, y: np.ndarray, spacing_m: float = RESAMPLE_SPACING_M
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, float]:
+    """Resample (x, y) at exact spacing_m. Returns (x_new, y_new, s_new, spacing, total)."""
+    s = _cumulative_arc_length(x, y)
+    total = float(s[-1])
+    s_new = np.arange(0.0, total + 1e-9, spacing_m)
+    s_new = s_new[s_new <= total]
+    if len(s_new) < 2:
+        raise SegmentationInputError(
+            f"total arc length {total}m too short for spacing {spacing_m}m"
+        )
+    x_interp = interp1d(s, x, kind="cubic", assume_sorted=True)
+    y_interp = interp1d(s, y, kind="cubic", assume_sorted=True)
+    return x_interp(s_new), y_interp(s_new), s_new, float(spacing_m), total
 
 
 def get_corner_regions(year: int, round_number: int) -> list[CornerRegion]:

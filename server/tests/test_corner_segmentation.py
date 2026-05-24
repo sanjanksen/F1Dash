@@ -35,3 +35,34 @@ def test_clean_xy_raises_when_below_minimum_samples():
     y = np.array([0.0, 1.0, 2.0])
     with pytest.raises(cs.SegmentationInputError):
         cs._clean_xy(x, y)
+
+
+def test_cumulative_arc_length_for_straight_line():
+    x = np.array([0.0, 3.0, 6.0, 9.0])
+    y = np.array([0.0, 4.0, 8.0, 12.0])
+    s = cs._cumulative_arc_length(x, y)
+    assert s == pytest.approx([0.0, 5.0, 10.0, 15.0])
+
+
+def test_resample_uses_exact_arange_spacing():
+    x = np.array([0.0, 7.0, 23.0, 50.0])
+    y = np.zeros_like(x)
+    xs, ys, s_new, dx, total = cs._resample_uniform(x, y, spacing_m=5.0)
+    assert s_new[0] == pytest.approx(0.0)
+    assert s_new[-1] <= 50.0
+    deltas = np.diff(s_new)
+    assert np.all(np.abs(deltas - 5.0) < 1e-9)
+    assert dx == pytest.approx(5.0)
+    assert total == pytest.approx(50.0)
+
+
+def test_resample_returns_true_total_when_not_divisible():
+    # 11m straight along x-axis with enough samples for cubic interpolation.
+    x = np.linspace(0.0, 11.0, 5)
+    y = np.zeros_like(x)
+    xs, ys, s_new, dx, total = cs._resample_uniform(x, y, spacing_m=4.0)
+    # s_new sampled at 0, 4, 8 (last <= 11).
+    assert s_new.tolist() == [0.0, 4.0, 8.0]
+    assert dx == pytest.approx(4.0)
+    # True total length = 11m, not 12m (which would be s_new[-1] + spacing).
+    assert total == pytest.approx(11.0)
