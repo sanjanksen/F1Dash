@@ -290,8 +290,207 @@ def _tag_regions(
     return tagged
 
 
+class SegmentationOutputError(ValueError):
+    """Raised when the segmentation output fails validity checks."""
+
+
+def _build_and_validate_regions(
+    x: np.ndarray,
+    y: np.ndarray,
+    multiviewer_corners: list[dict],
+) -> tuple[list[CornerRegion], float]:
+    """Run the full pipeline and validate the result. Returns (regions, lap_length_m)."""
+    x_clean, y_clean = _clean_xy(x, y)
+    x_u, y_u, s_u, spacing, lap_length = _resample_uniform(x_clean, y_clean, RESAMPLE_SPACING_M)
+    kappa = _compute_curvature(x_u, y_u, spacing_m=spacing)
+    abs_k = np.abs(kappa)
+    kappa_enter = float(np.percentile(abs_k, KAPPA_ENTER_PERCENTILE))
+    kappa_exit = float(np.percentile(abs_k, KAPPA_EXIT_PERCENTILE))
+    raw_regions = _detect_regions(s_u, kappa, kappa_enter, kappa_exit, lap_length)
+    tagged = _tag_regions(raw_regions, multiviewer_corners, lap_length)
+
+    if not (MIN_LAP_LENGTH_M <= lap_length <= MAX_LAP_LENGTH_M):
+        raise SegmentationOutputError(
+            f"lap length {lap_length}m outside [{MIN_LAP_LENGTH_M}, {MAX_LAP_LENGTH_M}]"
+        )
+    if not (MIN_REGIONS <= len(tagged) <= MAX_REGIONS):
+        raise SegmentationOutputError(
+            f"detected {len(tagged)} regions outside [{MIN_REGIONS}, {MAX_REGIONS}]"
+        )
+    return tagged, lap_length
+
+
+def _load_session(year: int, round_number: int):
+    """Thin wrapper around fastf1 so tests can patch it."""
+    import fastf1
+    session = fastf1.get_session(year, round_number, "Q")
+    session.load(laps=True, telemetry=True, weather=False, messages=False)
+    return session
+
+
+def _load_multiviewer_corners(session) -> list[dict]:
+    rows = []
+    for _, row in session.get_circuit_info().corners.iterrows():
+        rows.append({
+            "number": int(row["Number"]),
+            "letter": str(row.get("Letter") or "") or "",
+            "distance_m": float(row["Distance"]),
+        })
+    return rows
+
+
+def _load_reference_lap_xy(session) -> tuple[np.ndarray, np.ndarray]:
+    lap = session.laps.pick_fastest()
+    pos = lap.get_pos_data()
+    return np.asarray(pos["X"], dtype=float), np.asarray(pos["Y"], dtype=float)
+
+
+def _cache_path(year: int, round_number: int) -> str:
+    return os.path.join(CACHE_DIR, f"{year}_{round_number}.json")
+
+
+def _read_cache(
+    year: int,
+    round_number: int,
+    accept_legacy: bool = False,
+) -> Optional[tuple[list[CornerRegion], float, list[dict]]]:
+    """Read cached regions for a session.
+
+    Returns None on missing/corrupt/invalid cache. When ``accept_legacy``
+    is True, an older schema cache (no `multiviewer_corners` field) is
+    read in degraded mode with an empty MV list — used as a fallback
+    when a v2 rebuild fails.
+    """
+    path = _cache_path(year, round_number)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path) as f:
+            raw = json.load(f)
+        version = raw.get("schema_version")
+        mv: list[dict] = []
+        if version != SCHEMA_VERSION:
+            if not (accept_legacy and isinstance(version, int) and version >= 1):
+                LOGGER.info(
+                    "corner_regions cache schema mismatch at %s (%s != %s) — rebuilding",
+                    path, version, SCHEMA_VERSION,
+                )
+                return None
+            regions = [CornerRegion(**entry) for entry in raw["regions"]]
+            lap_length = float(raw["lap_length_m"])
+        else:
+            regions = [CornerRegion(**entry) for entry in raw["regions"]]
+            lap_length = float(raw["lap_length_m"])
+            mv = list(raw["multiviewer_corners"])
+
+        # Re-validate values against the same gates as _write_cache.
+        if not (MIN_LAP_LENGTH_M <= lap_length <= MAX_LAP_LENGTH_M):
+            LOGGER.warning(
+                "corner_regions cache at %s has invalid lap_length=%s — ignoring",
+                path, lap_length,
+            )
+            return None
+        tol = max(1e-3, lap_length * 1e-9)
+        for r in regions:
+            for field in (r.entry_m, r.apex_m, r.exit_m):
+                if field < -tol or field > lap_length + tol:
+                    LOGGER.warning(
+                        "corner_regions cache at %s has out-of-bounds boundary %s — ignoring",
+                        path, field,
+                    )
+                    return None
+        if version != SCHEMA_VERSION:
+            return regions, lap_length, []
+        return regions, lap_length, mv
+    except (json.JSONDecodeError, TypeError, KeyError, ValueError) as exc:
+        LOGGER.warning("corner_regions cache unreadable at %s: %s", path, exc)
+        return None
+
+
+def _write_cache(
+    year: int,
+    round_number: int,
+    regions: list[CornerRegion],
+    lap_length_m: float,
+    multiviewer_corners: list[dict],
+) -> None:
+    tol = max(1e-3, lap_length_m * 1e-9)
+    clean_regions: list[CornerRegion] = []
+    for r in regions:
+        boundaries = []
+        for field in (r.entry_m, r.apex_m, r.exit_m):
+            if field < -tol or field > lap_length_m + tol:
+                raise SegmentationOutputError(
+                    f"region boundary {field}m outside [0, {lap_length_m}m] — cache write rejected"
+                )
+            boundaries.append(min(max(field, 0.0), lap_length_m))
+        clean_regions.append(
+            CornerRegion(
+                corner_number=r.corner_number,
+                label_suffix=r.label_suffix,
+                entry_m=boundaries[0],
+                apex_m=boundaries[1],
+                exit_m=boundaries[2],
+                sign=r.sign,
+            )
+        )
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    path = _cache_path(year, round_number)
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "lap_length_m": lap_length_m,
+        "multiviewer_corners": multiviewer_corners,
+        "regions": [asdict(r) for r in clean_regions],
+    }
+    with open(path, "w") as f:
+        json.dump(payload, f)
+
+
+_LAP_LENGTH_BY_KEY: dict[tuple[int, int], float] = {}
+_MV_BY_KEY: dict[tuple[int, int], list[dict]] = {}
+
+
+def _require_positive_int(value, name: str) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise SegmentationInputError(f"{name} must be a positive int, got {value!r}")
+
+
 def get_corner_regions(year: int, round_number: int) -> list[CornerRegion]:
-    raise NotImplementedError
+    _require_positive_int(year, "year")
+    _require_positive_int(round_number, "round_number")
+    key = (year, round_number)
+    cached = _read_cache(year, round_number)
+    if cached is not None:
+        regions, lap_length, mv = cached
+        _LAP_LENGTH_BY_KEY[key] = lap_length
+        _MV_BY_KEY[key] = mv
+        return regions
+    # Cache miss or schema mismatch — attempt a fresh build.
+    try:
+        session = _load_session(year, round_number)
+        multiviewer = _load_multiviewer_corners(session)
+        x, y = _load_reference_lap_xy(session)
+        regions, lap_length = _build_and_validate_regions(x, y, multiviewer)
+        _write_cache(year, round_number, regions, lap_length, multiviewer)
+        _LAP_LENGTH_BY_KEY[key] = lap_length
+        _MV_BY_KEY[key] = multiviewer
+        return regions
+    except Exception as build_exc:
+        LOGGER.warning(
+            "corner_regions rebuild failed for year=%s round=%s: %s — trying degraded read",
+            year, round_number, build_exc,
+        )
+        degraded = _read_cache(year, round_number, accept_legacy=True)
+        if degraded is not None:
+            regions, lap_length, mv = degraded
+            _LAP_LENGTH_BY_KEY[key] = lap_length
+            _MV_BY_KEY[key] = mv
+            return regions
+        raise
+
+
+def _lap_length_for(year: int, round_number: int) -> Optional[float]:
+    return _LAP_LENGTH_BY_KEY.get((year, round_number))
 
 
 def resolve_corner_for_distance(

@@ -263,3 +263,287 @@ def test_tag_regions_handles_wrap_around_apex_for_distance_check():
     ]
     tagged = cs._tag_regions(regions, multiviewer, lap_length_m=1000.0)
     assert tagged[0].corner_number == 1
+
+
+from unittest.mock import MagicMock, patch
+
+
+def _make_hexagonal_lap(noise: float = 0.0, n_samples: int = 1200):
+    """6 left-handers (90° R=40m arcs) connecting 6 straights of length 400m."""
+    R = 40.0
+    L = 400.0
+    arc_len = math.pi * R / 2
+    segments = []
+    for _ in range(6):
+        segments.append(("straight", L))
+        segments.append(("arc", arc_len))
+    total = sum(seg[1] for seg in segments)
+    s = np.linspace(0, total, n_samples, endpoint=False)
+    x = np.zeros_like(s)
+    y = np.zeros_like(s)
+    # Pre-compute segment start positions and headings.
+    seg_starts = []
+    cumul = 0.0
+    cx, cy, ch = 0.0, 0.0, 0.0
+    for kind, length in segments:
+        seg_starts.append((cumul, kind, length, cx, cy, ch))
+        if kind == "straight":
+            cx += length * math.cos(ch)
+            cy += length * math.sin(ch)
+        else:
+            ch_new = ch + math.pi / 2
+            cx += R * math.sin(ch_new) - R * math.sin(ch)
+            cy += -R * math.cos(ch_new) + R * math.cos(ch)
+            ch = ch_new
+        cumul += length
+    for i, si in enumerate(s):
+        for start_s, kind, length, sx, sy, sh in seg_starts:
+            if start_s <= si < start_s + length:
+                local = si - start_s
+                if kind == "straight":
+                    x[i] = sx + local * math.cos(sh)
+                    y[i] = sy + local * math.sin(sh)
+                else:
+                    theta = local / R
+                    cx_arc = sx - R * math.sin(sh)
+                    cy_arc = sy + R * math.cos(sh)
+                    x[i] = cx_arc + R * math.sin(sh + theta)
+                    y[i] = cy_arc - R * math.cos(sh + theta)
+                break
+    if noise > 0:
+        rng = np.random.default_rng(42)
+        x = x + rng.normal(0, noise, size=x.shape)
+        y = y + rng.normal(0, noise, size=y.shape)
+    return x, y, total
+
+
+def _make_hexagonal_mv():
+    R = 40.0
+    L = 400.0
+    arc_len = math.pi * R / 2
+    mv = []
+    cumul = 0.0
+    for n in range(1, 7):
+        cumul += L
+        cumul += arc_len / 2
+        mv.append({"number": n, "letter": "", "distance_m": cumul})
+        cumul += arc_len / 2
+    return mv
+
+
+def test_build_corner_regions_validates_minimum_count():
+    x = np.linspace(0, 3000, 1500)
+    y = np.zeros_like(x)
+    with pytest.raises(cs.SegmentationOutputError):
+        cs._build_and_validate_regions(x, y, multiviewer_corners=[])
+
+
+def test_build_corner_regions_validates_lap_length():
+    x = np.linspace(0, 100, 200)
+    y = np.zeros_like(x)
+    with pytest.raises(cs.SegmentationOutputError):
+        cs._build_and_validate_regions(x, y, multiviewer_corners=[])
+
+
+def test_build_corner_regions_on_synthetic_hexagonal_circuit():
+    x, y, expected_total = _make_hexagonal_lap(noise=0.0)
+    mv = _make_hexagonal_mv()
+    regions, lap_length = cs._build_and_validate_regions(x, y, mv)
+    assert 4 <= len(regions) <= 8
+    assert all(r.sign == 1 for r in regions)
+    assert lap_length == pytest.approx(expected_total, rel=0.02)
+
+
+def test_build_corner_regions_tolerates_realistic_noise():
+    x, y, _expected_total = _make_hexagonal_lap(noise=0.5)
+    mv = _make_hexagonal_mv()
+    regions, _lap_length = cs._build_and_validate_regions(x, y, mv)
+    assert len(regions) >= cs.MIN_REGIONS
+
+
+def test_get_corner_regions_uses_disk_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(cs, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(cs, "_MV_BY_KEY", {})
+    monkeypatch.setattr(cs, "_LAP_LENGTH_BY_KEY", {})
+    cached = {
+        "schema_version": cs.SCHEMA_VERSION,
+        "lap_length_m": 5410.0,
+        "multiviewer_corners": [
+            {"number": 1, "letter": "", "distance_m": 706.0},
+        ],
+        "regions": [
+            {"corner_number": 1, "label_suffix": "", "entry_m": 10.0,
+             "apex_m": 20.0, "exit_m": 30.0, "sign": 1},
+        ],
+    }
+    (tmp_path / "2025_4.json").write_text(json.dumps(cached))
+    regions = cs.get_corner_regions(2025, 4)
+    assert len(regions) == 1
+    assert regions[0].corner_number == 1
+
+
+def test_get_corner_regions_ignores_cache_with_old_schema(tmp_path, monkeypatch):
+    monkeypatch.setattr(cs, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(cs, "_MV_BY_KEY", {})
+    monkeypatch.setattr(cs, "_LAP_LENGTH_BY_KEY", {})
+    cached = {
+        "schema_version": cs.SCHEMA_VERSION - 1,
+        "lap_length_m": 5410.0,
+        "regions": [{"corner_number": 1, "label_suffix": "", "entry_m": 10.0,
+                     "apex_m": 20.0, "exit_m": 30.0, "sign": 1}],
+    }
+    (tmp_path / "2025_4.json").write_text(json.dumps(cached))
+    with patch.object(cs, "_load_session", side_effect=RuntimeError("forced rebuild")):
+        # Old schema falls back to degraded read of v1 cache when rebuild fails.
+        regions = cs.get_corner_regions(2025, 4)
+    assert len(regions) == 1
+    assert cs._MV_BY_KEY[(2025, 4)] == []
+
+
+def test_get_corner_regions_writes_current_schema_on_rebuild(tmp_path, monkeypatch):
+    monkeypatch.setattr(cs, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(cs, "_MV_BY_KEY", {})
+    monkeypatch.setattr(cs, "_LAP_LENGTH_BY_KEY", {})
+    x, y, expected_total = _make_hexagonal_lap()
+    mv = _make_hexagonal_mv()
+    fake_session = MagicMock()
+    fake_session.get_circuit_info.return_value.corners.iterrows.return_value = [
+        (i, {"X": 0, "Y": 0, "Number": m["number"], "Letter": m["letter"], "Distance": m["distance_m"]})
+        for i, m in enumerate(mv)
+    ]
+    fake_lap = MagicMock()
+    fake_lap.get_pos_data.return_value = {"X": x, "Y": y}
+    fake_session.laps.pick_fastest.return_value = fake_lap
+    with patch.object(cs, "_load_session", return_value=fake_session):
+        cs.get_corner_regions(2025, 4)
+    written = json.loads((tmp_path / "2025_4.json").read_text())
+    assert written["schema_version"] == cs.SCHEMA_VERSION
+    assert written["lap_length_m"] == pytest.approx(expected_total, rel=0.02)
+    assert len(written["multiviewer_corners"]) == len(mv)
+    assert {c["number"] for c in written["multiviewer_corners"]} == {1, 2, 3, 4, 5, 6}
+    assert cs._lap_length_for(2025, 4) == pytest.approx(expected_total, rel=0.02)
+    assert cs._MV_BY_KEY[(2025, 4)] == written["multiviewer_corners"]
+
+
+def test_get_corner_regions_loads_mv_from_disk_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(cs, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(cs, "_MV_BY_KEY", {})
+    monkeypatch.setattr(cs, "_LAP_LENGTH_BY_KEY", {})
+    cached = {
+        "schema_version": cs.SCHEMA_VERSION,
+        "lap_length_m": 5410.0,
+        "multiviewer_corners": [
+            {"number": 1, "letter": "", "distance_m": 706.0},
+            {"number": 17, "letter": "", "distance_m": 4830.0},
+        ],
+        "regions": [
+            {"corner_number": 1, "label_suffix": "", "entry_m": 660.0,
+             "apex_m": 706.0, "exit_m": 760.0, "sign": -1},
+        ],
+    }
+    (tmp_path / "2025_6.json").write_text(json.dumps(cached))
+    cs.get_corner_regions(2025, 6)
+    assert len(cs._MV_BY_KEY[(2025, 6)]) == 2
+    assert cs._MV_BY_KEY[(2025, 6)][1]["number"] == 17
+
+
+def test_get_corner_regions_rejects_invalid_year(tmp_path, monkeypatch):
+    monkeypatch.setattr(cs, "CACHE_DIR", str(tmp_path))
+    with pytest.raises(cs.SegmentationInputError):
+        cs.get_corner_regions(None, 4)
+    with pytest.raises(cs.SegmentationInputError):
+        cs.get_corner_regions(0, 4)
+    with pytest.raises(cs.SegmentationInputError):
+        cs.get_corner_regions(-2025, 4)
+    assert not list(tmp_path.glob("*.json"))
+
+
+def test_get_corner_regions_does_not_write_invalid_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(cs, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(cs, "_MV_BY_KEY", {})
+    monkeypatch.setattr(cs, "_LAP_LENGTH_BY_KEY", {})
+    fake_session = MagicMock()
+    fake_session.get_circuit_info.return_value.corners.iterrows.return_value = []
+    fake_lap = MagicMock()
+    fake_lap.get_pos_data.return_value = {"X": np.array([0.0, 1.0]), "Y": np.array([0.0, 1.0])}
+    fake_session.laps.pick_fastest.return_value = fake_lap
+    with patch.object(cs, "_load_session", return_value=fake_session):
+        with pytest.raises(cs.SegmentationInputError):
+            cs.get_corner_regions(2025, 4)
+    assert not (tmp_path / "2025_4.json").exists()
+
+
+def test_write_cache_rejects_region_with_out_of_bounds_boundary(tmp_path, monkeypatch):
+    monkeypatch.setattr(cs, "CACHE_DIR", str(tmp_path))
+    bad_region = cs.CornerRegion(
+        corner_number=1, label_suffix="", entry_m=100.0,
+        apex_m=130.0, exit_m=6000.0, sign=1,
+    )
+    with pytest.raises(cs.SegmentationOutputError):
+        cs._write_cache(2025, 4, [bad_region], lap_length_m=5400.0, multiviewer_corners=[])
+    assert not (tmp_path / "2025_4.json").exists()
+
+
+def test_write_cache_clamps_boundary_within_tolerance(tmp_path, monkeypatch):
+    """Tiny floating-point overshoot must be clamped, not rejected."""
+    monkeypatch.setattr(cs, "CACHE_DIR", str(tmp_path))
+    region = cs.CornerRegion(
+        corner_number=1, label_suffix="", entry_m=100.0,
+        apex_m=130.0, exit_m=5400.0001, sign=1,
+    )
+    cs._write_cache(2025, 4, [region], lap_length_m=5400.0, multiviewer_corners=[])
+    written = json.loads((tmp_path / "2025_4.json").read_text())
+    assert written["regions"][0]["exit_m"] == pytest.approx(5400.0, abs=1e-9)
+
+
+def test_read_cache_rejects_invalid_lap_length(tmp_path, monkeypatch):
+    monkeypatch.setattr(cs, "CACHE_DIR", str(tmp_path))
+    cached = {
+        "schema_version": cs.SCHEMA_VERSION,
+        "lap_length_m": 0.001,
+        "multiviewer_corners": [],
+        "regions": [{"corner_number": 1, "label_suffix": "", "entry_m": 0.0,
+                     "apex_m": 0.0005, "exit_m": 0.001, "sign": 1}],
+    }
+    (tmp_path / "2025_6.json").write_text(json.dumps(cached))
+    assert cs._read_cache(2025, 6) is None
+
+
+def test_read_cache_rejects_out_of_bounds_region(tmp_path, monkeypatch):
+    monkeypatch.setattr(cs, "CACHE_DIR", str(tmp_path))
+    cached = {
+        "schema_version": cs.SCHEMA_VERSION,
+        "lap_length_m": 5400.0,
+        "multiviewer_corners": [],
+        "regions": [{"corner_number": 1, "label_suffix": "", "entry_m": 100.0,
+                     "apex_m": 130.0, "exit_m": 9999.0, "sign": 1}],
+    }
+    (tmp_path / "2025_6.json").write_text(json.dumps(cached))
+    assert cs._read_cache(2025, 6) is None
+
+
+def test_get_corner_regions_falls_back_to_degraded_v1_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(cs, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(cs, "_MV_BY_KEY", {})
+    monkeypatch.setattr(cs, "_LAP_LENGTH_BY_KEY", {})
+    v1_cache = {
+        "schema_version": 1,
+        "lap_length_m": 5410.0,
+        "regions": [{"corner_number": 1, "label_suffix": "", "entry_m": 100.0,
+                     "apex_m": 130.0, "exit_m": 160.0, "sign": 1}],
+    }
+    (tmp_path / "2025_6.json").write_text(json.dumps(v1_cache))
+    with patch.object(cs, "_load_session", side_effect=RuntimeError("network down")):
+        regions = cs.get_corner_regions(2025, 6)
+    assert len(regions) == 1
+    assert regions[0].corner_number == 1
+    assert cs._MV_BY_KEY[(2025, 6)] == []
+
+
+def test_get_corner_regions_raises_when_no_cache_and_rebuild_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(cs, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(cs, "_MV_BY_KEY", {})
+    monkeypatch.setattr(cs, "_LAP_LENGTH_BY_KEY", {})
+    with patch.object(cs, "_load_session", side_effect=RuntimeError("network down")):
+        with pytest.raises(RuntimeError, match="network down"):
+            cs.get_corner_regions(2025, 6)
