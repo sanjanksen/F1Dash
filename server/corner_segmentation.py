@@ -493,7 +493,109 @@ def _lap_length_for(year: int, round_number: int) -> Optional[float]:
     return _LAP_LENGTH_BY_KEY.get((year, round_number))
 
 
+def _corner_name(region: CornerRegion) -> Optional[str]:
+    if region.corner_number is None:
+        return None
+    return f"Turn {region.corner_number}{region.label_suffix}"
+
+
+def _arc_distance_forward(target: float, point_m: float, lap_length_m: float) -> float:
+    """Arc length from target moving forward to point_m, with wrap."""
+    if lap_length_m <= 0:
+        return abs(point_m - target)
+    d = point_m - target
+    if d < 0:
+        d += lap_length_m
+    return d
+
+
+def _arc_distance_backward(target: float, point_m: float, lap_length_m: float) -> float:
+    """Arc length from target moving backward to point_m, with wrap."""
+    if lap_length_m <= 0:
+        return abs(target - point_m)
+    d = target - point_m
+    if d < 0:
+        d += lap_length_m
+    return d
+
+
+def _load_multiviewer_corners_for_resolve(year: int, round_number: int) -> list[dict]:
+    """Return MV corners cached in-process. NEVER hits FastF1/network.
+
+    Populated as a side effect of `get_corner_regions` (which is called
+    before any resolve). If somehow neither happened, returns an empty
+    list — caller treats that as "no fallback available."
+    """
+    return _MV_BY_KEY.get((year, round_number), [])
+
+
 def resolve_corner_for_distance(
     year: int, round_number: int, distance_m: float
 ) -> dict:
-    raise NotImplementedError
+    _require_positive_int(year, "year")
+    _require_positive_int(round_number, "round_number")
+    if distance_m is None or not math.isfinite(float(distance_m)):
+        raise SegmentationInputError(
+            f"distance_m must be finite, got {distance_m!r}"
+        )
+    regions = get_corner_regions(year, round_number)
+    if not regions:
+        return {"corner_number": None, "corner_name": None, "location_label": None}
+    lap_length = _lap_length_for(year, round_number) or 0.0
+    target = float(distance_m)
+    # Normalize into [0, lap_length) so circular arithmetic is safe
+    # against floating-point drift or multi-lap distances.
+    if lap_length > 0:
+        target = target % lap_length
+
+    # Step 1: inside any region?
+    for region in regions:
+        if _distance_inside_region(
+            (region.entry_m, region.apex_m, region.exit_m, region.sign),
+            target,
+            lap_length,
+        ):
+            if region.corner_number is not None:
+                label = _corner_name(region)
+                return {
+                    "corner_number": region.corner_number,
+                    "corner_name": label,
+                    "location_label": label,
+                }
+            # Untagged region — fall back to nearest MV apex circularly.
+            mv = _load_multiviewer_corners_for_resolve(year, round_number)
+            if mv:
+                chosen = min(
+                    mv,
+                    key=lambda c: _circular_apex_distance(
+                        region.apex_m, float(c["distance_m"]), lap_length
+                    ),
+                )
+                label = f"Turn {chosen['number']}{chosen.get('letter') or ''}"
+                return {
+                    "corner_number": int(chosen["number"]),
+                    "corner_name": label,
+                    "location_label": label,
+                }
+            return {"corner_number": None, "corner_name": None, "location_label": "in corner"}
+
+    # Step 2: straight between regions, with circular bracket lookup.
+    prev_region = min(
+        regions,
+        key=lambda r: _arc_distance_backward(target, r.exit_m, lap_length),
+    )
+    next_region = min(
+        regions,
+        key=lambda r: _arc_distance_forward(target, r.entry_m, lap_length),
+    )
+    prev_name = _corner_name(prev_region)
+    next_name = _corner_name(next_region)
+    if prev_name and next_name and prev_region is not next_region:
+        label = f"{prev_name} → {next_name} straight"
+    elif next_name:
+        label = f"approach to {next_name}"
+    elif prev_name:
+        label = f"run out of {prev_name}"
+    else:
+        label = None
+    return {"corner_number": None, "corner_name": None, "location_label": label}

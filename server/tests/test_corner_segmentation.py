@@ -547,3 +547,123 @@ def test_get_corner_regions_raises_when_no_cache_and_rebuild_fails(tmp_path, mon
     with patch.object(cs, "_load_session", side_effect=RuntimeError("network down")):
         with pytest.raises(RuntimeError, match="network down"):
             cs.get_corner_regions(2025, 6)
+
+
+def _stub_regions(monkeypatch, regions, lap_length=5400.0, mv_corners=None):
+    monkeypatch.setattr(cs, "get_corner_regions", lambda *_: regions)
+    monkeypatch.setattr(cs, "_lap_length_for", lambda *_: lap_length)
+    monkeypatch.setattr(cs, "_load_multiviewer_corners_for_resolve",
+                        lambda *_: (mv_corners or []))
+
+
+def test_resolve_inside_region_returns_corner_label(monkeypatch):
+    regions = [
+        cs.CornerRegion(corner_number=11, label_suffix="", entry_m=3000.0,
+                        apex_m=3083.0, exit_m=3160.0, sign=1),
+    ]
+    _stub_regions(monkeypatch, regions)
+    result = cs.resolve_corner_for_distance(2025, 6, 3083.0)
+    assert result["corner_number"] == 11
+    assert result["corner_name"] == "Turn 11"
+    assert result["location_label"] == "Turn 11"
+
+
+def test_resolve_between_regions_returns_straight_label(monkeypatch):
+    regions = [
+        cs.CornerRegion(corner_number=10, label_suffix="", entry_m=2400.0,
+                        apex_m=2440.0, exit_m=2500.0, sign=-1),
+        cs.CornerRegion(corner_number=11, label_suffix="", entry_m=3000.0,
+                        apex_m=3083.0, exit_m=3160.0, sign=1),
+    ]
+    _stub_regions(monkeypatch, regions)
+    result = cs.resolve_corner_for_distance(2025, 6, 2700.0)
+    assert result["corner_number"] is None
+    assert result["location_label"] == "Turn 10 → Turn 11 straight"
+
+
+def test_resolve_after_final_corner_wraps_to_first(monkeypatch):
+    regions = [
+        cs.CornerRegion(corner_number=1, label_suffix="", entry_m=200.0,
+                        apex_m=250.0, exit_m=320.0, sign=1),
+        cs.CornerRegion(corner_number=19, label_suffix="", entry_m=5000.0,
+                        apex_m=5100.0, exit_m=5200.0, sign=-1),
+    ]
+    _stub_regions(monkeypatch, regions, lap_length=5400.0)
+    result = cs.resolve_corner_for_distance(2025, 6, 5350.0)
+    assert result["location_label"] == "Turn 19 → Turn 1 straight"
+
+
+def test_resolve_inside_wrap_around_region(monkeypatch):
+    regions = [
+        cs.CornerRegion(corner_number=1, label_suffix="", entry_m=5300.0,
+                        apex_m=20.0, exit_m=80.0, sign=1),
+    ]
+    _stub_regions(monkeypatch, regions, lap_length=5400.0)
+    assert cs.resolve_corner_for_distance(2025, 6, 5350.0)["corner_number"] == 1
+    assert cs.resolve_corner_for_distance(2025, 6, 50.0)["corner_number"] == 1
+
+
+def test_resolve_returns_empty_when_no_regions(monkeypatch):
+    _stub_regions(monkeypatch, [])
+    result = cs.resolve_corner_for_distance(2025, 6, 3083.0)
+    assert result["corner_number"] is None
+    assert result["corner_name"] is None
+    assert result["location_label"] is None
+
+
+def test_resolve_handles_chicane_letter_suffix(monkeypatch):
+    regions = [
+        cs.CornerRegion(corner_number=4, label_suffix="a", entry_m=1100.0,
+                        apex_m=1131.0, exit_m=1160.0, sign=1),
+    ]
+    _stub_regions(monkeypatch, regions)
+    result = cs.resolve_corner_for_distance(2025, 6, 1131.0)
+    assert result["corner_name"] == "Turn 4a"
+
+
+def test_resolve_falls_back_to_nearest_mv_when_region_untagged(monkeypatch):
+    regions = [
+        cs.CornerRegion(corner_number=None, label_suffix="", entry_m=3000.0,
+                        apex_m=3083.0, exit_m=3160.0, sign=1),
+    ]
+    mv = [{"number": 11, "letter": "", "distance_m": 3090.0}]
+    _stub_regions(monkeypatch, regions, mv_corners=mv)
+    result = cs.resolve_corner_for_distance(2025, 6, 3083.0)
+    assert result["corner_number"] == 11
+    assert result["corner_name"] == "Turn 11"
+
+
+def test_resolve_rejects_non_finite_distance(monkeypatch):
+    regions = [
+        cs.CornerRegion(corner_number=1, label_suffix="", entry_m=100.0,
+                        apex_m=130.0, exit_m=160.0, sign=1),
+    ]
+    _stub_regions(monkeypatch, regions)
+    with pytest.raises(cs.SegmentationInputError):
+        cs.resolve_corner_for_distance(2025, 6, float("nan"))
+    with pytest.raises(cs.SegmentationInputError):
+        cs.resolve_corner_for_distance(2025, 6, float("inf"))
+    with pytest.raises(cs.SegmentationInputError):
+        cs.resolve_corner_for_distance(2025, 6, None)
+
+
+def test_resolve_normalizes_distance_outside_lap_length(monkeypatch):
+    regions = [
+        cs.CornerRegion(corner_number=1, label_suffix="", entry_m=100.0,
+                        apex_m=130.0, exit_m=160.0, sign=1),
+    ]
+    _stub_regions(monkeypatch, regions, lap_length=5400.0)
+    result = cs.resolve_corner_for_distance(2025, 6, 5530.0)
+    assert result["corner_number"] == 1
+
+
+def test_resolve_straight_lookup_skips_wrap_around_as_prev(monkeypatch):
+    regions = [
+        cs.CornerRegion(corner_number=1, label_suffix="", entry_m=200.0,
+                        apex_m=250.0, exit_m=320.0, sign=1),
+        cs.CornerRegion(corner_number=5, label_suffix="", entry_m=5300.0,
+                        apex_m=10.0, exit_m=80.0, sign=1),
+    ]
+    _stub_regions(monkeypatch, regions, lap_length=5400.0)
+    result = cs.resolve_corner_for_distance(2025, 6, 500.0)
+    assert result["location_label"] == "Turn 1 → Turn 5 straight"
