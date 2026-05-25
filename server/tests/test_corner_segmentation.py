@@ -361,6 +361,105 @@ def test_build_corner_regions_tolerates_realistic_noise():
     assert len(regions) >= cs.MIN_REGIONS
 
 
+def _make_circuit_with_complex_and_kink(n_samples=2000):
+    """Build a synthetic circuit (~3400m) with 6 corners:
+    - 4 regular corners (R=40m, 90-degree arcs)
+    - 1 merged complex (two tight peaks with a valley above exit threshold)
+    - 1 gentle kink (large radius, curvature below typical global threshold)
+
+    Returns (x, y, total_length, mv_corners).
+    """
+    R_normal = 40.0
+    R_tight = 25.0
+    R_gentle = 500.0
+    arc_normal = math.pi * R_normal / 2
+    arc_tight = math.pi * R_tight / 2
+    arc_gentle = math.pi * R_gentle / 8
+
+    segments = [
+        ("straight", 300.0),
+        ("arc", arc_normal, R_normal),        # Corner 1
+        ("straight", 250.0),
+        ("arc", arc_tight, R_tight),           # Corner 2 (first of complex)
+        ("straight", 15.0),                     # tiny gap — stays merged
+        ("arc", arc_tight, R_tight),           # Corner 3 (second of complex)
+        ("straight", 300.0),
+        ("arc", arc_normal, R_normal),         # Corner 4
+        ("straight", 400.0),
+        ("arc", arc_gentle, R_gentle),         # Corner 5 (gentle kink)
+        ("straight", 350.0),
+        ("arc", arc_normal, R_normal),         # Corner 6
+        ("straight", 200.0),
+    ]
+
+    total = sum(seg[1] for seg in segments)
+    s = np.linspace(0, total, n_samples, endpoint=False)
+    x = np.zeros_like(s)
+    y = np.zeros_like(s)
+
+    seg_starts = []
+    cumul = 0.0
+    cx, cy, ch = 0.0, 0.0, 0.0
+    for seg in segments:
+        kind = seg[0]
+        length = seg[1]
+        R = seg[2] if len(seg) > 2 else None
+        seg_starts.append((cumul, kind, length, R, cx, cy, ch))
+        if kind == "straight":
+            cx += length * math.cos(ch)
+            cy += length * math.sin(ch)
+        else:
+            ch_new = ch + math.pi / 2 if R <= 100 else ch + length / R
+            cx += R * math.sin(ch_new) - R * math.sin(ch)
+            cy += -R * math.cos(ch_new) + R * math.cos(ch)
+            ch = ch_new
+        cumul += length
+
+    for i, si in enumerate(s):
+        for start_s, kind, length, R, sx, sy, sh in seg_starts:
+            if start_s <= si < start_s + length:
+                local = si - start_s
+                if kind == "straight":
+                    x[i] = sx + local * math.cos(sh)
+                    y[i] = sy + local * math.sin(sh)
+                else:
+                    theta = local / R
+                    cx_arc = sx - R * math.sin(sh)
+                    cy_arc = sy + R * math.cos(sh)
+                    x[i] = cx_arc + R * math.sin(sh + theta)
+                    y[i] = cy_arc - R * math.cos(sh + theta)
+                break
+
+    mv_corners = []
+    cumul = 0.0
+    corner_num = 0
+    for seg in segments:
+        kind = seg[0]
+        length = seg[1]
+        if kind == "arc":
+            corner_num += 1
+            apex_dist = cumul + length / 2
+            mv_corners.append({"number": corner_num, "letter": "", "distance_m": apex_dist})
+        cumul += length
+
+    return x, y, total, mv_corners
+
+
+def test_build_and_validate_detects_all_official_corners():
+    x, y, total, mv = _make_circuit_with_complex_and_kink()
+    assert cs.MIN_LAP_LENGTH_M <= total <= cs.MAX_LAP_LENGTH_M
+
+    regions, lap_length = cs._build_and_validate_regions(x, y, mv)
+    assert lap_length == pytest.approx(total, rel=0.02)
+
+    mv_numbers = {c["number"] for c in mv}
+    tagged_numbers = {r.corner_number for r in regions if r.corner_number is not None}
+    assert mv_numbers == tagged_numbers, (
+        f"Missing corners: {mv_numbers - tagged_numbers}, "
+        f"extra: {tagged_numbers - mv_numbers}"
+    )
+
+
 def test_get_corner_regions_uses_disk_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(cs, "CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(cs, "_MV_BY_KEY", {})

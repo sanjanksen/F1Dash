@@ -26,7 +26,7 @@ from scipy.signal import savgol_filter
 
 LOGGER = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache", "corner_regions")
 
@@ -435,6 +435,12 @@ def _build_and_validate_regions(
     kappa_enter = float(np.percentile(abs_k, KAPPA_ENTER_PERCENTILE))
     kappa_exit = float(np.percentile(abs_k, KAPPA_EXIT_PERCENTILE))
     raw_regions = _detect_regions(s_u, kappa, kappa_enter, kappa_exit, lap_length)
+
+    # Post-processing: use official corner positions to fix detection gaps
+    if multiviewer_corners:
+        raw_regions = _split_merged_regions(raw_regions, multiviewer_corners, s_u, kappa, lap_length)
+        raw_regions = _rescue_missing_corners(raw_regions, multiviewer_corners, s_u, kappa, lap_length)
+
     tagged = _tag_regions(raw_regions, multiviewer_corners, lap_length)
 
     if not (MIN_LAP_LENGTH_M <= lap_length <= MAX_LAP_LENGTH_M):
