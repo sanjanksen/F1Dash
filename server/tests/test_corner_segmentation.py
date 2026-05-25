@@ -753,3 +753,75 @@ def test_split_merged_regions_leaves_single_apex_region():
     split = cs._split_merged_regions(regions, mv, s, kappa, float(s[-1]))
     assert len(split) == 1
     assert split[0] == regions[0]
+
+
+# ── _rescue_missing_corners tests ───────────────────────────────────
+
+
+def test_rescue_missing_corners_creates_region_for_gentle_kink():
+    """MV corner at 500m with low curvature (below global threshold but above
+    RESCUE_KAPPA_FLOOR) should get a rescued region."""
+    s = np.arange(0, 1000, cs.RESAMPLE_SPACING_M)
+    kappa = np.zeros_like(s)
+    # Gentle kink around 500m: peak |kappa| = 0.005, above RESCUE_KAPPA_FLOOR (0.001)
+    # but below a typical global threshold (~0.01+)
+    mask = (s >= 480) & (s <= 520)
+    kappa[mask] = 0.005 * np.sin(np.pi * (s[mask] - 480) / 40)
+
+    existing_regions = [
+        (100.0, 130.0, 160.0, 1),  # existing region far away
+    ]
+    mv = [{"number": 9, "letter": "", "distance_m": 500.0}]
+
+    result = cs._rescue_missing_corners(existing_regions, mv, s, kappa, float(s[-1]))
+    assert len(result) == 2  # original + rescued
+    rescued = result[1]
+    assert rescued[0] <= 500.0 <= rescued[2]
+
+
+def test_rescue_missing_corners_skips_already_matched():
+    """MV corner already inside a detected region should not create a duplicate."""
+    s = np.arange(0, 1000, cs.RESAMPLE_SPACING_M)
+    kappa = np.zeros_like(s)
+    kappa[(s >= 100) & (s <= 200)] = 0.02
+
+    existing_regions = [
+        (100.0, 150.0, 200.0, 1),
+    ]
+    mv = [{"number": 5, "letter": "", "distance_m": 150.0}]
+
+    result = cs._rescue_missing_corners(existing_regions, mv, s, kappa, float(s[-1]))
+    assert len(result) == 1  # no new region added
+
+
+def test_rescue_missing_corners_creates_synthetic_for_zero_curvature():
+    """MV corner with essentially zero curvature gets a narrow synthetic region
+    (+/-RESCUE_FALLBACK_HALF_WIDTH_M)."""
+    s = np.arange(0, 1000, cs.RESAMPLE_SPACING_M)
+    kappa = np.zeros_like(s)  # all zero curvature
+
+    existing_regions = []
+    mv = [{"number": 10, "letter": "", "distance_m": 500.0}]
+
+    result = cs._rescue_missing_corners(existing_regions, mv, s, kappa, float(s[-1]))
+    assert len(result) == 1
+    rescued = result[0]
+    assert rescued[0] == pytest.approx(480.0, abs=cs.RESAMPLE_SPACING_M)
+    assert rescued[2] == pytest.approx(520.0, abs=cs.RESAMPLE_SPACING_M)
+
+
+def test_rescue_missing_corners_skips_if_overlapping():
+    """A rescued region that would overlap an existing region is skipped."""
+    s = np.arange(0, 1000, cs.RESAMPLE_SPACING_M)
+    kappa = np.zeros_like(s)
+    # Gentle kink around 170m — rescued region would overlap with existing [100, 200]
+    mask = (s >= 160) & (s <= 180)
+    kappa[mask] = 0.005
+
+    existing_regions = [
+        (100.0, 150.0, 200.0, 1),
+    ]
+    mv = [{"number": 6, "letter": "", "distance_m": 170.0}]
+
+    result = cs._rescue_missing_corners(existing_regions, mv, s, kappa, float(s[-1]))
+    assert len(result) == 1  # no new region; overlap detected

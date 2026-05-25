@@ -42,6 +42,11 @@ MIN_RAW_SAMPLES = 100
 
 MIN_REGION_WIDTH_M = 20.0
 
+RESCUE_WINDOW_M = 100.0
+RESCUE_KAPPA_FLOOR = 0.001
+RESCUE_MIN_WIDTH_M = 10.0
+RESCUE_FALLBACK_HALF_WIDTH_M = 20.0
+
 DEBOUNCE_GAP_M = 10.0
 
 MIN_REGIONS = 4
@@ -274,6 +279,75 @@ def _split_merged_regions(
             sub_width = sub[2] - sub[0]
             if sub_width >= MIN_REGION_WIDTH_M:
                 result.append(sub)
+    return result
+
+
+def _rescue_missing_corners(
+    regions: list[tuple[float, float, float, int]],
+    multiviewer_corners: list[dict],
+    s: np.ndarray,
+    kappa: np.ndarray,
+    lap_length_m: float,
+) -> list[tuple[float, float, float, int]]:
+    """Rescue MV corners missed by the global-threshold detector.
+
+    For each MV corner not already inside an existing region, look at
+    local |kappa| in a +/-RESCUE_WINDOW_M window. If a curvature peak
+    exists above RESCUE_KAPPA_FLOOR, walk outward to define a region;
+    otherwise create a narrow synthetic region.
+    """
+    abs_k = np.abs(kappa)
+    result = list(regions)
+
+    for mv in multiviewer_corners:
+        mv_dist = float(mv["distance_m"])
+        already_matched = any(
+            _distance_inside_region(r, mv_dist, lap_length_m) for r in result
+        )
+        if already_matched:
+            continue
+
+        center_idx = _nearest_idx(s, mv_dist)
+        window_samples = int(RESCUE_WINDOW_M / RESAMPLE_SPACING_M)
+        lo = max(center_idx - window_samples, 0)
+        hi = min(center_idx + window_samples, len(s) - 1)
+
+        local_abs_k = abs_k[lo : hi + 1]
+        peak_val = float(np.max(local_abs_k))
+
+        if peak_val < RESCUE_KAPPA_FLOOR:
+            fallback_lo = max(_nearest_idx(s, mv_dist - RESCUE_FALLBACK_HALF_WIDTH_M), 0)
+            fallback_hi = min(_nearest_idx(s, mv_dist + RESCUE_FALLBACK_HALF_WIDTH_M), len(s) - 1)
+            new_region = _finalize_region(s, kappa, fallback_lo, fallback_hi)
+        else:
+            peak_local_idx = int(np.argmax(local_abs_k))
+            peak_idx = lo + peak_local_idx
+
+            start_idx = peak_idx
+            while start_idx > 0 and abs_k[start_idx - 1] >= RESCUE_KAPPA_FLOOR:
+                start_idx -= 1
+
+            end_idx = peak_idx
+            while end_idx < len(s) - 1 and abs_k[end_idx + 1] >= RESCUE_KAPPA_FLOOR:
+                end_idx += 1
+
+            new_region = _finalize_region(s, kappa, start_idx, end_idx)
+
+        width = new_region[2] - new_region[0]
+        if width < RESCUE_MIN_WIDTH_M:
+            continue
+
+        entry, _apex, exit_, _sign = new_region
+        overlaps = any(
+            _distance_inside_region(r, entry, lap_length_m)
+            or _distance_inside_region(r, exit_, lap_length_m)
+            for r in result
+        )
+        if overlaps:
+            continue
+
+        result.append(new_region)
+
     return result
 
 
