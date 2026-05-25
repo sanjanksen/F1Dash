@@ -223,6 +223,60 @@ def _detect_regions(
     return raw
 
 
+def _split_merged_regions(
+    regions: list[tuple[float, float, float, int]],
+    multiviewer_corners: list[dict],
+    s: np.ndarray,
+    kappa: np.ndarray,
+    lap_length_m: float,
+) -> list[tuple[float, float, float, int]]:
+    """Split regions that contain 2+ MV corner apexes.
+
+    For each such region, find the |kappa| local minimum between each
+    consecutive pair of MV corners and split the region there.
+    """
+    result: list[tuple[float, float, float, int]] = []
+    for region in regions:
+        entry, _apex, exit_, _sign = region
+        # Skip wrap-around regions (entry > exit) — rare edge case
+        if entry > exit_:
+            result.append(region)
+            continue
+        inside = [
+            c for c in multiviewer_corners
+            if _distance_inside_region(region, float(c["distance_m"]), lap_length_m)
+        ]
+        if len(inside) < 2:
+            result.append(region)
+            continue
+        inside.sort(key=lambda c: float(c["distance_m"]))
+        entry_idx = _nearest_idx(s, entry)
+        exit_idx = _nearest_idx(s, exit_)
+        abs_k = np.abs(kappa)
+        split_indices = []
+        for j in range(len(inside) - 1):
+            d_left = float(inside[j]["distance_m"])
+            d_right = float(inside[j + 1]["distance_m"])
+            left_idx = max(_nearest_idx(s, d_left), entry_idx)
+            right_idx = min(_nearest_idx(s, d_right), exit_idx)
+            if left_idx >= right_idx:
+                continue
+            local_min_idx = left_idx + int(np.argmin(abs_k[left_idx:right_idx + 1]))
+            split_indices.append(local_min_idx)
+        if not split_indices:
+            result.append(region)
+            continue
+        bounds = [entry_idx] + split_indices + [exit_idx]
+        for k in range(len(bounds) - 1):
+            si = bounds[k]
+            ei = bounds[k + 1]
+            sub = _finalize_region(s, kappa, si, ei)
+            sub_width = sub[2] - sub[0]
+            if sub_width >= MIN_REGION_WIDTH_M:
+                result.append(sub)
+    return result
+
+
 def _distance_inside_region(
     region: tuple[float, float, float, int], distance: float, lap_length_m: float
 ) -> bool:

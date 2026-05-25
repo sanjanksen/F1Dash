@@ -670,3 +670,86 @@ def test_resolve_straight_lookup_skips_wrap_around_as_prev(monkeypatch):
     _stub_regions(monkeypatch, regions, lap_length=5400.0)
     result = cs.resolve_corner_for_distance(2025, 6, 500.0)
     assert result["location_label"] == "Turn 1 → Turn 5 straight"
+
+
+# ── _split_merged_regions tests ──────────────────────────────────────
+
+
+def _make_two_peak_kappa(spacing=2.0):
+    """Two curvature peaks separated by a valley that stays above a typical exit threshold.
+
+    Returns (s, kappa, lap_length_m) where the single region spans roughly [100, 300].
+    Peak 1 apex ~150, peak 2 apex ~250, valley minimum ~200.
+    """
+    s = np.arange(0, 400, spacing)
+    kappa = np.zeros_like(s)
+    for i, si in enumerate(s):
+        if 100 <= si < 200:
+            kappa[i] = 0.03 * np.sin(np.pi * (si - 100) / 100)
+        elif 200 <= si < 300:
+            kappa[i] = 0.03 * np.sin(np.pi * (si - 200) / 100)
+    # Valley at s=200 is 0 in the sin, but we want it above exit threshold
+    # so _detect_regions sees one merged region. Raise the whole corner block.
+    mask = (s >= 100) & (s < 300)
+    kappa[mask] = kappa[mask] + 0.012
+    return s, kappa, float(s[-1])
+
+
+def test_split_merged_regions_separates_two_peaks():
+    s, kappa, lap_length = _make_two_peak_kappa()
+    # Detect with thresholds that produce one merged region
+    regions = cs._detect_regions(s, kappa, kappa_enter=0.015, kappa_exit=0.01,
+                                 lap_length_m=lap_length)
+    assert len(regions) == 1, f"expected 1 merged region, got {len(regions)}"
+
+    mv = [
+        {"number": 1, "letter": "", "distance_m": 150.0},
+        {"number": 2, "letter": "", "distance_m": 250.0},
+    ]
+    split = cs._split_merged_regions(regions, mv, s, kappa, lap_length)
+    assert len(split) == 2
+    # First sub-region should contain distance 150
+    assert split[0][0] <= 150.0 <= split[0][2]
+    # Second sub-region should contain distance 250
+    assert split[1][0] <= 250.0 <= split[1][2]
+
+
+def test_split_merged_regions_handles_three_apexes():
+    s = np.arange(0, 600, 2.0)
+    kappa = np.zeros_like(s)
+    # Three peaks at ~150, ~250, ~350 with valleys staying above exit threshold
+    for center in [150, 250, 350]:
+        for i, si in enumerate(s):
+            if abs(si - center) < 50:
+                kappa[i] += 0.03 * np.cos(np.pi * (si - center) / 100)
+    mask = (s >= 100) & (s < 400)
+    kappa[mask] = kappa[mask] + 0.015
+
+    regions = cs._detect_regions(s, kappa, kappa_enter=0.018, kappa_exit=0.01,
+                                 lap_length_m=float(s[-1]))
+    assert len(regions) == 1, f"expected 1 merged region, got {len(regions)}"
+
+    mv = [
+        {"number": 13, "letter": "", "distance_m": 150.0},
+        {"number": 14, "letter": "", "distance_m": 250.0},
+        {"number": 15, "letter": "", "distance_m": 350.0},
+    ]
+    split = cs._split_merged_regions(regions, mv, s, kappa, float(s[-1]))
+    assert len(split) == 3
+    assert split[0][0] <= 150.0 <= split[0][2]
+    assert split[1][0] <= 250.0 <= split[1][2]
+    assert split[2][0] <= 350.0 <= split[2][2]
+
+
+def test_split_merged_regions_leaves_single_apex_region():
+    s = np.arange(0, 400, 2.0)
+    kappa = np.zeros_like(s)
+    kappa[(s >= 100) & (s < 200)] = 0.03
+    regions = cs._detect_regions(s, kappa, kappa_enter=0.02, kappa_exit=0.01,
+                                 lap_length_m=float(s[-1]))
+    assert len(regions) == 1
+
+    mv = [{"number": 5, "letter": "", "distance_m": 150.0}]
+    split = cs._split_merged_regions(regions, mv, s, kappa, float(s[-1]))
+    assert len(split) == 1
+    assert split[0] == regions[0]
