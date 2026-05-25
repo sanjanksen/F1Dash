@@ -836,10 +836,21 @@ def compare_drivers_clipping(
         faster_driver = driver_a_code.upper()
         segments = driver_b_signature.get("segments") or []
     delta_rounded = round(delta, 1)
-    phrase = (
-        f"{clipping_driver} clipped roughly {delta_rounded} s/lap on the main straight; "
-        f"{faster_driver} did not."
-    )
+    a_rounded = round(a_total, 1)
+    b_rounded = round(b_total, 1)
+    clip_driver_total = a_rounded if a_total > b_total else b_rounded
+    other_driver_total = b_rounded if a_total > b_total else a_rounded
+    if min(a_total, b_total) < 0.5:
+        phrase = (
+            f"{clipping_driver} clipped for {clip_driver_total}s total on the main straights; "
+            f"{faster_driver} did not clip ({other_driver_total}s)."
+        )
+    else:
+        phrase = (
+            f"Both drivers clipped on the main straights ({clipping_driver}: {clip_driver_total}s, "
+            f"{faster_driver}: {other_driver_total}s). {clipping_driver} spent "
+            f"{delta_rounded}s longer in deployment taper."
+        )
     segment_reference = None
     if segments:
         worst = max(segments, key=lambda s: s.get("duration_s") or 0.0)
@@ -3628,7 +3639,23 @@ def _cause_explanation(
             f"Corner entry{loc}: {loser} is already on the brake while "
             f"{gainer} is still carrying speed into the zone."
         )
+    is_non_corner = location_label and (
+        "straight" in location_label.lower()
+        or "approach" in location_label.lower()
+        or "run out" in location_label.lower()
+    )
+    is_corner = corner_name is not None or not is_non_corner
     if ct == "minimum_speed":
+        if not is_corner:
+            if is_teammate_comparison:
+                return (
+                    f"Speed advantage{loc}: {gainer} carries more speed through this section. "
+                    f"Between teammates this points to setup divergence (downforce level, diff, ride height) "
+                    f"or a conscious style difference — not a car advantage."
+                )
+            return (
+                f"{gainer} carries more speed{loc}."
+            )
         if is_teammate_comparison:
             return (
                 f"Mid-corner minimum speed{loc}: {gainer} gives up less speed at the direction change. "
@@ -3639,6 +3666,16 @@ def _cause_explanation(
             f"{gainer} gives up less speed mid-corner{loc} and exits with more momentum."
         )
     if ct == "traction":
+        if not is_corner:
+            if is_teammate_comparison:
+                return (
+                    f"Speed advantage on exit{loc}: {gainer} gets back to full speed earlier. "
+                    f"Between teammates this usually comes down to throttle application technique "
+                    f"or diff settings — same rear end, different commitment level."
+                )
+            return (
+                f"{gainer} got the power down sooner{loc}, opening a gap onto the following straight."
+            )
         if is_teammate_comparison:
             return (
                 f"Traction on exit{loc}: {gainer} gets back to full throttle earlier. "
@@ -3937,17 +3974,30 @@ def _summarize_telemetry_battle(
     if not candidates:
         return None
 
-    # Rank by absolute time contribution (largest first) and pick top K
-    # with min_spacing_m enforced so two markers can't describe the same
-    # physical event.
+    # Pick top markers balanced between both drivers so the widget shows
+    # where each driver gained — not just the overall-faster driver's moments.
+    # Each driver gets at least min_per_driver slots; remaining slots go to
+    # whichever driver has the next-biggest moment.
     candidates.sort(key=lambda c: abs(c["time_gained_s"]), reverse=True)
+    min_per_driver = max(1, top_k // 2)
     picked: list[dict] = []
+    count_a = 0
+    count_b = 0
     for cand in candidates:
         if any(abs(cand["distance_m"] - p["distance_m"]) < min_spacing_m for p in picked):
             continue
-        picked.append(cand)
+        is_a_gain = cand["gainer_driver"] == driver_a
         if len(picked) >= top_k:
             break
+        if is_a_gain and count_a >= min_per_driver and count_b < min_per_driver:
+            continue
+        if not is_a_gain and count_b >= min_per_driver and count_a < min_per_driver:
+            continue
+        picked.append(cand)
+        if is_a_gain:
+            count_a += 1
+        else:
+            count_b += 1
 
     if not picked:
         return None
@@ -3976,6 +4026,14 @@ def _summarize_telemetry_battle(
             marker["corner_number"] = None
             marker["corner_name"] = None
             marker["location_label"] = fallback
+
+    for marker in picked:
+        loc = (marker.get("location_label") or "").lower()
+        is_non_corner = marker.get("corner_name") is None and any(
+            kw in loc for kw in ("straight", "approach", "run out")
+        )
+        if marker.get("cause_type") == "minimum_speed" and is_non_corner:
+            marker["cause_type"] = "straight_line_speed"
 
     # NOTE: per-sector conservation cap + sector_reconciliation construction
     # were moved out of this function (to apply_sector_conservation_and_build_reconciliation

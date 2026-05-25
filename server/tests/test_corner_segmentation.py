@@ -924,3 +924,185 @@ def test_rescue_missing_corners_skips_if_overlapping():
 
     result = cs._rescue_missing_corners(existing_regions, mv, s, kappa, float(s[-1]))
     assert len(result) == 1  # no new region; overlap detected
+
+
+# ── Codex-flagged edge case tests ──────────────────────────────────
+
+
+def test_split_wrap_around_region_with_two_apexes():
+    """Bug 1: A wrap-around region (entry > exit) with 2 MV corners must be split."""
+    lap_length = 400.0
+    s = np.arange(0, lap_length, 2.0)
+    kappa = np.zeros_like(s)
+    # Wrap-around curvature: high at end of lap and start of lap
+    kappa[s >= 360] = 0.03
+    kappa[s < 40] = 0.03
+    # Valley in the middle of the wrap-around at s~10
+    kappa[(s >= 8) & (s < 12)] = 0.012
+
+    wrap_region = (360.0, 20.0, 38.0, 1)  # entry > exit = wrap-around
+
+    mv = [
+        {"number": 19, "letter": "", "distance_m": 380.0},
+        {"number": 1, "letter": "", "distance_m": 20.0},
+    ]
+    split = cs._split_merged_regions([wrap_region], mv, s, kappa, lap_length)
+    assert len(split) == 2, f"expected 2 sub-regions from wrap split, got {len(split)}"
+    # Each sub-region must contain its intended apex
+    assert cs._distance_inside_region(split[0], 380.0, lap_length), \
+        f"first sub-region {split[0]} doesn't contain 380m"
+    assert cs._distance_inside_region(split[1], 20.0, lap_length), \
+        f"second sub-region {split[1]} doesn't contain 20m"
+
+
+def test_rescue_corner_near_lap_start():
+    """Bug 2: A missing corner near 0m where the curvature peak is ONLY accessible
+    via circular window (across the seam). Old clamped code would miss it."""
+    lap_length = 1000.0
+    s = np.arange(0, lap_length, 2.0)
+    kappa = np.zeros_like(s)
+    # Curvature ONLY at the very end of the lap (990-1000m) — nothing at 0-30m
+    # The corner at 10m can only find this peak by wrapping backward
+    kappa[s >= 985] = 0.005
+
+    mv = [{"number": 1, "letter": "", "distance_m": 10.0}]
+    result = cs._rescue_missing_corners([], mv, s, kappa, lap_length)
+    assert len(result) == 1
+    rescued = result[0]
+    assert cs._distance_inside_region(rescued, 10.0, lap_length)
+
+
+def test_rescue_overlap_check_catches_containment():
+    """Bug 3: Rescued region that fully contains an existing smaller region must be rejected."""
+    s = np.arange(0, 1000, 2.0)
+    kappa = np.zeros_like(s)
+    # Wide gentle kink from 400-600
+    kappa[(s >= 400) & (s <= 600)] = 0.005
+
+    # Small existing region inside the rescue zone
+    existing = [(480.0, 500.0, 520.0, 1)]
+    mv = [{"number": 7, "letter": "", "distance_m": 500.0}]
+
+    result = cs._rescue_missing_corners(existing, mv, s, kappa, 1000.0)
+    # MV corner at 500m is already inside existing region, so no rescue needed
+    assert len(result) == 1
+
+
+def test_rescue_region_contains_official_position():
+    """Bug 4: The rescued region must contain the official corner position."""
+    s = np.arange(0, 1000, 2.0)
+    kappa = np.zeros_like(s)
+    # Strong curvature peak at 450m, but MV corner is at 500m
+    kappa[(s >= 430) & (s <= 470)] = 0.01
+    # Weak curvature at 500m
+    kappa[(s >= 490) & (s <= 510)] = 0.002
+
+    mv = [{"number": 8, "letter": "", "distance_m": 500.0}]
+    result = cs._rescue_missing_corners([], mv, s, kappa, 1000.0)
+    assert len(result) == 1
+    rescued = result[0]
+    assert cs._distance_inside_region(rescued, 500.0, 1000.0), \
+        f"rescued region {rescued} does not contain official position 500m"
+
+
+def test_rescue_two_adjacent_missing_corners_not_merged():
+    """Bug 5: Two adjacent missing corners should each get their own region,
+    even when they're close enough that untrimmed synthetics would overlap."""
+    s = np.arange(0, 1000, 2.0)
+    kappa = np.zeros_like(s)
+    # Two zero-curvature corners only 30m apart — within RESCUE_FALLBACK_HALF_WIDTH_M * 2
+    mv = [
+        {"number": 3, "letter": "", "distance_m": 400.0},
+        {"number": 4, "letter": "", "distance_m": 430.0},
+    ]
+    result = cs._rescue_missing_corners([], mv, s, kappa, 1000.0)
+    assert len(result) == 2, f"expected 2 rescued regions, got {len(result)}"
+    r1, r2 = result[0], result[1]
+    assert cs._distance_inside_region(r1, 400.0, 1000.0)
+    assert cs._distance_inside_region(r2, 430.0, 1000.0)
+    assert not cs._regions_overlap(r1, r2, 1000.0)
+
+
+def test_rescue_adjacent_corners_near_seam():
+    """Bug: Midpoint trimming must be circular for corners straddling start/finish."""
+    lap_length = 1000.0
+    s = np.arange(0, lap_length, 2.0)
+    kappa = np.zeros_like(s)
+    # Two missing corners straddling the seam
+    mv = [
+        {"number": 19, "letter": "", "distance_m": 990.0},
+        {"number": 1, "letter": "", "distance_m": 10.0},
+    ]
+    result = cs._rescue_missing_corners([], mv, s, kappa, lap_length)
+    assert len(result) == 2, f"expected 2 rescued regions, got {len(result)}"
+    # Each official position must be inside one of the rescued regions
+    contains_990 = any(cs._distance_inside_region(r, 990.0, lap_length) for r in result)
+    contains_10 = any(cs._distance_inside_region(r, 10.0, lap_length) for r in result)
+    assert contains_990, f"no region contains 990m: {result}"
+    assert contains_10, f"no region contains 10m: {result}"
+    assert not cs._regions_overlap(result[0], result[1], lap_length)
+
+
+def test_rescue_synthetic_apex_at_official_position():
+    """Bug 6: Synthetic zero-curvature region should have apex at the official position."""
+    s = np.arange(0, 1000, 2.0)
+    kappa = np.zeros_like(s)
+
+    mv = [{"number": 10, "letter": "", "distance_m": 500.0}]
+    result = cs._rescue_missing_corners([], mv, s, kappa, 1000.0)
+    assert len(result) == 1
+    rescued = result[0]
+    assert rescued[1] == pytest.approx(500.0, abs=0.1), \
+        f"synthetic apex should be at 500.0, got {rescued[1]}"
+
+
+def test_split_valley_search_excludes_apex_endpoints():
+    """Bug 7: Valley search must not choose an apex endpoint even when it has
+    lower |κ| than interior points. This test makes the left apex endpoint the
+    global minimum — only endpoint exclusion prevents choosing it."""
+    s = np.arange(0, 400, 2.0)
+    kappa = np.zeros_like(s)
+    # Region from 100 to 300
+    kappa[(s >= 100) & (s < 300)] = 0.02
+    # Left apex at 130 has the LOWEST curvature in the region
+    kappa[s == 130] = 0.005
+    # Interior valley at 200 has moderate curvature (higher than apex endpoint)
+    kappa[(s >= 195) & (s <= 205)] = 0.010
+    # Right apex at 260
+    kappa[s == 260] = 0.025
+
+    region = (100.0, 130.0, 298.0, 1)
+    mv = [
+        {"number": 1, "letter": "", "distance_m": 130.0},
+        {"number": 2, "letter": "", "distance_m": 260.0},
+    ]
+    split = cs._split_merged_regions([region], mv, s, kappa, 400.0)
+    assert len(split) == 2
+    # Split must be at the interior valley (~200), NOT at the left apex (130)
+    first_exit = split[0][2]
+    second_entry = split[1][0]
+    assert 190.0 <= first_exit <= 210.0, f"split at {first_exit}, expected near 200"
+    assert 190.0 <= second_entry <= 210.0, f"split at {second_entry}, expected near 200"
+
+
+def test_regions_overlap_catches_all_cases():
+    """Verify _regions_overlap handles containment in both directions."""
+    # Case 1: A's endpoints inside B
+    a = (110.0, 130.0, 150.0, 1)
+    b = (100.0, 130.0, 200.0, 1)
+    assert cs._regions_overlap(a, b, 1000.0)
+
+    # Case 2: B's endpoints inside A (A contains B)
+    a = (100.0, 150.0, 200.0, 1)
+    b = (120.0, 140.0, 160.0, 1)
+    assert cs._regions_overlap(a, b, 1000.0)
+
+    # Case 3: No overlap
+    a = (100.0, 130.0, 160.0, 1)
+    b = (200.0, 230.0, 260.0, 1)
+    assert not cs._regions_overlap(a, b, 1000.0)
+
+    # Case 4: Wrap-around overlap
+    a = (950.0, 10.0, 50.0, 1)  # wraps around
+    b = (940.0, 960.0, 980.0, 1)
+    assert cs._regions_overlap(a, b, 1000.0)

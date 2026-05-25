@@ -559,14 +559,27 @@ def _canonical_reason_from_cause(cause: dict, result: dict) -> str:
     distance_text = f" at {distance}m" if distance is not None else ""
     delta_text = f"{abs(delta):.1f} kph" if isinstance(delta, (int, float)) else "a speed"
 
+    loc_label = cause.get("location_label") or ""
+    is_non_corner = loc_label and (
+        "straight" in loc_label.lower()
+        or "approach" in loc_label.lower()
+        or "run out" in loc_label.lower()
+    )
+    is_corner = not is_non_corner
     if cause.get("cause_type") == "straight_line_speed_energy_limited":
         cause_text = f"Cause: {loser} faded while still full throttle, consistent with earlier deployment taper or clipping."
     elif cause.get("cause_type") == "traction":
-        cause_text = f"Cause: {gainer} got to throttle earlier or cleaner on corner exit."
+        if is_corner:
+            cause_text = f"Cause: {gainer} got to throttle earlier or cleaner on corner exit."
+        else:
+            cause_text = f"Cause: {gainer} got to throttle earlier or cleaner on exit."
     elif cause.get("cause_type") == "braking":
         cause_text = f"Cause: {gainer} carried the braking phase deeper while {loser} had already committed to the brake."
     elif cause.get("cause_type") == "minimum_speed":
-        cause_text = f"Cause: {gainer} carried a cleaner arc and did not slow the car as much mid-corner."
+        if is_corner:
+            cause_text = f"Cause: {gainer} carried a cleaner arc and did not slow the car as much mid-corner."
+        else:
+            cause_text = f"Cause: {gainer} carried more speed through this section."
     elif cause.get("cause_type") == "straight_line_speed":
         cause_text = f"Cause: {gainer} had the stronger straight-line speed phase."
     else:
@@ -1869,6 +1882,9 @@ def _run_anthropic_analysis(question: str, resolved: dict, plan: dict, evidence:
         }],
     )
     text = "".join(block.text for block in response.content if hasattr(block, "text"))
+    if not text.strip():
+        logger.warning("Anthropic analysis returned empty text. stop_reason=%s, blocks=%s",
+                        response.stop_reason, [type(b).__name__ for b in response.content])
     return _extract_json_object(text)
 
 

@@ -228,6 +228,23 @@ def _detect_regions(
     return raw
 
 
+def _regions_overlap(
+    a: tuple[float, float, float, int],
+    b: tuple[float, float, float, int],
+    lap_length_m: float,
+) -> bool:
+    """Check if two regions overlap, handling wrap-around for both."""
+    a_entry, _, a_exit, _ = a
+    b_entry, _, b_exit, _ = b
+    for point in (a_entry, a_exit):
+        if _distance_inside_region(b, point, lap_length_m):
+            return True
+    for point in (b_entry, b_exit):
+        if _distance_inside_region(a, point, lap_length_m):
+            return True
+    return False
+
+
 def _split_merged_regions(
     regions: list[tuple[float, float, float, int]],
     multiviewer_corners: list[dict],
@@ -239,14 +256,13 @@ def _split_merged_regions(
 
     For each such region, find the |kappa| local minimum between each
     consecutive pair of MV corners and split the region there.
+    Handles wrap-around regions (entry > exit) by sorting MV corners
+    in circular order starting from the entry.
     """
     result: list[tuple[float, float, float, int]] = []
+    abs_k = np.abs(kappa)
     for region in regions:
         entry, _apex, exit_, _sign = region
-        # Skip wrap-around regions (entry > exit) — rare edge case
-        if entry > exit_:
-            result.append(region)
-            continue
         inside = [
             c for c in multiviewer_corners
             if _distance_inside_region(region, float(c["distance_m"]), lap_length_m)
@@ -254,31 +270,87 @@ def _split_merged_regions(
         if len(inside) < 2:
             result.append(region)
             continue
-        inside.sort(key=lambda c: float(c["distance_m"]))
+
+        is_wrap = entry > exit_
+        if is_wrap:
+            inside.sort(key=lambda c: (float(c["distance_m"]) - entry) % lap_length_m)
+        else:
+            inside.sort(key=lambda c: float(c["distance_m"]))
+
         entry_idx = _nearest_idx(s, entry)
         exit_idx = _nearest_idx(s, exit_)
-        abs_k = np.abs(kappa)
+        n = len(s)
+
         split_indices = []
         for j in range(len(inside) - 1):
             d_left = float(inside[j]["distance_m"])
             d_right = float(inside[j + 1]["distance_m"])
-            left_idx = max(_nearest_idx(s, d_left), entry_idx)
-            right_idx = min(_nearest_idx(s, d_right), exit_idx)
-            if left_idx >= right_idx:
-                continue
-            local_min_idx = left_idx + int(np.argmin(abs_k[left_idx:right_idx + 1]))
-            split_indices.append(local_min_idx)
+            left_idx = _nearest_idx(s, d_left)
+            right_idx = _nearest_idx(s, d_right)
+
+            if is_wrap and right_idx < left_idx:
+                seg1 = abs_k[left_idx + 1:n] if left_idx + 1 < n else np.array([])
+                seg2 = abs_k[0:right_idx] if right_idx > 0 else np.array([])
+                if len(seg1) + len(seg2) == 0:
+                    continue
+                combined = np.concatenate([seg1, seg2])
+                local_min = int(np.argmin(combined))
+                if local_min < len(seg1):
+                    valley_idx = left_idx + 1 + local_min
+                else:
+                    valley_idx = local_min - len(seg1)
+            else:
+                lo = left_idx + 1
+                hi = right_idx
+                if lo >= hi:
+                    continue
+                valley_slice = abs_k[lo:hi]
+                valley_idx = lo + int(np.argmin(valley_slice))
+
+            split_indices.append(valley_idx)
+
         if not split_indices:
             result.append(region)
             continue
-        bounds = [entry_idx] + split_indices + [exit_idx]
-        for k in range(len(bounds) - 1):
-            si = bounds[k]
-            ei = bounds[k + 1]
-            sub = _finalize_region(s, kappa, si, ei)
-            sub_width = sub[2] - sub[0]
-            if sub_width >= MIN_REGION_WIDTH_M:
-                result.append(sub)
+
+        if is_wrap:
+            all_bounds = [entry_idx] + split_indices + [exit_idx]
+            for k in range(len(all_bounds) - 1):
+                si = all_bounds[k]
+                ei = all_bounds[k + 1]
+                if si > ei:
+                    sub = (float(s[si]), float(s[si]), float(s[ei]),
+                           1 if kappa[si] >= 0 else -1)
+                    seg1 = kappa[si:]
+                    seg2 = kappa[:ei + 1]
+                    combined_k = np.concatenate([seg1, seg2])
+                    apex_local = int(np.argmax(np.abs(combined_k)))
+                    if apex_local < len(seg1):
+                        apex_m = float(s[si + apex_local])
+                    else:
+                        apex_m = float(s[apex_local - len(seg1)])
+                    sub = (float(s[si]), apex_m, float(s[ei]),
+                           1 if combined_k[apex_local] >= 0 else -1)
+                else:
+                    sub = _finalize_region(s, kappa, si, ei)
+                sub_entry, _, sub_exit, _ = sub
+                if sub_entry <= sub_exit:
+                    width = sub_exit - sub_entry
+                else:
+                    width = (lap_length_m - sub_entry) + sub_exit
+                if width >= MIN_REGION_WIDTH_M:
+                    result.append(sub)
+        else:
+            bounds = [entry_idx] + split_indices + [exit_idx]
+            for k in range(len(bounds) - 1):
+                si = bounds[k]
+                ei = bounds[k + 1]
+                if si >= ei:
+                    continue
+                sub = _finalize_region(s, kappa, si, ei)
+                sub_width = sub[2] - sub[0]
+                if sub_width >= MIN_REGION_WIDTH_M:
+                    result.append(sub)
     return result
 
 
@@ -292,14 +364,20 @@ def _rescue_missing_corners(
     """Rescue MV corners missed by the global-threshold detector.
 
     For each MV corner not already inside an existing region, look at
-    local |kappa| in a +/-RESCUE_WINDOW_M window. If a curvature peak
-    exists above RESCUE_KAPPA_FLOOR, walk outward to define a region;
-    otherwise create a narrow synthetic region.
+    local |kappa| in a +/-RESCUE_WINDOW_M window (with circular wrap).
+    If a curvature peak exists above RESCUE_KAPPA_FLOOR, walk outward
+    to define a region; otherwise create a narrow synthetic region
+    centered on the official position.
     """
     abs_k = np.abs(kappa)
+    n = len(s)
     result = list(regions)
 
-    for mv in multiviewer_corners:
+    # Sort MV corners by distance so adjacent missing corners are processed
+    # in lap order — prevents earlier rescues from swallowing later ones.
+    sorted_mv = sorted(multiviewer_corners, key=lambda c: float(c["distance_m"]))
+
+    for mv in sorted_mv:
         mv_dist = float(mv["distance_m"])
         already_matched = any(
             _distance_inside_region(r, mv_dist, lap_length_m) for r in result
@@ -309,41 +387,132 @@ def _rescue_missing_corners(
 
         center_idx = _nearest_idx(s, mv_dist)
         window_samples = int(RESCUE_WINDOW_M / RESAMPLE_SPACING_M)
-        lo = max(center_idx - window_samples, 0)
-        hi = min(center_idx + window_samples, len(s) - 1)
 
-        local_abs_k = abs_k[lo : hi + 1]
+        # Circular window — gather indices wrapping around lap boundary
+        lo = center_idx - window_samples
+        hi = center_idx + window_samples
+        if lo < 0 or hi >= n:
+            indices = np.arange(lo, hi + 1) % n
+            local_abs_k = abs_k[indices]
+        else:
+            local_abs_k = abs_k[lo:hi + 1]
+
         peak_val = float(np.max(local_abs_k))
 
         if peak_val < RESCUE_KAPPA_FLOOR:
-            fallback_lo = max(_nearest_idx(s, mv_dist - RESCUE_FALLBACK_HALF_WIDTH_M), 0)
-            fallback_hi = min(_nearest_idx(s, mv_dist + RESCUE_FALLBACK_HALF_WIDTH_M), len(s) - 1)
-            new_region = _finalize_region(s, kappa, fallback_lo, fallback_hi)
+            # Synthetic region centered on the official position
+            half_n = max(1, int(RESCUE_FALLBACK_HALF_WIDTH_M / RESAMPLE_SPACING_M))
+            start_idx = (center_idx - half_n) % n
+            end_idx = (center_idx + half_n) % n
+            entry_m = float(s[start_idx])
+            exit_m = float(s[end_idx])
+            new_region = (entry_m, mv_dist, exit_m, 1)
         else:
+            # Find peak in the circular window
             peak_local_idx = int(np.argmax(local_abs_k))
-            peak_idx = lo + peak_local_idx
+            if lo < 0 or hi >= n:
+                peak_idx = int((lo + peak_local_idx) % n)
+            else:
+                peak_idx = lo + peak_local_idx
 
+            # Walk outward from peak with circular wrapping
             start_idx = peak_idx
-            while start_idx > 0 and abs_k[start_idx - 1] >= RESCUE_KAPPA_FLOOR:
-                start_idx -= 1
+            while abs_k[(start_idx - 1) % n] >= RESCUE_KAPPA_FLOOR:
+                prev = (start_idx - 1) % n
+                if prev == peak_idx:
+                    break
+                start_idx = prev
 
             end_idx = peak_idx
-            while end_idx < len(s) - 1 and abs_k[end_idx + 1] >= RESCUE_KAPPA_FLOOR:
-                end_idx += 1
+            while abs_k[(end_idx + 1) % n] >= RESCUE_KAPPA_FLOOR:
+                nxt = (end_idx + 1) % n
+                if nxt == peak_idx:
+                    break
+                end_idx = nxt
 
-            new_region = _finalize_region(s, kappa, start_idx, end_idx)
+            if start_idx <= end_idx:
+                new_region = _finalize_region(s, kappa, start_idx, end_idx)
+            else:
+                # Wrap-around rescued region
+                seg1 = kappa[start_idx:]
+                seg2 = kappa[:end_idx + 1]
+                combined_k = np.concatenate([seg1, seg2])
+                apex_local = int(np.argmax(np.abs(combined_k)))
+                if apex_local < len(seg1):
+                    apex_m = float(s[start_idx + apex_local])
+                else:
+                    apex_m = float(s[apex_local - len(seg1)])
+                new_region = (float(s[start_idx]), apex_m, float(s[end_idx]),
+                              1 if combined_k[apex_local] >= 0 else -1)
 
-        width = new_region[2] - new_region[0]
+            # Verify the official corner position falls inside the rescued region
+            if not _distance_inside_region(new_region, mv_dist, lap_length_m):
+                half_n = max(1, int(RESCUE_FALLBACK_HALF_WIDTH_M / RESAMPLE_SPACING_M))
+                start_idx = (center_idx - half_n) % n
+                end_idx = (center_idx + half_n) % n
+                entry_m = float(s[start_idx])
+                exit_m = float(s[end_idx])
+                new_region = (entry_m, mv_dist, exit_m, 1)
+
+        # Clamp rescued region so it doesn't cross into neighboring MV corners' territory
+        new_entry, new_apex, new_exit, new_sign = new_region
+        for other_mv in sorted_mv:
+            other_dist = float(other_mv["distance_m"])
+            if other_dist == mv_dist:
+                continue
+            if _distance_inside_region(new_region, other_dist, lap_length_m):
+                # Circular midpoint between the two corners
+                fwd = _arc_distance_forward(mv_dist, other_dist, lap_length_m)
+                bwd = _arc_distance_backward(mv_dist, other_dist, lap_length_m)
+                if fwd <= bwd:
+                    midpoint = (mv_dist + fwd / 2.0) % lap_length_m
+                    # Other is ahead — trim exit (exclusive of midpoint)
+                    mid_idx = _nearest_idx(s, midpoint)
+                    new_exit = float(s[max(0, mid_idx - 1)])
+                else:
+                    midpoint = (mv_dist - bwd / 2.0) % lap_length_m
+                    # Other is behind — trim entry (exclusive of midpoint)
+                    mid_idx = _nearest_idx(s, midpoint)
+                    new_entry = float(s[min(n - 1, mid_idx + 1)])
+                new_region = (new_entry, new_apex, new_exit, new_sign)
+
+        # Width check
+        r_entry, _, r_exit, _ = new_region
+        if r_entry <= r_exit:
+            width = r_exit - r_entry
+        else:
+            width = (lap_length_m - r_entry) + r_exit
         if width < RESCUE_MIN_WIDTH_M:
             continue
 
-        entry, _apex, exit_, _sign = new_region
-        overlaps = any(
-            _distance_inside_region(r, entry, lap_length_m)
-            or _distance_inside_region(r, exit_, lap_length_m)
-            for r in result
-        )
-        if overlaps:
+        # Trim against already-rescued regions to prevent overlap
+        new_entry, new_apex, new_exit, new_sign = new_region
+        skip = False
+        for existing in result:
+            if not _regions_overlap(new_region, existing, lap_length_m):
+                continue
+            ex_entry, _, ex_exit, _ = existing
+            # Trim the new region to not overlap the existing one
+            if _distance_inside_region(existing, new_entry, lap_length_m):
+                # Our entry is inside existing — push entry past existing's exit
+                new_entry = float(s[min(n - 1, _nearest_idx(s, ex_exit) + 1)])
+            if _distance_inside_region(existing, new_exit, lap_length_m):
+                # Our exit is inside existing — pull exit before existing's entry
+                new_exit = float(s[max(0, _nearest_idx(s, ex_entry) - 1)])
+            new_region = (new_entry, new_apex, new_exit, new_sign)
+            # After trimming, check if mv_dist is still inside
+            if not _distance_inside_region(new_region, mv_dist, lap_length_m):
+                skip = True
+                break
+            # Re-check width
+            if new_entry <= new_exit:
+                w = new_exit - new_entry
+            else:
+                w = (lap_length_m - new_entry) + new_exit
+            if w < RESCUE_MIN_WIDTH_M:
+                skip = True
+                break
+        if skip:
             continue
 
         result.append(new_region)

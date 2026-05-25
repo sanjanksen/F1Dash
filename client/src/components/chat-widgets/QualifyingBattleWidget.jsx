@@ -39,10 +39,18 @@ const CAUSE_DESC = {
     `${winner} was ${delta ? `${delta} ahead` : 'faster'}${dist} through a combination of factors.`,
 }
 
-CAUSE_DESC.minimum_speed = (winner, loser, delta, loc) =>
-  `${winner} carried more speed ${loc || 'through the corner'}${delta ? ` - ${delta} faster at the apex` : ''}.`
-CAUSE_DESC.traction = (winner, loser, delta, loc) =>
-  `${winner} got the power down sooner ${loc || 'on corner exit'}${delta ? `, opening a ${delta} gap onto the following straight` : ''}.`
+CAUSE_DESC.minimum_speed = (winner, loser, delta, loc) => {
+  const isCorner = loc && !loc.toLowerCase().includes('straight') && !loc.toLowerCase().includes('approach') && !loc.toLowerCase().includes('run out')
+  if (!isCorner)
+    return `${winner} carried more speed ${loc || 'through this section'}${delta ? ` — ${delta} faster` : ''}.`
+  return `${winner} carried more speed ${loc || 'through the corner'}${delta ? ` - ${delta} faster at the apex` : ''}.`
+}
+CAUSE_DESC.traction = (winner, loser, delta, loc) => {
+  const isCorner = loc && !loc.toLowerCase().includes('straight') && !loc.toLowerCase().includes('approach') && !loc.toLowerCase().includes('run out')
+  if (!isCorner)
+    return `${winner} got the power down sooner ${loc || 'on exit'}${delta ? `, opening a ${delta} gap onto the following straight` : ''}.`
+  return `${winner} got the power down sooner ${loc || 'on corner exit'}${delta ? `, opening a ${delta} gap onto the following straight` : ''}.`
+}
 CAUSE_DESC.straight_line_speed = (winner, loser, delta, loc) =>
   `${winner} was ${delta ? `${delta} quicker` : 'faster'} ${loc || 'on the straight'} - likely setup trim, DRS timing, or deployment.`
 CAUSE_DESC.straight_line_speed_energy_limited = (winner, loser, delta, loc) =>
