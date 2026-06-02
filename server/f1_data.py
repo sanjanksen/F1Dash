@@ -6274,9 +6274,17 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
         # asymmetric slow outliers (traffic, lift-and-coast, errors) that distort
         # OLS, and lets two drivers be compared at a COMMON in-range tyre age
         # (interpolation) rather than a fragile extrapolation to the stint edge.
-        try:
-            r_slope, r_intercept, _, _ = theilslopes(fuel_corrected, tyre_ages)
-        except Exception:
+        # theilslopes needs >=2 distinct x; on identical tyre ages it returns NaN
+        # (not an exception), so guard distinct-x and finiteness, falling back to
+        # the OLS fit.
+        if len(set(tyre_ages)) >= 2:
+            try:
+                r_slope, r_intercept, _, _ = theilslopes(fuel_corrected, tyre_ages)
+            except Exception:
+                r_slope, r_intercept = slope, intercept
+            if not (math.isfinite(r_slope) and math.isfinite(r_intercept)):
+                r_slope, r_intercept = slope, intercept
+        else:
             r_slope, r_intercept = slope, intercept
         median_age = float(np.median(tyre_ages))
         robust_pace = round(float(r_intercept + r_slope * median_age), 3)
@@ -6300,11 +6308,13 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
         cliff_age = cliff.get('cliff_tyre_age')
         if cliff.get('cliff_detected') and cliff_age is not None:
             pre = [(ta, fc) for ta, fc in zip(tyre_ages, fuel_corrected) if ta < cliff_age]
-            if len(pre) >= 2:
+            pre_ages = [ta for ta, _ in pre]
+            if len(set(pre_ages)) >= 2:
                 try:
-                    rs_pre, ri_pre, _, _ = theilslopes([fc for _, fc in pre], [ta for ta, _ in pre])
-                    robust_slope_pre = round(float(rs_pre), 4)
-                    robust_intercept_pre = round(float(ri_pre), 3)
+                    rs_pre, ri_pre, _, _ = theilslopes([fc for _, fc in pre], pre_ages)
+                    if math.isfinite(rs_pre) and math.isfinite(ri_pre):
+                        robust_slope_pre = round(float(rs_pre), 4)
+                        robust_intercept_pre = round(float(ri_pre), 3)
                 except Exception:
                     robust_slope_pre = robust_intercept_pre = None
 
@@ -6330,11 +6340,12 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
             'r_squared': round(r_sq, 3),
             'consistency_std_dev_s': std_dev,
             'ranking_basis': (
-                "raw_pace_trend_s_per_lap is what the stopwatch did — the raw slope of lap times over "
-                "tyre age. deg_rate_s_per_lap adds back expected fuel-burn gain; positive values estimate "
-                "tyre performance loss per lap. Only compare deg rates between stints on the same compound — "
-                "different compounds degrade at different baseline rates and cannot be directly compared. "
-                "Lower positive_deg_rate_s_per_lap is better within the same compound."
+                "raw_pace_trend_s_per_lap is what the stopwatch did — the raw OLS slope of lap times over "
+                "tyre age. deg_rate_s_per_lap is the fuel-corrected degradation slope, fit ROBUSTLY (Theil-Sen) "
+                "so one traffic/lift-and-coast lap can't swing it; positive values estimate tyre performance "
+                "loss per lap. r_squared is the OLS linearity of the fuel-corrected laps — a separate trust "
+                "signal for how clean the trend is, not the slope of the reported deg_rate. Only compare deg "
+                "rates between stints on the same compound. Lower positive_deg_rate_s_per_lap is better."
             ),
             'scatter_data': [
                 {'tyre_age': ta, 'lap_time_s': round(fc, 3), 'lap_number': ln}
@@ -6549,11 +6560,14 @@ def _align_stints_by_compound(stints_a: list[dict], stints_b: list[dict]) -> lis
             ref_age = round((lo + hi) / 2.0, 1)
             pace_a = _robust_pace_at_age(stint_a, ref_age)
             pace_b = _robust_pace_at_age(sb, ref_age)
+            pace_delta = round(pace_a - pace_b, 3) if pace_a is not None and pace_b is not None else None
         else:
-            # No overlapping tyre age — fall back to each stint's own pace.
+            # No tyre age both drivers ran (e.g. a cliff cap shrank the window, or
+            # a used set). There is no fair comparison — emit NO delta: an own-stint
+            # delta would reintroduce the tyre-age bias and still feed the headline.
+            # overlap_laps below is 0, so the pair is also marked low confidence.
             ref_age = None
-            pace_a = _stint_pace_s(stint_a)
-            pace_b = _stint_pace_s(sb)
+            pace_delta = None
 
         # How trustworthy is this delta? Width of the shared tyre-age window,
         # how far the two degradation slopes diverge, and whether a cliff forced
@@ -6569,7 +6583,7 @@ def _align_stints_by_compound(stints_a: list[dict], stints_b: list[dict]) -> lis
             'stint_a': stint_a,
             'stint_b': sb,
             'deg_rate_delta': round(deg_a - deg_b, 4),  # positive = driver_a degrades faster
-            'pace_delta_s': round(pace_a - pace_b, 3) if pace_a is not None and pace_b is not None else None,
+            'pace_delta_s': pace_delta,
             'pace_compared_at_tyre_age': ref_age,
             'pace_overlap_laps': overlap_laps,
             'pace_comparison_confidence': confidence,

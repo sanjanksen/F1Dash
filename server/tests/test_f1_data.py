@@ -1,4 +1,5 @@
 # server/tests/test_f1_data.py
+import math
 import pytest
 from unittest.mock import patch, MagicMock
 import f1_data
@@ -2315,6 +2316,20 @@ def test_degradation_rate_is_robust_to_outliers():
     assert stint["deg_rate_s_per_lap"] == pytest.approx(0.05, abs=0.02)
 
 
+def test_fit_stint_degradation_handles_identical_tyre_ages():
+    """A data artifact where every lap reports the same tyre age must not produce
+    NaN deg/pace — theilslopes returns NaN (not an exception) on identical x, so
+    a distinct-x guard is required."""
+    laps = [{"lap_number": n, "lap_time_s": 90.0 + 0.1 * n, "compound": "HARD", "tyre_age": 5}
+            for n in range(1, 6)]            # 5 laps, all tyre_age 5
+
+    stint = f1_data._fit_stint_degradation(laps, fuel_correction_s_per_lap=0.0)[0]
+
+    assert math.isfinite(stint["deg_rate_s_per_lap"])
+    assert math.isfinite(stint["robust_pace_s"])
+    assert math.isfinite(stint["robust_slope_s_per_lap"])
+
+
 def test_fit_stint_degradation_exposes_robust_median_pace():
     """Stint pace must be a robust central estimator (median of fuel-corrected
     laps), not the regression line extrapolated to tyre age 1 — which blows up
@@ -2461,6 +2476,25 @@ def test_pace_comparison_confidence_reflects_overlap_and_slope_divergence():
     assert _conf(_stint(1, 4, 90.0, 0.05), _stint(1, 4, 90.2, 0.05)) == "low"
     # Low: long overlap but degradation slopes diverge sharply.
     assert _conf(_stint(1, 18, 90.0, 0.02), _stint(1, 18, 90.0, 0.30)) == "low"
+
+
+def test_pace_delta_is_none_when_no_shared_tyre_age():
+    """Two same-compound stints that share NO tyre-age range (e.g. a used set,
+    or a cliff cap shrinking the window to nothing) have no fair comparison.
+    Emit no delta — it must not feed the headline — and mark it low confidence,
+    rather than reintroducing the tyre-age bias from each stint's own pace."""
+    a = [{"lap_number": n, "lap_time_s": 90.0 + 0.05 * n, "compound": "HARD", "tyre_age": n}
+         for n in range(1, 6)]               # fresh set, tyre ages 1-5
+    b = [{"lap_number": n, "lap_time_s": 90.0 + 0.05 * n, "compound": "HARD", "tyre_age": n}
+         for n in range(10, 16)]             # used set, tyre ages 10-15 (no overlap)
+
+    aligned = f1_data._align_stints_by_compound(
+        f1_data._fit_stint_degradation(a, fuel_correction_s_per_lap=0.0),
+        f1_data._fit_stint_degradation(b, fuel_correction_s_per_lap=0.0),
+    )
+
+    assert aligned[0]["pace_delta_s"] is None
+    assert aligned[0]["pace_comparison_confidence"] == "low"
 
 
 class TestDetectCliff:
