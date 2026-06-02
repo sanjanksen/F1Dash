@@ -6245,10 +6245,15 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
         min_lap = min(lap_nums)
 
         # Later laps are naturally faster because the car burns fuel. Add that
-        # expected fuel-burn gain back to later laps so the remaining slope is
-        # tyre performance loss rather than fuel weight.
+        # expected fuel-burn gain back so the remaining slope is tyre loss, not
+        # fuel weight. Anchored to the GLOBAL race start (lap 1), not the stint's
+        # first lap: per-stint anchoring normalised every stint to its own fuel
+        # state, biasing comparisons between drivers who ran the same compound in
+        # different race phases. fuel_correction_s_per_lap is a fixed assumption
+        # (~0.04 s/lap) — it is not identifiable from a single stint, so it is
+        # held constant rather than fit, and applied identically to both drivers.
         fuel_corrected = [
-            t + fuel_correction_s_per_lap * (n - min_lap)
+            t + fuel_correction_s_per_lap * (n - 1)
             for t, n in zip(raw_times, lap_nums)
         ]
 

@@ -2380,6 +2380,26 @@ def test_filter_clean_race_laps_excludes_vsc_ending_laps():
     assert {l["lap_number"] for l in laps} == {10, 12}
 
 
+def test_race_pace_delta_corrects_for_fuel_across_race_phases():
+    """Same compound, identical true pace + degradation, but run in DIFFERENT
+    race phases (early vs late stint). Per-stint fuel anchoring normalizes each
+    stint to its own fuel state and invents a gap; race-wide anchoring to a
+    single global fuel datum (lap 1) removes it."""
+    c = 0.04
+    # raw(L) is chosen so a GLOBAL-anchor fuel correction yields t = 90 + 0.05*age
+    # for BOTH drivers, despite the compound being run in different race phases.
+    a = [{"lap_number": L, "lap_time_s": 90.0 + 0.05 * (L - 1) - c * (L - 1),
+          "compound": "HARD", "tyre_age": L - 1} for L in range(2, 14)]     # early: laps 2-13
+    b = [{"lap_number": L, "lap_time_s": 90.0 + 0.05 * (L - 34) - c * (L - 1),
+          "compound": "HARD", "tyre_age": L - 34} for L in range(35, 47)]   # late: laps 35-46
+
+    stints_a = f1_data._fit_stint_degradation(a, fuel_correction_s_per_lap=c)
+    stints_b = f1_data._fit_stint_degradation(b, fuel_correction_s_per_lap=c)
+    aligned = f1_data._align_stints_by_compound(stints_a, stints_b)
+
+    assert abs(aligned[0]["pace_delta_s"]) < 0.05
+
+
 class TestDetectCliff:
     def test_returns_no_cliff_when_too_few_laps(self):
         ages = list(range(1, 10))
