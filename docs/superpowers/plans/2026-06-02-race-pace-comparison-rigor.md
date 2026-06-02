@@ -1,7 +1,9 @@
 # Race-Pace Comparison Rigor
 
-> Status: Phase 0 complete (committed `31a5e0b`). Phases 1–4 planned, not started.
-> Phase 5 is a separate follow-up. Estimated effort: ~2–3 focused days for 1–4.
+> Status: Phases 0–4 complete (`31a5e0b`, `d7ba85b`, `1ebcf4a`, `34b6c14`,
+> `7b4c938`). Phase 5 (robust deg-rate) is the remaining separate follow-up.
+> +7 regression tests; full suite 24 pre-existing failures unchanged. Real Miami
+> NOR vs ANT: -0.455 (bug) → +0.046 s/lap, confidence 'high'.
 
 ## Context
 
