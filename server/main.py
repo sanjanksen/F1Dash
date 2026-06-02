@@ -24,12 +24,14 @@ def _safe_editorial_ingest():
     try:
         from editorial.rss import poll_rss_feeds, DEFAULT_FEEDS
         from editorial.fia_poller import poll_fia_documents
+        from editorial.press_conference_poller import poll_press_conferences
     except Exception as e:
         logger.warning("Editorial modules unavailable: %s", type(e).__name__)
         return
     try:
         poll_rss_feeds(DEFAULT_FEEDS)
         poll_fia_documents()
+        poll_press_conferences()
     except Exception as e:
         logger.warning("Editorial ingestion run failed: %s", type(e).__name__, exc_info=True)
 
