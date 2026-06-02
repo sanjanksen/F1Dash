@@ -686,7 +686,23 @@ def _canonicalize_race_pace_analysis(analysis: dict, evidence: list[dict]) -> di
         deg_text,
         f"Decisive factor: {factor or 'mixed'}",
     ]
-    canonical["confidence"] = canonical.get("confidence") or "medium"
+
+    # Gate confidence on how trustworthy the pace comparison itself was — short
+    # overlapping stints or diverging degradation make the delta indicative, not
+    # decisive. Hedge the answer accordingly instead of stating a shaky gap flat.
+    pace_conf = result.get("pace_comparison_confidence")
+    canonical["confidence"] = pace_conf or canonical.get("confidence") or "medium"
+    if pace_conf in ("low", "medium"):
+        caveats = list(canonical.get("caveats") or [])
+        hedge = (
+            "low-confidence: the drivers shared little comparable stint data (short overlap "
+            "or sharply different degradation), so treat the pace gap as indicative only"
+            if pace_conf == "low" else
+            "moderate confidence: the comparable stint overlap is limited, so the pace gap is a guide rather than a precise figure"
+        )
+        if hedge not in caveats:
+            caveats.append(hedge)
+        canonical["caveats"] = caveats
     return canonical
 
 SYSTEM_PROMPT = f"""You are an expert Formula 1 analyst with access to real-time {CURRENT_YEAR} season data through tools.

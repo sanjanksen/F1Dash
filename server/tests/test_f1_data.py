@@ -2428,6 +2428,28 @@ def test_race_pace_delta_compares_in_pre_cliff_regime():
     assert abs(aligned[0]["pace_delta_s"]) < 0.1
 
 
+def test_pace_comparison_confidence_reflects_overlap_and_slope_divergence():
+    """A pace delta from a long, clean, aligned-slope overlap is high-confidence.
+    A short overlap, or strongly diverging degradation (the midpoint hides an
+    age-dependent gap), is low-confidence."""
+    def _conf(a, b):
+        return f1_data._align_stints_by_compound(
+            f1_data._fit_stint_degradation(a, fuel_correction_s_per_lap=0.0),
+            f1_data._fit_stint_degradation(b, fuel_correction_s_per_lap=0.0),
+        )[0]["pace_comparison_confidence"]
+
+    def _stint(n_from, n_to, base, slope):
+        return [{"lap_number": n, "lap_time_s": base + slope * n, "compound": "HARD", "tyre_age": n}
+                for n in range(n_from, n_to)]
+
+    # High: 17 shared laps, identical degradation slopes.
+    assert _conf(_stint(1, 18, 90.0, 0.05), _stint(1, 18, 90.2, 0.05)) == "high"
+    # Low: only 3 shared laps.
+    assert _conf(_stint(1, 4, 90.0, 0.05), _stint(1, 4, 90.2, 0.05)) == "low"
+    # Low: long overlap but degradation slopes diverge sharply.
+    assert _conf(_stint(1, 18, 90.0, 0.02), _stint(1, 18, 90.0, 0.30)) == "low"
+
+
 class TestDetectCliff:
     def test_returns_no_cliff_when_too_few_laps(self):
         ages = list(range(1, 10))

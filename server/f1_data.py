@@ -6488,6 +6488,21 @@ def _robust_pace_at_age(stint: dict, tyre_age: float) -> float | None:
     return round(intercept + slope * tyre_age, 3)
 
 
+def _pace_comparison_confidence(overlap_laps: int, slope_divergence: float, cliffed: bool) -> str:
+    """Rate how much to trust a per-compound pace delta.
+
+    - low: too little shared tyre-age data, or the two degradation curves diverge
+      sharply (a single common-age point then hides an age-dependent gap).
+    - high: a long, clean, aligned-slope overlap with no cliff in play.
+    - medium: everything in between (including cliff-restricted comparisons).
+    """
+    if overlap_laps < 5 or slope_divergence > 0.10:
+        return 'low'
+    if overlap_laps >= 10 and slope_divergence < 0.03 and not cliffed:
+        return 'high'
+    return 'medium'
+
+
 def _align_stints_by_compound(stints_a: list[dict], stints_b: list[dict]) -> list[dict]:
     """Match stints by compound and return aligned pairs with comparative metrics."""
     aligned = []
@@ -6537,6 +6552,15 @@ def _align_stints_by_compound(stints_a: list[dict], stints_b: list[dict]) -> lis
             pace_a = _stint_pace_s(stint_a)
             pace_b = _stint_pace_s(sb)
 
+        # How trustworthy is this delta? Width of the shared tyre-age window,
+        # how far the two degradation slopes diverge, and whether a cliff forced
+        # a restricted regime.
+        overlap_laps = int(hi - lo + 1) if lo <= hi else 0
+        slope_div = abs((stint_a.get('robust_slope_s_per_lap') or 0.0)
+                        - (sb.get('robust_slope_s_per_lap') or 0.0))
+        cliffed = _is_degradation_cliff(stint_a) or _is_degradation_cliff(sb)
+        confidence = _pace_comparison_confidence(overlap_laps, slope_div, cliffed)
+
         aligned.append({
             'compound': comp_a,
             'stint_a': stint_a,
@@ -6544,6 +6568,8 @@ def _align_stints_by_compound(stints_a: list[dict], stints_b: list[dict]) -> lis
             'deg_rate_delta': round(deg_a - deg_b, 4),  # positive = driver_a degrades faster
             'pace_delta_s': round(pace_a - pace_b, 3) if pace_a is not None and pace_b is not None else None,
             'pace_compared_at_tyre_age': ref_age,
+            'pace_overlap_laps': overlap_laps,
+            'pace_comparison_confidence': confidence,
         })
 
     return aligned
@@ -6944,6 +6970,15 @@ def analyze_race_pace_battle(
     if overall_delta is None:
         overall_delta = round(pace_a - pace_b, 3) if pace_a is not None and pace_b is not None else None
 
+    # Overall confidence follows the matched compound carrying the most shared
+    # laps — the one that drives the headline delta.
+    if aligned:
+        _dominant = max(aligned, key=lambda a: min(a['stint_a'].get('lap_count', 1),
+                                                   a['stint_b'].get('lap_count', 1)))
+        pace_confidence = _dominant.get('pace_comparison_confidence', 'medium')
+    else:
+        pace_confidence = 'low'
+
     # Compute deg averages only from compound-matched aligned stints.
     # Cross-compound averaging is meaningless — soft and hard degrade at different baseline rates.
     if aligned:
@@ -7026,6 +7061,7 @@ def analyze_race_pace_battle(
         'fuel_corrected_pace_a_s': round(pace_a, 3) if pace_a is not None else None,
         'fuel_corrected_pace_b_s': round(pace_b, 3) if pace_b is not None else None,
         'overall_pace_delta_s': overall_delta,
+        'pace_comparison_confidence': pace_confidence,
         'avg_deg_rate_a_s_per_lap': round(avg_deg_a, 4) if avg_deg_a is not None else None,
         'avg_deg_rate_b_s_per_lap': round(avg_deg_b, 4) if avg_deg_b is not None else None,
         'deg_rate_delta': deg_delta,
