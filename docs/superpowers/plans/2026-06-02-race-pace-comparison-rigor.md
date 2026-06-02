@@ -1,9 +1,9 @@
 # Race-Pace Comparison Rigor
 
-> Status: Phases 0–4 complete (`31a5e0b`, `d7ba85b`, `1ebcf4a`, `34b6c14`,
-> `7b4c938`). Phase 5 (robust deg-rate) is the remaining separate follow-up.
-> +7 regression tests; full suite 24 pre-existing failures unchanged. Real Miami
-> NOR vs ANT: -0.455 (bug) → +0.046 s/lap, confidence 'high'.
+> Status: COMPLETE — all phases 0–5 shipped (`31a5e0b`, `d7ba85b`, `1ebcf4a`,
+> `34b6c14`, `7b4c938`, `702b46c`). +8 regression tests; full suite 24
+> pre-existing failures unchanged. Real Miami NOR vs ANT: -0.455 (bug) → +0.046
+> s/lap, confidence 'high'.
 
 ## Context
 
