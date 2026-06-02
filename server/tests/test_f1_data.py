@@ -2400,6 +2400,34 @@ def test_race_pace_delta_corrects_for_fuel_across_race_phases():
     assert abs(aligned[0]["pace_delta_s"]) < 0.05
 
 
+def test_race_pace_delta_compares_in_pre_cliff_regime():
+    """When a stint falls off the tyre cliff, the driver-vs-driver comparison
+    must happen in the shared PRE-cliff regime. A single robust line through a
+    cliff is bent upward by the post-cliff laps, inventing a gap against a driver
+    who never hit the cliff."""
+    # A: clean linear stint, no cliff.
+    a = [{"lap_number": n, "lap_time_s": 90.0 + 0.05 * n, "compound": "HARD", "tyre_age": n}
+         for n in range(1, 21)]
+    # B: identical pre-cliff pace (ages 1-8), then a steep cliff (ages 9-20).
+    # The cliff is early, so the FULL-range midpoint (10.5) falls in the cliff
+    # zone — exactly where a whole-stint line is distorted.
+    b = []
+    for n in range(1, 21):
+        t = 90.0 + 0.05 * n if n <= 8 else 90.0 + 0.05 * 8 + 0.4 * (n - 8)
+        b.append({"lap_number": n, "lap_time_s": t, "compound": "HARD", "tyre_age": n})
+
+    stints_a = f1_data._fit_stint_degradation(a, fuel_correction_s_per_lap=0.0)
+    stints_b = f1_data._fit_stint_degradation(b, fuel_correction_s_per_lap=0.0)
+    assert stints_b[0]["cliff_detected"]  # sanity: the cliff must be detected
+
+    aligned = f1_data._align_stints_by_compound(stints_a, stints_b)
+
+    # Comparison must be capped to the shared pre-cliff regime (cliff at age 9 →
+    # cap at 8), NOT the full-range midpoint (10.5) which sits in the cliff zone.
+    assert aligned[0]["pace_compared_at_tyre_age"] <= 8
+    assert abs(aligned[0]["pace_delta_s"]) < 0.1
+
+
 class TestDetectCliff:
     def test_returns_no_cliff_when_too_few_laps(self):
         ages = list(range(1, 10))

@@ -6289,6 +6289,22 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
         total_deg_loss = round(positive_deg * len(laps), 3)
         cliff = _detect_cliff(tyre_ages, fuel_corrected)
 
+        # When the stint falls off a cliff, also fit a robust line on the
+        # pre-cliff laps only. The whole-stint line is bent by the post-cliff
+        # tail; pace comparisons should use the pre-cliff regime (see
+        # _robust_pace_at_age / _align_stints_by_compound).
+        robust_slope_pre = robust_intercept_pre = None
+        cliff_age = cliff.get('cliff_tyre_age')
+        if cliff.get('cliff_detected') and cliff_age is not None:
+            pre = [(ta, fc) for ta, fc in zip(tyre_ages, fuel_corrected) if ta < cliff_age]
+            if len(pre) >= 2:
+                try:
+                    rs_pre, ri_pre, _, _ = theilslopes([fc for _, fc in pre], [ta for ta, _ in pre])
+                    robust_slope_pre = round(float(rs_pre), 4)
+                    robust_intercept_pre = round(float(ri_pre), 3)
+                except Exception:
+                    robust_slope_pre = robust_intercept_pre = None
+
         results.append({
             'compound': stint['compound'],
             'lap_count': len(laps),
@@ -6303,6 +6319,8 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
             'fuel_corrected_median_pace_s': median_pace,
             'robust_slope_s_per_lap': round(float(r_slope), 4),
             'robust_intercept_s': round(float(r_intercept), 3),
+            'robust_slope_pre_cliff_s_per_lap': robust_slope_pre,
+            'robust_intercept_pre_cliff_s': robust_intercept_pre,
             'robust_pace_s': robust_pace,
             'min_tyre_age': int(min(tyre_ages)),
             'max_tyre_age': int(max(tyre_ages)),
@@ -6432,13 +6450,39 @@ def _stint_pace_s(stint: dict) -> float | None:
     return None
 
 
+def _is_degradation_cliff(stint: dict) -> bool:
+    """True only for a genuine tyre-degradation cliff (pace accelerating
+    downward), not any two-segment break. _detect_cliff also fires on warm-up
+    artifacts — slow early laps settling — where the 'pre-cliff' regime is the
+    SLOW one, so restricting to it would corrupt the comparison. Require the
+    post-cliff degradation to be both higher than pre-cliff and clearly positive
+    (tyres actually falling off)."""
+    if not stint.get('cliff_detected'):
+        return False
+    pre = stint.get('pre_cliff_deg_rate_s_per_lap')
+    post = stint.get('post_cliff_deg_rate_s_per_lap')
+    if pre is None or post is None:
+        return False
+    return post > pre and post > 0.10
+
+
 def _robust_pace_at_age(stint: dict, tyre_age: float) -> float | None:
     """Evaluate a stint's robust fit at a given tyre age. This is how two
     drivers are compared on equal footing: both fits read at the SAME in-range
     tyre age, so different stint lengths no longer bias the gap. Falls back to
-    the stint's representative pace when no robust fit is present."""
-    slope = stint.get('robust_slope_s_per_lap')
-    intercept = stint.get('robust_intercept_s')
+    the stint's representative pace when no robust fit is present.
+
+    If the stint hit a cliff and we are evaluating in the pre-cliff regime, use
+    the pre-cliff fit — the whole-stint line is bent upward by the post-cliff
+    tail and would overstate the pace."""
+    cliff_age = stint.get('cliff_tyre_age')
+    if (_is_degradation_cliff(stint) and cliff_age is not None and tyre_age < cliff_age
+            and stint.get('robust_intercept_pre_cliff_s') is not None):
+        slope = stint.get('robust_slope_pre_cliff_s_per_lap')
+        intercept = stint.get('robust_intercept_pre_cliff_s')
+    else:
+        slope = stint.get('robust_slope_s_per_lap')
+        intercept = stint.get('robust_intercept_s')
     if slope is None or intercept is None:
         return _stint_pace_s(stint)
     return round(intercept + slope * tyre_age, 3)
@@ -6474,6 +6518,15 @@ def _align_stints_by_compound(stints_a: list[dict], stints_b: list[dict]) -> lis
         # age. Interpolation within shared data, never edge extrapolation.
         lo = max(stint_a.get('min_tyre_age', 1), sb.get('min_tyre_age', 1))
         hi = min(stint_a.get('max_tyre_age', 1), sb.get('max_tyre_age', 1))
+        # If either stint fell off a cliff, keep the comparison in the shared
+        # PRE-cliff regime — fitting/comparing across a degradation regime change
+        # is a misspecification a single robust line cannot fix.
+        cliff_caps = [
+            s['cliff_tyre_age'] - 1 for s in (stint_a, sb)
+            if _is_degradation_cliff(s) and s.get('cliff_tyre_age') is not None
+        ]
+        if cliff_caps:
+            hi = min(hi, min(cliff_caps))
         if lo <= hi:
             ref_age = round((lo + hi) / 2.0, 1)
             pace_a = _robust_pace_at_age(stint_a, ref_age)
