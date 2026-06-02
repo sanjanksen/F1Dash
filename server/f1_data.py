@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 from pandas.api.types import is_numeric_dtype
 from scipy.signal import savgol_filter
+from scipy.stats import theilslopes
 from energy_2026 import get_energy_2026_knowledge
 from driver_styles import get_comparison_framing
 from circuit_profiles import get_circuit_profile
@@ -6255,6 +6256,21 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
         raw_slope, _, _ = _linear_regression(tyre_ages, raw_times)
         slope, intercept, r_sq = _linear_regression(tyre_ages, fuel_corrected)
         pace_at_age_1 = round(slope * 1 + intercept, 3)
+        # Robust central pace: median of fuel-corrected laps. Used for pace
+        # comparison instead of pace_at_age_1, which extrapolates the trend line
+        # to tyre age 1 and blows up on noisy/low-R² stints (Miami NOR/ANT bug).
+        median_pace = round(float(np.median(fuel_corrected)), 3)
+
+        # Robust (Theil-Sen) fit of fuel-corrected pace vs tyre age. Resists the
+        # asymmetric slow outliers (traffic, lift-and-coast, errors) that distort
+        # OLS, and lets two drivers be compared at a COMMON in-range tyre age
+        # (interpolation) rather than a fragile extrapolation to the stint edge.
+        try:
+            r_slope, r_intercept, _, _ = theilslopes(fuel_corrected, tyre_ages)
+        except Exception:
+            r_slope, r_intercept = slope, intercept
+        median_age = float(np.median(tyre_ages))
+        robust_pace = round(float(r_intercept + r_slope * median_age), 3)
 
         mean_t = sum(fuel_corrected) / len(fuel_corrected)
         variance = sum((t - mean_t) ** 2 for t in fuel_corrected) / len(fuel_corrected)
@@ -6275,6 +6291,12 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
             'positive_deg_rate_s_per_lap': round(positive_deg, 4),
             'total_deg_loss_s': total_deg_loss,
             'fuel_corrected_pace_at_age_1_s': pace_at_age_1,
+            'fuel_corrected_median_pace_s': median_pace,
+            'robust_slope_s_per_lap': round(float(r_slope), 4),
+            'robust_intercept_s': round(float(r_intercept), 3),
+            'robust_pace_s': robust_pace,
+            'min_tyre_age': int(min(tyre_ages)),
+            'max_tyre_age': int(max(tyre_ages)),
             'r_squared': round(r_sq, 3),
             'consistency_std_dev_s': std_dev,
             'ranking_basis': (
@@ -6388,6 +6410,31 @@ def _summarize_tyre_management(stints: list[dict]) -> dict | None:
     }
 
 
+def _stint_pace_s(stint: dict) -> float | None:
+    """Representative single-number pace for a stint, in order of rigour:
+    robust (Theil-Sen) fit evaluated at the stint's own median tyre age, then
+    the plain median of fuel-corrected laps, then the age-1 regression value
+    (legacy/mocked stints only). The age-1 extrapolation is fragile on noisy
+    stints and must not drive pace comparisons — see the Miami NOR/ANT bug."""
+    for key in ('robust_pace_s', 'fuel_corrected_median_pace_s', 'fuel_corrected_pace_at_age_1_s'):
+        pace = stint.get(key)
+        if pace is not None:
+            return pace
+    return None
+
+
+def _robust_pace_at_age(stint: dict, tyre_age: float) -> float | None:
+    """Evaluate a stint's robust fit at a given tyre age. This is how two
+    drivers are compared on equal footing: both fits read at the SAME in-range
+    tyre age, so different stint lengths no longer bias the gap. Falls back to
+    the stint's representative pace when no robust fit is present."""
+    slope = stint.get('robust_slope_s_per_lap')
+    intercept = stint.get('robust_intercept_s')
+    if slope is None or intercept is None:
+        return _stint_pace_s(stint)
+    return round(intercept + slope * tyre_age, 3)
+
+
 def _align_stints_by_compound(stints_a: list[dict], stints_b: list[dict]) -> list[dict]:
     """Match stints by compound and return aligned pairs with comparative metrics."""
     aligned = []
@@ -6411,8 +6458,22 @@ def _align_stints_by_compound(stints_a: list[dict], stints_b: list[dict]) -> lis
         # Use positive_deg_rate (clamped at 0) so delta reflects real tyre wear, not noise artifacts
         deg_a = stint_a.get('positive_deg_rate_s_per_lap') or 0.0
         deg_b = sb.get('positive_deg_rate_s_per_lap') or 0.0
-        pace_a = stint_a.get('fuel_corrected_pace_at_age_1_s')
-        pace_b = sb.get('fuel_corrected_pace_at_age_1_s')
+
+        # Compare both drivers' robust fits at the midpoint of the tyre-age range
+        # they BOTH ran. This neutralises stint-length differences — a longer
+        # stint no longer looks slower just because its laps sit at higher tyre
+        # age. Interpolation within shared data, never edge extrapolation.
+        lo = max(stint_a.get('min_tyre_age', 1), sb.get('min_tyre_age', 1))
+        hi = min(stint_a.get('max_tyre_age', 1), sb.get('max_tyre_age', 1))
+        if lo <= hi:
+            ref_age = round((lo + hi) / 2.0, 1)
+            pace_a = _robust_pace_at_age(stint_a, ref_age)
+            pace_b = _robust_pace_at_age(sb, ref_age)
+        else:
+            # No overlapping tyre age — fall back to each stint's own pace.
+            ref_age = None
+            pace_a = _stint_pace_s(stint_a)
+            pace_b = _stint_pace_s(sb)
 
         aligned.append({
             'compound': comp_a,
@@ -6420,6 +6481,7 @@ def _align_stints_by_compound(stints_a: list[dict], stints_b: list[dict]) -> lis
             'stint_b': sb,
             'deg_rate_delta': round(deg_a - deg_b, 4),  # positive = driver_a degrades faster
             'pace_delta_s': round(pace_a - pace_b, 3) if pace_a is not None and pace_b is not None else None,
+            'pace_compared_at_tyre_age': ref_age,
         })
 
     return aligned
@@ -6799,11 +6861,26 @@ def analyze_race_pace_battle(
         total = sum(s['lap_count'] for s in stints)
         if total == 0:
             return None
-        return sum(s['fuel_corrected_pace_at_age_1_s'] * s['lap_count'] for s in stints) / total
+        return sum(_stint_pace_s(s) * s['lap_count'] for s in stints) / total
 
     pace_a = _weighted_pace(stints_a)
     pace_b = _weighted_pace(stints_b)
-    overall_delta = round(pace_a - pace_b, 3) if pace_a is not None and pace_b is not None else None
+
+    # Headline gap = lap-weighted mean of the per-compound deltas, each measured
+    # at the tyre age BOTH drivers shared (see _align_stints_by_compound). This
+    # is the fair comparison; subtracting two whole-race average paces would
+    # re-introduce the stint-length / tyre-age bias the alignment removes.
+    def _matched_overall_delta() -> float | None:
+        rows = [
+            (a['pace_delta_s'], min(a['stint_a'].get('lap_count', 1), a['stint_b'].get('lap_count', 1)))
+            for a in aligned if a.get('pace_delta_s') is not None
+        ]
+        w = sum(weight for _, weight in rows)
+        return round(sum(d * weight for d, weight in rows) / w, 3) if w else None
+
+    overall_delta = _matched_overall_delta()
+    if overall_delta is None:
+        overall_delta = round(pace_a - pace_b, 3) if pace_a is not None and pace_b is not None else None
 
     # Compute deg averages only from compound-matched aligned stints.
     # Cross-compound averaging is meaningless — soft and hard degrade at different baseline rates.

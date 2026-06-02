@@ -2302,6 +2302,65 @@ def test_fit_stint_degradation_adds_back_fuel_burn_for_improving_raw_pace():
     assert stints[0]["positive_deg_rate_s_per_lap"] == pytest.approx(0.02)
 
 
+def test_fit_stint_degradation_exposes_robust_median_pace():
+    """Stint pace must be a robust central estimator (median of fuel-corrected
+    laps), not the regression line extrapolated to tyre age 1 — which blows up
+    on noisy/low-R² stints. Regression guard for the Miami NOR vs ANT phantom
+    +0.45 s/lap bug, where ANT's scattered Medium stint projected ~0.9s slow."""
+    # Two slow early laps (traffic / warm-up) then a settled stint at 90.0.
+    clean_laps = (
+        [{"lap_number": n, "lap_time_s": 92.5, "compound": "HARD", "tyre_age": n} for n in (1, 2, 3)]
+        + [{"lap_number": n, "lap_time_s": 90.0, "compound": "HARD", "tyre_age": n} for n in range(4, 16)]
+    )
+
+    stint = f1_data._fit_stint_degradation(clean_laps, fuel_correction_s_per_lap=0.0)[0]
+
+    # The representative pace is 90.0 (12 of 15 laps); the median ignores the
+    # early outliers, while age-1 extrapolation is dragged upward by them.
+    assert stint["fuel_corrected_median_pace_s"] == pytest.approx(90.0)
+    assert abs(stint["fuel_corrected_median_pace_s"] - 90.0) < abs(
+        stint["fuel_corrected_pace_at_age_1_s"] - 90.0
+    )
+
+
+def test_race_pace_delta_robust_to_noisy_early_laps():
+    """Two drivers with the same representative race pace must show a ~0 pace
+    delta, even when one stint has noisy/slow early laps. The age-1 metric
+    reported a phantom ~1s gap here — the root cause of the Miami NOR/ANT bug."""
+    clean = [{"lap_number": n, "lap_time_s": 90.0, "compound": "HARD", "tyre_age": n}
+             for n in range(1, 16)]
+    noisy = (
+        [{"lap_number": n, "lap_time_s": 92.5, "compound": "HARD", "tyre_age": n} for n in (1, 2, 3)]
+        + [{"lap_number": n, "lap_time_s": 90.0, "compound": "HARD", "tyre_age": n} for n in range(4, 16)]
+    )
+
+    stints_clean = f1_data._fit_stint_degradation(clean, fuel_correction_s_per_lap=0.0)
+    stints_noisy = f1_data._fit_stint_degradation(noisy, fuel_correction_s_per_lap=0.0)
+    aligned = f1_data._align_stints_by_compound(stints_clean, stints_noisy)
+
+    assert abs(aligned[0]["pace_delta_s"]) < 0.25
+
+
+def test_race_pace_delta_corrects_for_unequal_stint_lengths():
+    """Two drivers with identical true pace AND degradation but different stint
+    lengths must show a ~0 pace delta. A plain median (or any own-average) puts
+    the longer stint at a higher mean tyre age and invents a phantom gap;
+    evaluating both robust fits at a COMMON in-range tyre age removes it."""
+    a = [{"lap_number": n, "lap_time_s": 90.0 + 0.05 * n, "compound": "HARD", "tyre_age": n}
+         for n in range(1, 11)]   # 10-lap stint
+    b = [{"lap_number": n, "lap_time_s": 90.0 + 0.05 * n, "compound": "HARD", "tyre_age": n}
+         for n in range(1, 26)]   # 25-lap stint — identical pace + degradation
+
+    stints_a = f1_data._fit_stint_degradation(a, fuel_correction_s_per_lap=0.0)
+    stints_b = f1_data._fit_stint_degradation(b, fuel_correction_s_per_lap=0.0)
+    aligned = f1_data._align_stints_by_compound(stints_a, stints_b)
+
+    # Same true pace at any shared tyre age → the fair (common-age) delta is ~0.
+    assert abs(aligned[0]["pace_delta_s"]) < 0.05
+    # And the comparison must be made at a tyre age both drivers actually ran (1–10).
+    assert 1 <= aligned[0]["pace_compared_at_tyre_age"] <= 10
+
+
 class TestDetectCliff:
     def test_returns_no_cliff_when_too_few_laps(self):
         ages = list(range(1, 10))

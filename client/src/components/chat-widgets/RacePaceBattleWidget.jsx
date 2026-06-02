@@ -160,7 +160,7 @@ export default function RacePaceBattleWidget({ widget }) {
                 <div key={index} className="grid gap-2 py-3 text-sm sm:grid-cols-[5rem_minmax(0,1fr)_7rem]">
                   <div className="text-muted-foreground">{stint.compound ?? `Stint ${index + 1}`}</div>
                   <div className="text-foreground">
-                    {driverA}: {fmt(stint.driver_a?.fuel_corrected_pace_at_age_1_s)} / {driverB}: {fmt(stint.driver_b?.fuel_corrected_pace_at_age_1_s)}
+                    {driverA}: {fmt(stint.driver_a?.robust_pace_s ?? stint.driver_a?.fuel_corrected_median_pace_s ?? stint.driver_a?.fuel_corrected_pace_at_age_1_s)} / {driverB}: {fmt(stint.driver_b?.robust_pace_s ?? stint.driver_b?.fuel_corrected_median_pace_s ?? stint.driver_b?.fuel_corrected_pace_at_age_1_s)}
                   </div>
                   <div className="font-mono-data text-xs text-muted-foreground sm:text-right">
                     {stint.lap_overlap ? `${stint.lap_overlap} laps` : ''}
