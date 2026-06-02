@@ -2361,6 +2361,25 @@ def test_race_pace_delta_corrects_for_unequal_stint_lengths():
     assert 1 <= aligned[0]["pace_compared_at_tyre_age"] <= 10
 
 
+def test_filter_clean_race_laps_excludes_vsc_ending_laps():
+    """TrackStatus '7' (VSC ending) is a transition lap and must be excluded.
+    It is only mildly slow, so it slips under the median+5s outlier filter —
+    the track-status check is the only thing that can catch it."""
+    df = pd.DataFrame([
+        {"LapNumber": 10, "LapTime": pd.Timedelta(seconds=90.0), "PitInTime": pd.NaT,
+         "PitOutTime": pd.NaT, "TrackStatus": "1", "Compound": "HARD", "TyreLife": 5},
+        {"LapNumber": 11, "LapTime": pd.Timedelta(seconds=93.0), "PitInTime": pd.NaT,
+         "PitOutTime": pd.NaT, "TrackStatus": "7", "Compound": "HARD", "TyreLife": 6},  # VSC ending
+        {"LapNumber": 12, "LapTime": pd.Timedelta(seconds=90.1), "PitInTime": pd.NaT,
+         "PitOutTime": pd.NaT, "TrackStatus": "1", "Compound": "HARD", "TyreLife": 7},
+    ])
+
+    laps = f1_data._filter_clean_race_laps(df)
+
+    # The VSC-ending lap (11) is dropped; the two green laps survive.
+    assert {l["lap_number"] for l in laps} == {10, 12}
+
+
 class TestDetectCliff:
     def test_returns_no_cliff_when_too_few_laps(self):
         ages = list(range(1, 10))

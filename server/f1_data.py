@@ -6019,8 +6019,12 @@ def _filter_clean_race_laps(driver_laps) -> list[dict]:
         if pit_out is not None and pd.notna(pit_out):
             continue
 
+        # FastF1 TrackStatus: 4=Safety Car, 5=Red Flag, 6=VSC deployed,
+        # 7=VSC ending. All four are neutralised/transition laps whose times do
+        # not represent race pace. 7 is only mildly slow so it would otherwise
+        # slip under the median+5s outlier filter below.
         track_status = str(lap.get('TrackStatus') or '')
-        if any(c in track_status for c in ('4', '5', '6')):
+        if any(c in track_status for c in ('4', '5', '6', '7')):
             continue
 
         compound = str(lap.get('Compound') or 'UNKNOWN')
