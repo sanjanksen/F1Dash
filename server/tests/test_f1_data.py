@@ -2302,6 +2302,19 @@ def test_fit_stint_degradation_adds_back_fuel_burn_for_improving_raw_pace():
     assert stints[0]["positive_deg_rate_s_per_lap"] == pytest.approx(0.02)
 
 
+def test_degradation_rate_is_robust_to_outliers():
+    """deg_rate must use the robust (Theil-Sen) slope, not OLS — one traffic-
+    slowed lap at the end of a stint should not swing the reported degradation."""
+    laps = [{"lap_number": n, "lap_time_s": 90.0 + 0.05 * n, "compound": "HARD", "tyre_age": n}
+            for n in range(1, 16)]            # true degradation = 0.05 s/lap
+    laps[-1]["lap_time_s"] += 3.0             # one slow lap (e.g. traffic) at the end
+
+    stint = f1_data._fit_stint_degradation(laps, fuel_correction_s_per_lap=0.0)[0]
+
+    # OLS would be dragged toward ~0.12; the robust slope stays near the truth.
+    assert stint["deg_rate_s_per_lap"] == pytest.approx(0.05, abs=0.02)
+
+
 def test_fit_stint_degradation_exposes_robust_median_pace():
     """Stint pace must be a robust central estimator (median of fuel-corrected
     laps), not the regression line extrapolated to tyre age 1 — which blows up

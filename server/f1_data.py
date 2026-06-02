@@ -6285,7 +6285,10 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
         variance = sum((t - mean_t) ** 2 for t in fuel_corrected) / len(fuel_corrected)
         std_dev = round(variance ** 0.5, 3)
 
-        positive_deg = max(0.0, slope)
+        # Degradation rate uses the robust (Theil-Sen) slope, not OLS — a single
+        # traffic/lift-and-coast lap must not swing the reported deg. raw_slope
+        # (the literal stopwatch trend) and r_squared (linearity/trust) stay OLS.
+        positive_deg = max(0.0, r_slope)
         total_deg_loss = round(positive_deg * len(laps), 3)
         cliff = _detect_cliff(tyre_ages, fuel_corrected)
 
@@ -6312,7 +6315,7 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
             'avg_raw_pace_s': round(sum(raw_times) / len(raw_times), 3),
             'raw_pace_trend_s_per_lap': round(raw_slope, 4),
             'fuel_burn_gain_assumption_s_per_lap': fuel_correction_s_per_lap,
-            'deg_rate_s_per_lap': round(slope, 4),
+            'deg_rate_s_per_lap': round(float(r_slope), 4),
             'positive_deg_rate_s_per_lap': round(positive_deg, 4),
             'total_deg_loss_s': total_deg_loss,
             'fuel_corrected_pace_at_age_1_s': pace_at_age_1,
@@ -6338,8 +6341,8 @@ def _fit_stint_degradation(clean_laps: list[dict], fuel_correction_s_per_lap: fl
                 for ta, fc, ln in zip(tyre_ages, fuel_corrected, lap_nums)
             ],
             'regression_line': [
-                {'tyre_age': tyre_ages[0],  'lap_time_s': round(slope * tyre_ages[0]  + intercept, 3)},
-                {'tyre_age': tyre_ages[-1], 'lap_time_s': round(slope * tyre_ages[-1] + intercept, 3)},
+                {'tyre_age': tyre_ages[0],  'lap_time_s': round(r_slope * tyre_ages[0]  + r_intercept, 3)},
+                {'tyre_age': tyre_ages[-1], 'lap_time_s': round(r_slope * tyre_ages[-1] + r_intercept, 3)},
             ],
             'cliff_detected': cliff.get('cliff_detected', False),
             'cliff_tyre_age': cliff.get('cliff_tyre_age'),
