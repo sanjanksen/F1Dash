@@ -42,8 +42,8 @@ def search_editorial_content(
         logger.warning("embed_texts for query crashed: %s", type(e).__name__)
         vectors = None
 
-    # Semantic path
-    if vectors:
+    # Semantic path (vectors[0] is None if the query embedding failed → FTS)
+    if vectors and vectors[0] is not None:
         try:
             rows = _client.call_match_chunks(
                 query_embedding=vectors[0],

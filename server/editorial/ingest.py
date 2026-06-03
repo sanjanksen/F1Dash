@@ -62,7 +62,7 @@ def _persist_article_with_chunks(
             "chunk_index": idx,
             "chunk_text": text,
         }
-        if vectors is not None and idx < len(vectors):
+        if vectors is not None and idx < len(vectors) and vectors[idx] is not None:
             row["embedding"] = vectors[idx]
             row["embedding_model"] = "gemini-embedding-2"
         chunk_rows.append(row)
