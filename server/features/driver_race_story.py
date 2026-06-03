@@ -12,10 +12,17 @@ def _build_race_story_widget(result: dict) -> dict:
     race = result.get("race") or {}
     qualifying = result.get("qualifying") or {}
     radio = result.get("radio_highlights") or []
+    # In a cross-year comparison the same driver/event appears for two seasons;
+    # stamping the year into the subtitle keeps both widgets distinct under the
+    # (type, title, subtitle) dedup key. _year is only set on multi-year paths.
+    subtitle = result.get("event")
+    year = result.get("_year")
+    if year is not None and subtitle:
+        subtitle = f"{subtitle} — {year}"
     return {
         "type": "race_story",
         "title": result.get("driver"),
-        "subtitle": result.get("event"),
+        "subtitle": subtitle,
         "driver_code": result.get("code"),
         "team": result.get("team"),
         "grid_position": race.get("grid_position") or qualifying.get("position"),

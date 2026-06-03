@@ -66,11 +66,14 @@ def _resolved(**kwargs):
         "analysis_mode": kwargs.get("analysis_mode"),
         "round_number": kwargs.get("round_number"),
         "session_type": kwargs.get("session_type"),
+        "entity_type": kwargs.get("entity_type"),
         "entity_name": kwargs.get("entity_name"),
+        "entity_code": kwargs.get("entity_code"),
         "entity_names": kwargs.get("entity_names"),
         "entity_codes": kwargs.get("entity_codes"),
         "event_name": kwargs.get("event_name"),
         "country": kwargs.get("country"),
+        "years": kwargs.get("years"),
         "analysis_focus": kwargs.get("analysis_focus"),
         "has_explicit_context": kwargs.get("has_explicit_context", True),
     }
@@ -567,3 +570,106 @@ def test_build_analysis_plan_returns_none_for_no_mode():
 def test_build_analysis_plan_returns_none_for_unknown_mode():
     from chat import _build_analysis_plan
     assert _build_analysis_plan("hi", _resolved(analysis_mode="not_a_real_mode")) is None
+
+
+# ── A8: cross_year single-entity per-year plans ─────────────────────────────
+
+
+def test_build_cross_year_plan_season_scope_emits_two_single_entity_calls():
+    from chat import _build_analysis_plan
+    plan = _build_analysis_plan(
+        "compare verstappen's 2024 and 2025 seasons",
+        _resolved(
+            analysis_mode="cross_year",
+            entity_type="driver",
+            entity_name="Max Verstappen",
+            entity_code="VER",
+            years=[2024, 2025],
+        ),
+    )
+    assert plan is not None
+    assert plan["analysis_mode"] == "cross_year"
+    assert _tool_names(plan) == ["get_driver_season_stats", "get_driver_season_stats"]
+    # One call per year, same driver, distinct year — never a two-driver battle.
+    year_args = [args["year"] for _, args in plan["tool_calls"]]
+    assert year_args == [2024, 2025]
+    assert all(args["driver_name"] == "Max Verstappen" for _, args in plan["tool_calls"])
+    assert "analyze_qualifying_battle" not in _tool_names(plan)
+    assert "analyze_race_pace_battle" not in _tool_names(plan)
+
+
+def test_build_cross_year_plan_event_scope_resolves_round_per_year(monkeypatch):
+    import chat
+    import circuits_cache
+
+    # 2024 Miami = round 6; 2025 Miami = round 4 (calendars differ).
+    def fake_resolve_round(year, *, country=None, event_name=None):
+        return {2024: 6, 2025: 4}[year]
+
+    monkeypatch.setattr(circuits_cache, "resolve_round", fake_resolve_round)
+
+    plan = chat._build_analysis_plan(
+        "how did verstappen do at Miami in 2024 vs 2025",
+        _resolved(
+            analysis_mode="cross_year",
+            entity_type="driver",
+            entity_name="Max Verstappen",
+            entity_code="VER",
+            country="United States",
+            event_name="Miami Grand Prix",
+            years=[2024, 2025],
+        ),
+    )
+    assert plan is not None
+    assert _tool_names(plan) == ["get_driver_race_story", "get_driver_race_story"]
+    rounds = [args["round_number"] for _, args in plan["tool_calls"]]
+    assert rounds == [6, 4], "round must be resolved per year's calendar"
+    years = [args["year"] for _, args in plan["tool_calls"]]
+    assert years == [2024, 2025]
+
+
+def test_build_cross_year_plan_returns_none_when_round_unresolvable(monkeypatch):
+    import chat
+    import circuits_cache
+    monkeypatch.setattr(circuits_cache, "resolve_round", lambda *a, **k: None)
+    plan = chat._build_analysis_plan(
+        "verstappen at Atlantis GP 2024 vs 2025",
+        _resolved(
+            analysis_mode="cross_year",
+            entity_type="driver",
+            entity_name="Max Verstappen",
+            entity_code="VER",
+            country="Atlantis",
+            event_name="Atlantis Grand Prix",
+            years=[2024, 2025],
+        ),
+    )
+    assert plan is None, "unresolvable round → None → agentic fallback"
+
+
+def test_build_cross_year_plan_team_entity_returns_none():
+    from chat import _build_analysis_plan
+    # No clean single-entity per-year tool for a team → agentic fallback.
+    plan = _build_analysis_plan(
+        "compare ferrari 2024 vs 2025",
+        _resolved(
+            analysis_mode="cross_year",
+            entity_type="team",
+            entity_name="Ferrari",
+            years=[2024, 2025],
+        ),
+    )
+    assert plan is None
+
+
+def test_plan_is_multi_year_detects_cross_year_and_distinct_years():
+    from chat import _plan_is_multi_year
+    assert _plan_is_multi_year({"analysis_mode": "cross_year", "tool_calls": []}) is True
+    assert _plan_is_multi_year({
+        "analysis_mode": "driver_comparison",
+        "tool_calls": [("t", {"year": 2024}), ("t", {"year": 2025})],
+    }) is True
+    assert _plan_is_multi_year({
+        "analysis_mode": "driver_comparison",
+        "tool_calls": [("t", {"year": 2025}), ("t", {"year": 2025})],
+    }) is False

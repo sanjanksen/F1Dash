@@ -168,3 +168,36 @@ def test_grip_commitment_carries_time_gained_s_into_quali_battle():
     assert records[0]["time_gained_s"] == 0.085
     assert records[1]["time_gained_s"] == -0.018
     assert grip["total_time_gained_s"] is not None
+
+
+def _race_story_result():
+    return {
+        "available": True,
+        "driver": "Max Verstappen",
+        "code": "VER",
+        "team": "Red Bull",
+        "event": "Miami Grand Prix",
+        "race": {"grid_position": 1, "finish_position": 1, "points": 25, "status": "Finished"},
+        "pit_stops": [{"lap": 18}],
+        "story_points": ["Led every lap"],
+        "interval_summary": "Controlled from pole",
+    }
+
+
+def test_cross_year_race_story_widgets_do_not_dedup_collapse():
+    """Two same-driver, same-event race stories for different seasons must
+    survive the (type, title, subtitle) dedup — the year is embedded in the
+    subtitle via the evidence item's args.year."""
+    from features.registry import discover_features
+    discover_features()
+    import chat
+
+    evidence = [
+        {"tool": "get_driver_race_story", "args": {"driver_name": "Max Verstappen", "year": 2024}, "result": _race_story_result()},
+        {"tool": "get_driver_race_story", "args": {"driver_name": "Max Verstappen", "year": 2025}, "result": _race_story_result()},
+    ]
+    widgets = chat._widgets_from_analysis_evidence({"analysis_mode": "cross_year"}, evidence)
+    stories = [w for w in widgets if w.get("type") == "race_story"]
+    assert len(stories) == 2, f"expected both seasons to survive dedup, got {stories}"
+    subtitles = sorted(w.get("subtitle") for w in stories)
+    assert subtitles == ["Miami Grand Prix — 2024", "Miami Grand Prix — 2025"]

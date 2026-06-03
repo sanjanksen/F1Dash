@@ -232,13 +232,20 @@ def _make_grip_commitment_summary(result: dict) -> dict | None:
     }
 
 
-def _registry_widget(tool: str, result: dict) -> dict | None:
+def _registry_widget(tool: str, result: dict, year: int | None = None) -> dict | None:
     """Look up tool in FEATURE_REGISTRY. Return widget if registered AND
-    should_show_widget passes, else None. Caller falls through to legacy."""
+    should_show_widget passes, else None. Caller falls through to legacy.
+
+    When `year` is given (multi-year/cross-year evidence), it's stamped onto the
+    result as `_year` so the feature's make_widget can embed the season in its
+    title/subtitle — keeping two same-event, same-driver widgets distinct under
+    the (type, title, subtitle) dedup key."""
     from features.base import FEATURE_REGISTRY
     feat = FEATURE_REGISTRY.get(tool)
     if feat is None:
         return None
+    if year is not None:
+        result = {**result, "_year": year}
     if not feat.should_show_widget(result):
         return None
     return feat.make_widget(result)
@@ -318,7 +325,7 @@ def _widgets_from_analysis_evidence(plan: dict, evidence: list[dict]) -> list[di
         # registry is authoritative: should_show_widget == False means
         # no widget (no legacy fallback).
         if tool in FEATURE_REGISTRY and tool not in _CROSS_FEATURE_TOOLS:
-            w = _registry_widget(tool, item["result"])
+            w = _registry_widget(tool, item["result"], year=(item.get("args") or {}).get("year"))
             if w is not None:
                 widgets.append(w)
             continue
@@ -1398,6 +1405,54 @@ def _build_race_pace_comparison_tools(message: str, resolved: dict) -> list[tupl
     ]
 
 
+def _build_cross_year_tools(message: str, resolved: dict) -> list[tuple[str, dict]] | None:
+    """Same-entity cross-year comparison: analyze ONE driver once per season with
+    a single-entity tool, never a two-driver battle. Season scope →
+    get_driver_season_stats; event scope (a circuit/country named) →
+    get_driver_race_story with the round resolved against EACH year's calendar.
+    Returns None (→ agentic fallback) for teams or unresolvable rounds."""
+    if resolved.get("entity_type") != "driver":
+        return None
+    name = resolved.get("entity_name")
+    years = resolved.get("years") or []
+    if not name or len(years) != 2:
+        return None
+
+    country = resolved.get("country")
+    event_name = resolved.get("event_name")
+    is_event_scope = bool(country or event_name)
+
+    calls: list[tuple[str, dict]] = []
+    if is_event_scope:
+        from circuits_cache import resolve_round
+        session_type = resolved.get("session_type") or "R"
+        for y in years:
+            rnd = resolve_round(y, country=country, event_name=event_name)
+            if rnd is None:
+                return None  # rounds differ per calendar; bail if any can't resolve
+            calls.append(("get_driver_race_story", {
+                "round_number": rnd,
+                "driver_name": name,
+                "session_type": session_type,
+                "year": y,
+            }))
+    else:
+        for y in years:
+            calls.append(("get_driver_season_stats", {"driver_name": name, "year": y}))
+    return calls
+
+
+def _plan_is_multi_year(plan: dict) -> bool:
+    """True when a plan spans more than one season — either the dedicated
+    cross_year mode or any plan whose tool_calls carry ≥2 distinct years.
+    Used to bypass single-year canonicalizers (they pick the first year)."""
+    if plan.get("analysis_mode") == "cross_year":
+        return True
+    years = {(args or {}).get("year") for _, args in plan.get("tool_calls", [])}
+    years.discard(None)
+    return len(years) >= 2
+
+
 def _build_driver_comparison_tools(message: str, resolved: dict, focus: str) -> list[tuple[str, dict]] | None:
     codes = resolved.get("entity_codes") or []
     names = resolved.get("entity_names") or []
@@ -1515,6 +1570,24 @@ def _build_analysis_plan(message: str, resolved: dict) -> dict | None:
     analysis_mode = resolved.get("analysis_mode")
     if not analysis_mode:
         return None
+
+    if analysis_mode == "cross_year":
+        tool_calls = _build_cross_year_tools(message, resolved)
+        if not tool_calls:
+            return None
+        return {
+            "analysis_mode": "cross_year",
+            "focus": "cross_year",
+            "question": message,
+            "entity_name": resolved.get("entity_name"),
+            "entity_code": resolved.get("entity_code"),
+            "years": resolved.get("years"),
+            "country": resolved.get("country"),
+            "event_name": resolved.get("event_name"),
+            # rounds differ per year, so there is no single plan-level round.
+            "round_number": None,
+            "tool_calls": tool_calls,
+        }
 
     if analysis_mode == "driver_comparison":
         focus = _derive_driver_comparison_focus(resolved)
@@ -1831,6 +1904,7 @@ def _build_analysis_user_prompt(question: str, resolved: dict, plan: dict, evide
             "analysis_focus": resolved.get("analysis_focus"),
             "entity_names": resolved.get("entity_names"),
             "entity_codes": resolved.get("entity_codes"),
+            "years": resolved.get("years"),
         },
         "plan": plan,
         "evidence": non_editorial_evidence,
@@ -1862,12 +1936,16 @@ def _try_deterministic_analysis(question: str, history: list[dict], *, provider:
     if not evidence:
         return None
 
+    # Single-year canonicalizers pick the first matching evidence result, which
+    # would silently drop the second season — skip them for multi-year plans.
+    multi_year = _plan_is_multi_year(plan)
+
     try:
         if provider == "openai":
             analysis = _run_openai_analysis(question, resolved, plan, evidence)
-            if plan.get("focus") == "qualifying":
+            if not multi_year and plan.get("focus") == "qualifying":
                 analysis = _canonicalize_qualifying_analysis(analysis, evidence)
-            elif plan.get("analysis_mode") == "race_pace_comparison":
+            elif not multi_year and plan.get("analysis_mode") == "race_pace_comparison":
                 analysis = _canonicalize_race_pace_analysis(analysis, evidence)
             return _payload_with_inline_widgets(
                 _run_openai_answer_writer(question, analysis),
@@ -1876,9 +1954,9 @@ def _try_deterministic_analysis(question: str, history: list[dict], *, provider:
             )
 
         analysis = _run_anthropic_analysis(question, resolved, plan, evidence)
-        if plan.get("focus") == "qualifying":
+        if not multi_year and plan.get("focus") == "qualifying":
             analysis = _canonicalize_qualifying_analysis(analysis, evidence)
-        elif plan.get("analysis_mode") == "race_pace_comparison":
+        elif not multi_year and plan.get("analysis_mode") == "race_pace_comparison":
             analysis = _canonicalize_race_pace_analysis(analysis, evidence)
         return _payload_with_inline_widgets(
             _run_anthropic_answer_writer(question, analysis),
