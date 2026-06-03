@@ -236,3 +236,83 @@ def test_hybrid_finds_driver_specific_content_when_corpus_has_it(_unmock_request
         f"got bodies: {[b[:80] for b in bodies]}. "
         "Hybrid FTS should pin the named driver."
     )
+
+
+# ── B5a: max_date upper-bound threading ─────────────────────────────────────
+
+def test_search_threads_max_date_into_semantic_rpc(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "ga-test")
+    monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-srv")
+    from editorial import search as editorial_search
+
+    with patch.object(editorial_search, "embed_texts", return_value=[[0.1] * 1536]), \
+         patch.object(editorial_search._client, "call_match_chunks", return_value=[]) as m_rpc:
+        editorial_search.search_editorial_content(
+            "Norris 2024", limit=3, min_date="2024-01-01", max_date="2025-12-31"
+        )
+    _, kwargs = m_rpc.call_args
+    assert kwargs.get("min_published") == "2024-01-01"
+    assert kwargs.get("max_published") == "2025-12-31"
+
+
+def test_search_threads_max_date_into_fts_fallback(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-srv")
+    from editorial import search as editorial_search
+
+    with patch.object(editorial_search, "embed_texts", return_value=[None]), \
+         patch.object(editorial_search._client, "fts_search_articles", return_value=[]) as m_fts:
+        editorial_search.search_editorial_content(
+            "Norris 2024", limit=3, min_date="2024-01-01", max_date="2025-12-31"
+        )
+    _, kwargs = m_fts.call_args
+    assert kwargs.get("min_date") == "2024-01-01"
+    assert kwargs.get("max_date") == "2025-12-31"
+
+
+def test_call_match_chunks_includes_max_published_in_payload():
+    from editorial import client as editorial_client
+    captured = {}
+
+    class _Res:
+        data = []
+
+    class _Client:
+        def rpc(self, name, payload):
+            captured["name"] = name
+            captured["payload"] = payload
+            class _Exec:
+                def execute(_self):
+                    return _Res()
+            return _Exec()
+
+    with patch.object(editorial_client, "_get_supabase_client", return_value=_Client()):
+        editorial_client.call_match_chunks([0.1] * 1536, query_text="q", match_count=5,
+                                           min_published="2024-01-01", max_published="2025-12-31")
+    assert captured["payload"].get("max_published") == "2025-12-31"
+    assert captured["payload"].get("min_published") == "2024-01-01"
+
+
+def test_fts_search_articles_applies_max_date_bound():
+    from editorial import client as editorial_client
+    calls = []
+
+    class _Q:
+        def select(self, *a, **k): return self
+        def text_search(self, *a, **k): return self
+        def limit(self, *a, **k): return self
+        def gte(self, col, val): calls.append(("gte", col, val)); return self
+        def lte(self, col, val): calls.append(("lte", col, val)); return self
+        def execute(self):
+            class _R: data = []
+            return _R()
+
+    class _Client:
+        def from_(self, *a, **k): return _Q()
+
+    with patch.object(editorial_client, "_get_supabase_client", return_value=_Client()):
+        editorial_client.fts_search_articles("q", limit=5, min_date="2024-01-01", max_date="2025-12-31")
+    assert ("gte", "published_at", "2024-01-01") in calls
+    assert ("lte", "published_at", "2025-12-31") in calls

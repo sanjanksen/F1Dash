@@ -25,6 +25,7 @@ def search_editorial_content(
     query: str,
     limit: int = 5,
     min_date: str | None = None,
+    max_date: str | None = None,
 ) -> dict[str, Any]:
     if not query or not query.strip():
         return {"available": True, "search_mode": "unavailable",
@@ -50,6 +51,7 @@ def search_editorial_content(
                 query_text=query,
                 match_count=limit,
                 min_published=min_date,
+                max_published=max_date,
             )
         except EditorialUnavailable:
             return {"available": False, "reason": "editorial_db_unavailable", "results": []}
@@ -72,7 +74,7 @@ def search_editorial_content(
 
     # FTS fallback
     try:
-        rows = _client.fts_search_articles(query, limit=limit, min_date=min_date)
+        rows = _client.fts_search_articles(query, limit=limit, min_date=min_date, max_date=max_date)
     except EditorialUnavailable:
         return {"available": False, "reason": "editorial_db_unavailable", "results": []}
     except Exception as e:

@@ -122,6 +122,7 @@ def call_match_chunks(
     query_text: str | None = None,
     match_count: int = 5,
     min_published: str | None = None,
+    max_published: str | None = None,
 ) -> list[dict]:
     client = _get_supabase_client()
     payload = {
@@ -129,6 +130,7 @@ def call_match_chunks(
         "query_text": query_text,
         "match_count": match_count,
         "min_published": min_published,
+        "max_published": max_published,
     }
     try:
         res = client.rpc("match_article_chunks", payload).execute()
@@ -138,7 +140,8 @@ def call_match_chunks(
     return getattr(res, "data", None) or []
 
 
-def fts_search_articles(query: str, limit: int = 5, min_date: str | None = None) -> list[dict]:
+def fts_search_articles(query: str, limit: int = 5, min_date: str | None = None,
+                        max_date: str | None = None) -> list[dict]:
     """Fallback when no embeddings: rank articles by Postgres FTS on body_tsv."""
     client = _get_supabase_client()
     try:
@@ -150,6 +153,8 @@ def fts_search_articles(query: str, limit: int = 5, min_date: str | None = None)
         )
         if min_date:
             q = q.gte("published_at", min_date)
+        if max_date:
+            q = q.lte("published_at", max_date)
         res = q.execute()
     except Exception as e:
         logger.warning("fts_search_articles failed: %s", type(e).__name__)
