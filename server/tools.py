@@ -246,6 +246,22 @@ def execute_tool(name: str, args: dict):
 
 
 def _execute_tool_inner(name: str, args: dict):
+    # Era gate (B4): a 2026-only mechanism asked about an earlier season
+    # short-circuits with an availability payload BEFORE any data fetch, so the
+    # model gets era-correct guidance instead of an empty/garbage result. The
+    # active season was already set by execute_tool from the call's `year`.
+    from regulations import tool_applies
+    season = f1_data.active_season()
+    if not tool_applies(name, season):
+        return {
+            "available": False,
+            "guidance_for_model": (
+                f"{name} measures a 2026 regulation mechanism; it is not applicable to "
+                f"the {season} season. Do not report active-aero or override-mode behaviour "
+                f"for a pre-2026 car."
+            ),
+        }
+
     # Registry dispatch (Phase B): if the tool is in FEATURE_REGISTRY,
     # validate required_args then call feature.execute(). Phase C3 adds
     # audit logging around the call so live-production decisions show up

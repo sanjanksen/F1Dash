@@ -684,3 +684,34 @@ def test_year_not_injected_for_static_knowledge_tools():
     sch = next((t for t in tools.TOOL_DEFINITIONS if t["name"] == "get_driver_style_profile"), None)
     if sch is not None:
         assert "year" not in sch["input_schema"]["properties"]
+
+
+# ── B4: 2026-only tools gated out of earlier seasons ────────────────────────
+
+def test_active_aero_tool_gated_out_of_pre_2026_season():
+    # year=2024 sets the active season; the 2026-only tool must short-circuit
+    # with an availability payload BEFORE any data fetch.
+    result = tools.execute_tool(
+        "analyze_active_aero_usage",
+        {"year": 2024, "round_number": 5, "driver_name": "VER", "lap_number": 10},
+    )
+    assert result.get("available") is False
+    assert "2026" in result.get("guidance_for_model", "")
+    assert "2024" in result.get("guidance_for_model", "")
+
+
+def test_override_tool_gated_out_of_pre_2026_season():
+    result = tools.execute_tool(
+        "analyze_override_usage",
+        {"year": 2023, "round_number": 5, "driver_name": "VER"},
+    )
+    assert result.get("available") is False
+    assert "2026" in result.get("guidance_for_model", "")
+
+
+def test_non_era_tool_not_gated():
+    # A non-era-gated tool must PASS the gate and reach dispatch even for a
+    # pre-2026 year — proven by it raising the normal driver-not-found error
+    # rather than returning the era short-circuit payload.
+    with pytest.raises(ValueError):
+        tools.execute_tool("get_driver_season_stats", {"year": 2024, "driver_name": "ZZZ_nonexistent"})
