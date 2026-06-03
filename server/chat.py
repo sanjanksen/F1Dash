@@ -859,6 +859,9 @@ When the evidence contains a `context_type: driver_style_comparison` item, use t
 
 Treat style profiles as hypotheses to test against the telemetry, not as facts. A driver's known style predicts where they should gain — check whether the actual data confirms or contradicts it. Never cite style profile alone as evidence; it must be corroborated by a tool result.
 
+## Off-era static knowledge (season_validity)
+Driver-style, team-car, and circuit-profile context items tagged `season_validity: current_era_only` describe the CURRENT-season cars and line-ups. When the analyzed season(s) in resolved_context are NOT the current season, weight these heavily lower or omit them entirely — a driver's car preference, a team's traits, and even grid membership can differ in an earlier season. Degrade gracefully to "no profile for that season" rather than asserting current-era knowledge about an off-era car or driver. Never fabricate a season-specific profile.
+
 ## Circuit Profile Context
 When the evidence contains a `context_type: circuit_profile` item, treat it as **background hypothesis, not fact**. It is curated prior knowledge about circuit character — not derived from the actual session telemetry. The telemetry and tool results always take precedence.
 
@@ -1750,6 +1753,11 @@ def _retrieve_analysis_evidence(plan: dict, resolved: dict | None = None, *, que
     plan_dict = plan if isinstance(plan, dict) else {}
     evidence = _execute_analysis_tool_calls(plan_dict.get("tool_calls", []))
 
+    # Static knowledge (driver styles, circuit profiles) describes the CURRENT
+    # season's cars/drivers, so it's flagged current_era_only — the analysis
+    # prompt degrades it to "no profile" when the analyzed season is off-era.
+    _STATIC_VALIDITY = "current_era_only"
+
     # ── Auto-inject driver style context ────────────────────────────────────
     drivers = plan_dict.get("drivers") or []
     if len(drivers) >= 2:
@@ -1761,6 +1769,7 @@ def _retrieve_analysis_evidence(plan: dict, resolved: dict | None = None, *, que
                     "driver_a": drivers[0]["code"],
                     "driver_b": drivers[1]["code"],
                     "data": style,
+                    "season_validity": _STATIC_VALIDITY,
                 })
         except Exception as exc:
             logger.warning("Driver style context injection failed: %s", exc)
@@ -1777,6 +1786,7 @@ def _retrieve_analysis_evidence(plan: dict, resolved: dict | None = None, *, que
                     "country": country,
                     "event_name": event_name,
                     "data": profile,
+                    "season_validity": _STATIC_VALIDITY,
                 })
         except Exception as exc:
             logger.warning("Circuit profile context injection failed: %s", exc)

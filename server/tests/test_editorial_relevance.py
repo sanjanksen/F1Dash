@@ -506,3 +506,44 @@ def test_grader_parses_partial_response():
     with patch("editorial.relevance._get_anthropic_client", return_value=fake_client):
         graded = grade_chunks_with_haiku("q", chunks)
     assert graded[0]["_grade"] == "partial"
+
+
+# ── B5c: season-scoped editorial window ─────────────────────────────────────
+
+def test_gated_lookup_derives_window_from_multiple_years(monkeypatch):
+    import editorial.relevance as rel
+    captured = {}
+
+    def fake_search(query, limit, min_date=None, max_date=None):
+        captured["min_date"] = min_date
+        captured["max_date"] = max_date
+        return {"results": []}
+
+    monkeypatch.setattr(rel, "_search", fake_search)
+    rel.gated_editorial_lookup(
+        question="Norris 2024 vs 2025",
+        resolved={"years": [2024, 2025], "entity_codes": ["NOR"]},
+        analysis_mode="driver_comparison",
+    )
+    assert captured["min_date"] == "2024-01-01"
+    # max(years)+1 — a presser early next year still discusses the prior season
+    assert captured["max_date"] == "2026-12-31"
+
+
+def test_gated_lookup_window_single_year(monkeypatch):
+    import editorial.relevance as rel
+    captured = {}
+
+    def fake_search(query, limit, min_date=None, max_date=None):
+        captured["min_date"] = min_date
+        captured["max_date"] = max_date
+        return {"results": []}
+
+    monkeypatch.setattr(rel, "_search", fake_search)
+    rel.gated_editorial_lookup(
+        question="Norris at Monza 2024",
+        resolved={"year": 2024, "entity_codes": ["NOR"]},
+        analysis_mode="driver_comparison",
+    )
+    assert captured["min_date"] == "2024-01-01"
+    assert captured["max_date"] == "2025-12-31"

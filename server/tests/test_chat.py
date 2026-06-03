@@ -1357,3 +1357,26 @@ def test_analysis_prompt_mixed_era_qualifies_by_season():
 def test_analysis_system_prompt_constant_equals_current_year_build():
     import chat
     assert chat.ANALYSIS_SYSTEM_PROMPT == chat._build_analysis_system_prompt([chat.CURRENT_YEAR])
+
+
+# ── B5c: off-era static-knowledge flag ──────────────────────────────────────
+
+def test_injected_style_evidence_carries_season_validity():
+    import chat
+    plan = {
+        "drivers": [{"code": "VER", "name": "Max Verstappen"}, {"code": "NOR", "name": "Lando Norris"}],
+        "tool_calls": [],
+    }
+    resolved = {"year": 2024, "years": [2024]}
+    with patch.object(chat, "get_comparison_framing", return_value={"summary": "x"}), \
+         patch.object(chat, "gated_editorial_lookup", return_value=None):
+        evidence = chat._retrieve_analysis_evidence(plan, resolved, question="q")
+    style = [e for e in evidence if e.get("context_type") == "driver_style_comparison"]
+    assert style, "style context should be injected"
+    assert style[0].get("season_validity") == "current_era_only"
+
+
+def test_analysis_prompt_has_off_era_static_knowledge_rule():
+    from chat import _build_analysis_system_prompt
+    p = _build_analysis_system_prompt([2024]).lower()
+    assert "season_validity" in p

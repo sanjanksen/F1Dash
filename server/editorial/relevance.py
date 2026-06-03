@@ -35,7 +35,20 @@ EDITORIAL_RELEVANT_MODES: frozenset[str] = frozenset({
     "driver_comparison",
     "team_performance",
     "team_circuit_fit",
+    "cross_year",
 })
+
+
+def _season_window(resolved: dict | None) -> tuple[str, str]:
+    """Publication window covering every analyzed season. min = Jan 1 of the
+    earliest year; max = Dec 31 of max(year)+1 (a presser early the following
+    year still discusses the prior season)."""
+    from f1_data import CURRENT_YEAR
+    ys = (resolved or {}).get("years") or [(resolved or {}).get("year") or CURRENT_YEAR]
+    ys = [y for y in ys if y]
+    if not ys:
+        ys = [CURRENT_YEAR]
+    return f"{min(ys)}-01-01", f"{max(ys) + 1}-12-31"
 
 
 def should_retrieve_editorial(analysis_mode: str | None) -> bool:
@@ -244,10 +257,15 @@ def gated_editorial_lookup(
 
     resolver_subjects = build_resolver_subject_set(resolved)
 
+    # Season-scope the retrieval window so a 2024 query can't surface 2026
+    # articles (and a 2024-vs-2025 comparison spans both seasons).
+    min_date, max_date = _season_window(resolved)
+
     # Run the underlying retrieval. We accept whatever it returns — empty,
     # semantic, or FTS-mode results are all handled uniformly downstream.
     try:
-        search_out = _search(query=question, limit=RETRIEVAL_LIMIT)
+        search_out = _search(query=question, limit=RETRIEVAL_LIMIT,
+                             min_date=min_date, max_date=max_date)
     except Exception as e:
         logger.warning("editorial _search crashed: %s", type(e).__name__)
         return None
