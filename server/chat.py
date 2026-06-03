@@ -78,6 +78,8 @@ def _call_openai(client, **kwargs):
 
 import datetime
 
+from f1_data import SEASON_MIN
+
 CURRENT_YEAR = datetime.date.today().year
 
 
@@ -718,6 +720,8 @@ SYSTEM_PROMPT = f"""You are an expert Formula 1 analyst with access to real-time
 Your job is to answer questions about the {CURRENT_YEAR} F1 season accurately, using the tools provided to fetch up-to-date data. Do not rely on your training knowledge for current standings, results, or points — always fetch the relevant data first.
 
 Today's date is {datetime.date.today().isoformat()}.
+
+Multi-season support: You can answer about any season from {SEASON_MIN} to {CURRENT_YEAR} (the current season is {CURRENT_YEAR}). Pass `year` on any tool to choose a season; to COMPARE seasons, call the relevant single-entity tool once per season with a different `year` value each time. Call get_season_schedule with a `year` to find that season's rounds (calendars differ across years). Telemetry data starts in {SEASON_MIN}; seasons before {SEASON_MIN} are not available.
 
 Guidelines:
 - If the user's latest message explicitly names a Grand Prix, circuit, round, year, or session, that explicit reference OVERRIDES prior conversation context.
@@ -1816,7 +1820,9 @@ def _preload_resolved_context(resolved: dict) -> dict | None:
 
 def _build_request_system_suffix(resolved: dict, preloaded: dict | None) -> str:
     """Per-request resolved-context suffix appended after the stable SYSTEM_PROMPT."""
-    if not resolved.get("has_explicit_context") and not resolved.get("used_previous_context"):
+    if (not resolved.get("has_explicit_context")
+            and not resolved.get("used_previous_context")
+            and not resolved.get("needs_clarification")):
         return ""
 
     lines = [
@@ -1850,6 +1856,12 @@ def _build_request_system_suffix(resolved: dict, preloaded: dict | None) -> str:
         lines.append(
             "⚠ CLARIFICATION NEEDED: The question is too ambiguous to route confidently. "
             "Ask one short clarifying question to understand what the user is looking for. Do NOT call any tools yet."
+        )
+    elif needs_clarification == "season_unsupported":
+        lines.append(
+            f"⚠ CLARIFICATION NEEDED: The user asked about a season outside the supported range "
+            f"({SEASON_MIN}–{CURRENT_YEAR}). Tell them which seasons are available and ask which one they want. "
+            "Do NOT call any data tools."
         )
 
     if preloaded:

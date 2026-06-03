@@ -1309,3 +1309,21 @@ def test_execute_analysis_tool_calls_per_future_season_isolation():
     assert by_name == {"tool_a": 2024, "tool_b": 2025}
     # Caller's season is restored to the default.
     assert f1_data.active_season() == f1_data.CURRENT_YEAR
+
+
+# ── A9: multi-year system prompt + unsupported-season suffix ─────────────────
+
+def test_system_prompt_advertises_multi_year_support():
+    import chat
+    p = chat.SYSTEM_PROMPT
+    assert str(chat.SEASON_MIN) in p, "system prompt must state the earliest supported season"
+    assert "Pass `year`" in p, "system prompt must instruct passing year on tools"
+
+
+def test_request_suffix_warns_on_unsupported_season():
+    import chat
+    resolved = {"has_explicit_context": True, "needs_clarification": "season_unsupported"}
+    suffix = chat._build_request_system_suffix(resolved, None)
+    assert "season" in suffix.lower()
+    assert str(chat.SEASON_MIN) in suffix
+    assert "Do NOT call" in suffix

@@ -849,3 +849,29 @@ def test_year_carries_forward_when_followup_omits_year(mock_circuits, mock_drive
     assert prev["year"] == 2024
     follow = resolver.resolve_query_context("and the weather there", prev)
     assert follow["year"] == 2024
+
+
+# ── A9: unsupported-season guard ────────────────────────────────────────────
+
+@patch('resolver._extract_entities_llm', return_value={})
+@patch('resolver.get_drivers', return_value=[])
+@patch('circuits_cache.get_circuits', return_value=[])
+def test_explicit_past_out_of_range_year_flags_season_unsupported(mock_c, mock_d, mock_llm):
+    resolved = resolver.resolve_query_context("how did vettel do in 2010?")
+    assert resolved.get("needs_clarification") == "season_unsupported"
+
+
+@patch('resolver._extract_entities_llm', return_value={})
+@patch('resolver.get_drivers', return_value=[])
+@patch('circuits_cache.get_circuits', return_value=[])
+def test_explicit_future_out_of_range_year_flags_season_unsupported(mock_c, mock_d, mock_llm):
+    resolved = resolver.resolve_query_context("predict the 2030 championship")
+    assert resolved.get("needs_clarification") == "season_unsupported"
+
+
+@patch('resolver._extract_entities_llm', return_value={})
+@patch('resolver.get_drivers', return_value=[])
+@patch('circuits_cache.get_circuits', return_value=[])
+def test_supported_year_not_flagged_unsupported(mock_c, mock_d, mock_llm):
+    resolved = resolver.resolve_query_context("how did norris do in 2024?")
+    assert resolved.get("needs_clarification") != "season_unsupported"

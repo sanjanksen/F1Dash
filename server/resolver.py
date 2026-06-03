@@ -60,6 +60,17 @@ def _detect_years(message: str, current_year: int = CURRENT_YEAR) -> list[int]:
     return sorted(found)
 
 
+def _detect_unsupported_year(message: str, current_year: int = CURRENT_YEAR) -> int | None:
+    """Return an explicitly-named four-digit season that falls OUTSIDE the
+    supported range [SEASON_MIN, current_year], or None. Used to ask the user
+    for a supported season instead of silently answering about the wrong one."""
+    for m in re.findall(r"\b(19\d{2}|20\d{2})\b", message):
+        y = int(m)
+        if not (SEASON_MIN <= y <= current_year):
+            return y
+    return None
+
+
 def _extract_entities_llm(message: str, year: int | None = None) -> dict:
     """
     Use Claude Haiku to extract canonical F1 entities from a free-text message.
@@ -507,6 +518,9 @@ def _base_context(message: str) -> dict:
     # ── Season detection FIRST — entities/calendars are season-relative ───────
     years = _detect_years(message)
     primary_year = years[0] if years else active_season()
+    # Only flag an unsupported season when no supported year was named — a query
+    # like "2024 vs 2010" still gets served for the in-range 2024.
+    unsupported_year = None if years else _detect_unsupported_year(message)
 
     # ── LLM extraction — handles nicknames, aliases, and paraphrasing ─────────
     llm = _extract_entities_llm(message, year=primary_year)
@@ -584,6 +598,7 @@ def _base_context(message: str) -> dict:
         "year": primary_year,
         "years": years,
         "year_explicit": bool(years),
+        "season_unsupported": unsupported_year,
         "analysis_mode": analysis_mode,
         "analysis_focus": analysis_focus,
         "suggested_tool": _suggested_tool,
@@ -604,6 +619,8 @@ def _merge_with_previous_context(current: dict, previous: dict | None) -> dict:
         current["resolution_confidence"] = "high" if current.get("has_explicit_context") else "low"
         current["routing_confidence"] = "high" if current.get("suggested_tool") and current.get("round_number") else "low"
         current["used_previous_context"] = False
+        if current.get("season_unsupported"):
+            current["needs_clarification"] = "season_unsupported"
         return current
 
     merged = dict(current)
@@ -677,6 +694,11 @@ def _detect_clarification_needed(resolved: dict) -> str | None:
     Returns a short description of what's missing, or None if context is clear enough.
     Called after merging, so 'resolved' already has previous context applied.
     """
+    # An explicitly-named season we can't serve takes priority — ask for a
+    # supported one before routing anything.
+    if resolved.get("season_unsupported"):
+        return "season_unsupported"
+
     scope = resolved.get("scope")
     round_number = resolved.get("round_number")
     entity_name = resolved.get("entity_name")
