@@ -55,7 +55,7 @@ def _openf1_get(endpoint: str, **params):
 
 def _resolve_openf1_session(round_number: int, session_type: str) -> dict:
     season = active_season()
-    circuit = next((row for row in _cached_circuits() if row.get("round") == round_number), None)
+    circuit = next((row for row in _cached_circuits(season) if row.get("round") == round_number), None)
     if not circuit:
         raise ValueError(f"Round {round_number} not found in {season} schedule.")
 

@@ -291,3 +291,19 @@ def test_get_propagates_after_three_failures():
         else:
             raise AssertionError("Expected HTTPError")
     assert fake_requests.get.call_count == 3
+
+
+def test_resolve_openf1_session_honors_active_season():
+    """OpenF1 session resolution uses the active season for both the circuit
+    lookup and the sessions query year (Plan A5)."""
+    import f1_data
+    sentinel = [{"round": 3, "event_name": "Japanese Grand Prix", "country": "Japan"}]
+    with patch("openf1._cached_circuits", return_value=sentinel) as cc, \
+         patch("openf1._openf1_get") as mock_get:
+        mock_get.return_value = [{"session_key": 42, "date_start": "2024-04-05T00:00:00"}]
+        with f1_data.use_season(2024):
+            openf1._resolve_openf1_session(3, "Q")
+    # circuit lookup queried the 2024 schedule
+    assert cc.call_args.args and cc.call_args.args[0] == 2024
+    # sessions query used year=2024
+    assert mock_get.call_args.kwargs.get("year") == 2024
