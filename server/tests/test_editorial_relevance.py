@@ -34,23 +34,43 @@ def test_unknown_mode_skips():
     assert not should_retrieve_editorial("")
 
 
-def test_build_resolver_subject_set_includes_drivers_team_circuit():
+def test_build_resolver_subject_set_includes_drivers_and_circuit():
+    # Real resolver keys: entity_codes (drivers) + country/event_name (circuit).
     resolved = {
-        "drivers": [{"code": "NOR"}, {"code": "PIA"}],
-        "team": "McLaren",
-        "circuit_slug": "imola",
+        "entity_type": "multi_driver",
+        "entity_codes": ["NOR", "PIA"],
+        "country": "Italy",
+        "event_name": "Emilia Romagna Grand Prix",
     }
     subjects = build_resolver_subject_set(resolved)
     assert ("driver", "NOR") in subjects
     assert ("driver", "PIA") in subjects
+    # Circuit subject derived from the country/event text against CIRCUIT_PROFILES.
+    assert ("circuit", "emilia_romagna") in subjects
+
+
+def test_build_resolver_subject_set_team_from_entity_type():
+    resolved = {"entity_type": "team", "entity_name": "McLaren"}
+    subjects = build_resolver_subject_set(resolved)
     assert ("team", "mclaren") in subjects
-    assert ("circuit", "imola") in subjects
+
+
+def test_build_resolver_subject_set_driver_query_is_non_empty():
+    """The B5b regression: a real resolved single-driver query MUST yield a
+    non-empty subject set (it was silently empty before)."""
+    resolved = {
+        "entity_type": "driver",
+        "entity_name": "Lando Norris",
+        "entity_code": "NOR",
+        "entity_codes": ["NOR"],
+    }
+    assert build_resolver_subject_set(resolved)
 
 
 def test_build_resolver_subject_set_handles_missing_fields():
     """Resolver output is sometimes partial — must not crash on missing keys."""
     assert build_resolver_subject_set({}) == frozenset()
-    assert build_resolver_subject_set({"drivers": []}) == frozenset()
+    assert build_resolver_subject_set({"entity_codes": []}) == frozenset()
     assert build_resolver_subject_set(None) == frozenset()
 
 

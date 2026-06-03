@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -48,30 +49,42 @@ def build_resolver_subject_set(resolved: dict | None) -> frozenset[tuple[str, st
     """Convert resolver entities into a frozenset of (kind, ref) tuples that
     can be intersected with article_subjects rows.
 
-    Drivers come as a list of dicts with a 'code' field (3-letter uppercase).
-    Team comes as a string (canonicalised to lowercase for matching).
-    Circuit comes as a slug (already lowercase).
+    Reads the keys the resolver actually emits — entity_codes (driver codes),
+    entity_type/entity_name (team), and country/event_name (circuit) — using
+    the SAME ref conventions as editorial.subjects.tag_subjects:
+      - driver → ("driver", UPPER 3-letter code)
+      - team   → ("team", lowercase team name, spaces kept)
+      - circuit→ ("circuit", CIRCUIT_PROFILES slug, e.g. "emilia_romagna")
+    A prior version read drivers/team/circuit_slug keys the resolver never
+    produced, so subject filtering was a silent no-op.
     """
     if not resolved:
         return frozenset()
 
     subjects: set[tuple[str, str]] = set()
 
-    for driver in (resolved.get("drivers") or []):
-        code = (driver.get("code") or "").strip().upper()
+    for code in (resolved.get("entity_codes") or []):
+        code = (code or "").strip().upper()
         if code:
             subjects.add(("driver", code))
 
-    team = (resolved.get("team") or "").strip().lower()
-    if team:
-        # Normalise team name to slug-ish form to match article_subjects.ref.
-        # E.g. "Racing Bulls" -> "racing_bulls". The subject tagger uses the
-        # same normalisation.
-        subjects.add(("team", team.replace(" ", "_")))
+    if resolved.get("entity_type") == "team":
+        team = (resolved.get("entity_name") or "").strip().lower()
+        if team:
+            subjects.add(("team", team))
 
-    circuit_slug = (resolved.get("circuit_slug") or "").strip().lower()
-    if circuit_slug:
-        subjects.add(("circuit", circuit_slug))
+    # Circuit: match CIRCUIT_PROFILES slugs against the country/event text,
+    # mirroring how tag_subjects tags article bodies (slug words → match).
+    circuit_text = f"{resolved.get('country') or ''} {resolved.get('event_name') or ''}".lower()
+    if circuit_text.strip():
+        try:
+            from circuit_profiles import CIRCUIT_PROFILES
+            for slug in CIRCUIT_PROFILES:
+                word = slug.replace("_", " ")
+                if re.search(rf"\b{re.escape(word)}\b", circuit_text):
+                    subjects.add(("circuit", slug))
+        except Exception:
+            pass
 
     return frozenset(subjects)
 
