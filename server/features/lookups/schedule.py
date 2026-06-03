@@ -16,12 +16,14 @@ class SeasonScheduleFeature(Feature):
     required_args = ()
     tool_schema = {
         "type": "object",
-        "properties": {},
+        "properties": {
+            "year": {"type": "integer", "description": "Season year; defaults to current."},
+        },
         "required": [],
     }
 
     def execute(self, **args):
-        return f1_data.get_circuits()
+        return f1_data.get_circuits(args.get("year"))
 
     def make_widget(self, result):
         return {}
