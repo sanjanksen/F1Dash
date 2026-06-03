@@ -2,7 +2,7 @@ import time
 
 import requests
 
-from f1_data import CURRENT_YEAR, _resolve_driver, get_session_results
+from f1_data import CURRENT_YEAR, active_season, _resolve_driver, get_session_results
 from circuits_cache import _cached_circuits
 
 OPENF1_BASE = "https://api.openf1.org/v1"
@@ -54,14 +54,15 @@ def _openf1_get(endpoint: str, **params):
 
 
 def _resolve_openf1_session(round_number: int, session_type: str) -> dict:
+    season = active_season()
     circuit = next((row for row in _cached_circuits() if row.get("round") == round_number), None)
     if not circuit:
-        raise ValueError(f"Round {round_number} not found in {CURRENT_YEAR} schedule.")
+        raise ValueError(f"Round {round_number} not found in {season} schedule.")
 
     session_name = _session_name_for_openf1(session_type)
     sessions = _openf1_get(
         "sessions",
-        year=CURRENT_YEAR,
+        year=season,
         country_name=circuit["country"],
         session_name=session_name,
     )

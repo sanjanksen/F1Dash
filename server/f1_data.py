@@ -231,7 +231,7 @@ def _find_session_column(event_row, session_type: str) -> tuple[str | None, pd.T
 
 def _validate_session_availability(round_number: int, session_type: str, *, telemetry: bool) -> None:
     try:
-        schedule = fastf1.get_event_schedule(CURRENT_YEAR, include_testing=False)
+        schedule = fastf1.get_event_schedule(active_season(), include_testing=False)
     except Exception:
         return
     matching = schedule[schedule["RoundNumber"] == round_number]
@@ -696,7 +696,7 @@ def _resolve_circuit_slug_for_round(round_number: int) -> str | None:
     Uses the session event's Country field via fastf1's schedule, falling back to None."""
     try:
         from circuit_profiles import get_circuit_profile
-        schedule = fastf1.get_event_schedule(CURRENT_YEAR, include_testing=False)
+        schedule = fastf1.get_event_schedule(active_season(), include_testing=False)
         matching = schedule[schedule["RoundNumber"] == round_number]
         if matching.empty:
             return None
@@ -1274,7 +1274,7 @@ def _pick_driver(laps, code: str):
 def _fetch_all_races(driver_id: str) -> list[dict]:
     """Fetch all 2025 race results for a driver. Used by get_driver_stats and get_head_to_head."""
     resp = requests.get(
-        f"{JOLPICA_BASE}/{CURRENT_YEAR}/drivers/{driver_id}/results.json?limit=30",
+        f"{JOLPICA_BASE}/{active_season()}/drivers/{driver_id}/results.json?limit=30",
         timeout=15,
     )
     resp.raise_for_status()
@@ -1321,7 +1321,7 @@ def _resolve_team(team_name: str) -> str | None:
 def get_drivers() -> list[dict]:
     """Return all drivers in the current season with championship standings."""
     resp = requests.get(
-        f"{JOLPICA_BASE}/{CURRENT_YEAR}/driverStandings.json?limit=30",
+        f"{JOLPICA_BASE}/{active_season()}/driverStandings.json?limit=30",
         timeout=15,
     )
     resp.raise_for_status()
@@ -1377,7 +1377,7 @@ def get_driver_stats(driver_name: str) -> dict | None:
 
 def get_circuits() -> list[dict]:
     """Return the full season race schedule."""
-    schedule = fastf1.get_event_schedule(CURRENT_YEAR, include_testing=False)
+    schedule = fastf1.get_event_schedule(active_season(), include_testing=False)
     circuits = []
     for _, event in schedule.iterrows():
         circuits.append({
@@ -1393,7 +1393,7 @@ def get_circuits() -> list[dict]:
 def get_constructor_standings() -> list[dict]:
     """Return all constructor (team) championship standings for 2025."""
     resp = requests.get(
-        f"{JOLPICA_BASE}/{CURRENT_YEAR}/constructorStandings.json?limit=20",
+        f"{JOLPICA_BASE}/{active_season()}/constructorStandings.json?limit=20",
         timeout=15,
     )
     resp.raise_for_status()
@@ -1416,7 +1416,7 @@ def get_constructor_standings() -> list[dict]:
 def get_race_results(round_number: int) -> dict:
     """Return the full finishing order for a specific 2025 Grand Prix round."""
     resp = requests.get(
-        f"{JOLPICA_BASE}/{CURRENT_YEAR}/{round_number}/results.json?limit=30",
+        f"{JOLPICA_BASE}/{active_season()}/{round_number}/results.json?limit=30",
         timeout=15,
     )
     resp.raise_for_status()
@@ -1447,7 +1447,7 @@ def get_race_results(round_number: int) -> dict:
 def get_qualifying_results(round_number: int) -> dict:
     """Return Q1/Q2/Q3 times for all drivers at a specific 2025 Grand Prix round."""
     resp = requests.get(
-        f"{JOLPICA_BASE}/{CURRENT_YEAR}/{round_number}/qualifying.json?limit=30",
+        f"{JOLPICA_BASE}/{active_season()}/{round_number}/qualifying.json?limit=30",
         timeout=15,
     )
     resp.raise_for_status()
@@ -1477,7 +1477,7 @@ def get_qualifying_results(round_number: int) -> dict:
 def get_sprint_results(round_number: int) -> dict:
     """Return the full finishing order for a sprint race."""
     resp = requests.get(
-        f"{JOLPICA_BASE}/{CURRENT_YEAR}/{round_number}/sprint.json?limit=30",
+        f"{JOLPICA_BASE}/{active_season()}/{round_number}/sprint.json?limit=30",
         timeout=15,
     )
     resp.raise_for_status()
@@ -4881,9 +4881,9 @@ def get_circuit_details(round_number: int) -> dict:
         session = _load_session(round_number, 'R', laps=False, telemetry=True, weather=False, messages=False)
         circuit_info = session.get_circuit_info()
     except FastF1Error:
-        circuit_info = fastf1.get_circuit_info(CURRENT_YEAR, round_number)
+        circuit_info = fastf1.get_circuit_info(active_season(), round_number)
     except Exception:
-        circuit_info = fastf1.get_circuit_info(CURRENT_YEAR, round_number)
+        circuit_info = fastf1.get_circuit_info(active_season(), round_number)
 
     return {
         "rotation": _normalize_float(getattr(circuit_info, "rotation", None)),
@@ -4900,10 +4900,11 @@ def get_circuit_track_map(round_number: int) -> dict:
     and sector boundary distances from marshal_sectors.
     Falls back to previous seasons if the current-year race hasn't happened yet.
     """
-    schedule = fastf1.get_event_schedule(CURRENT_YEAR, include_testing=False)
+    season = active_season()
+    schedule = fastf1.get_event_schedule(season, include_testing=False)
     matching = schedule[schedule["RoundNumber"] == round_number]
     if matching.empty:
-        raise ValueError(f"Round {round_number} not found in {CURRENT_YEAR} schedule")
+        raise ValueError(f"Round {round_number} not found in {season} schedule")
     location = str(matching.iloc[0].get("Location", ""))
 
     def _try_load(year, gp_ref, session_type):
@@ -4918,10 +4919,10 @@ def get_circuit_track_map(round_number: int) -> dict:
 
     session = None
     for session_type in ('Q', 'R'):
-        session = _try_load(CURRENT_YEAR, round_number, session_type)
+        session = _try_load(season, round_number, session_type)
         if session is not None:
             break
-        for year in (CURRENT_YEAR - 1, CURRENT_YEAR - 2, CURRENT_YEAR - 3):
+        for year in (season - 1, season - 2, season - 3):
             session = _try_load(year, location, session_type)
             if session is not None:
                 break
@@ -4982,17 +4983,18 @@ def get_historical_circuit_performance(round_number: int,
     Reveals which teams/drivers historically perform well or poorly at this venue.
     Default years: [2023, 2024, 2025].
     """
+    anchor_year = active_season()
     if years is None:
-        years = [CURRENT_YEAR - 2, CURRENT_YEAR - 1, CURRENT_YEAR]
+        years = [anchor_year - 2, anchor_year - 1, anchor_year]
 
     resp = requests.get(
-        f"{JOLPICA_BASE}/{CURRENT_YEAR}/{round_number}/results.json?limit=1",
+        f"{JOLPICA_BASE}/{anchor_year}/{round_number}/results.json?limit=1",
         timeout=15,
     )
     resp.raise_for_status()
     races = resp.json()["MRData"]["RaceTable"]["Races"]
     if not races:
-        raise ValueError(f"Round {round_number} not found in {CURRENT_YEAR}")
+        raise ValueError(f"Round {round_number} not found in {anchor_year}")
 
     circuit_id = races[0]["Circuit"]["circuitId"]
     circuit_name = races[0]["Circuit"]["circuitName"]
@@ -5132,9 +5134,10 @@ def analyze_team_circuit_fit(
     the team's average result at each circuit archetype against that team's own
     season baseline, then reports where it over/under-performed.
     """
+    anchor_year = active_season()
     if years is None:
-        years = [y for y in range(CURRENT_YEAR - 3, CURRENT_YEAR) if y >= 1950]
-    years = sorted({int(y) for y in years if int(y) < CURRENT_YEAR})
+        years = [y for y in range(anchor_year - 3, anchor_year) if y >= 1950]
+    years = sorted({int(y) for y in years if int(y) < anchor_year})
     if not years:
         raise ValueError("Provide at least one completed historical season.")
 
@@ -5259,7 +5262,7 @@ def analyze_team_circuit_fit(
         "This is derived from classifications, not private setup or aerodynamic data.",
         "It blends car, drivers, operations, reliability, and race execution; it is a team-circuit tendency, not a pure car trait.",
     ]
-    if max(years) <= CURRENT_YEAR - 1:
+    if max(years) <= anchor_year - 1:
         caveats.append("Historical seasons are only a proxy for the current regulation package.")
     if fetch_errors:
         caveats.append("Some seasons could not be fetched and were excluded.")

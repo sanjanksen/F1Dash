@@ -5207,3 +5207,37 @@ def test_session_cache_true_lru_eviction(monkeypatch):
     assert 2 not in keys, "round 2 should have been evicted (true LRU)"
     assert 1 in keys, "round 1 was read recently and must survive"
     assert 3 in keys and 4 in keys
+
+
+# --- Audit: no stray CURRENT_YEAR season fetches (Plan A3) ---
+import re as _re_audit
+import pathlib as _pathlib_audit
+
+_AUDIT = {
+    "f1_data.py": {
+        "fetch_ok": ("active_season(",),
+        "allow_lines": ("CURRENT_YEAR = ", "_session_year", "current-season",
+                        "def get_historical_circuit_performance", "def analyze_team_circuit_fit"),
+    },
+    "openf1.py": {"allow_lines": ("import",)},
+}
+
+
+@pytest.mark.parametrize("fname,rule", list(_AUDIT.items()))
+def test_no_stray_current_year_fetch(fname, rule):
+    src = (_pathlib_audit.Path(__file__).parent.parent / fname).read_text().splitlines()
+    bad = []
+    in_allow_fn = False
+    for i, ln in enumerate(src, 1):
+        if any(a in ln for a in rule.get("allow_lines", ())):
+            in_allow_fn = ln.strip().startswith("def ")
+            continue
+        if in_allow_fn and ln.strip() and not ln[0].isspace():
+            in_allow_fn = False
+        if in_allow_fn:
+            continue
+        if "CURRENT_YEAR" in ln and _re_audit.search(
+            r"get_session\(|get_event_schedule\(|JOLPICA_BASE\}/\{CURRENT_YEAR|year=CURRENT_YEAR", ln
+        ):
+            bad.append(i)
+    assert not bad, f"{fname}: un-converted season fetch at {bad}"
