@@ -6,26 +6,35 @@ import time
 
 import anthropic
 
-from f1_data import get_drivers
+from f1_data import get_drivers, active_season, CURRENT_YEAR, SEASON_MIN
 from circuits_cache import _cached_circuits
 
 logger = logging.getLogger(__name__)
 
 # ── Canonical data cache ──────────────────────────────────────────────────────
-_drivers_cache: list[dict] = []
-_drivers_cache_time: float = 0.0
 _DRIVER_CACHE_TTL = 300  # 5 minutes
 
+# Season-keyed roster cache: year -> (fetched_at, drivers). Rosters differ by
+# season (driver moves, rebrands), so the cache must be keyed by year.
+_drivers_by_year: dict[int, tuple[float, list[dict]]] = {}
 
-def _cached_drivers() -> list[dict]:
-    global _drivers_cache, _drivers_cache_time
-    if not _drivers_cache or time.time() - _drivers_cache_time > _DRIVER_CACHE_TTL:
-        try:
-            _drivers_cache = get_drivers()
-            _drivers_cache_time = time.time()
-        except Exception:
-            pass
-    return _drivers_cache
+
+def _cached_drivers(year: int | None = None) -> list[dict]:
+    y = year or active_season()
+    now = time.time()
+    hit = _drivers_by_year.get(y)
+    if hit and now - hit[0] <= _DRIVER_CACHE_TTL:
+        return hit[1]
+    try:
+        data = get_drivers(y)
+        _drivers_by_year[y] = (now, data)
+        return data
+    except Exception:
+        return hit[1] if hit else []
+
+
+def clear_drivers_cache() -> None:
+    _drivers_by_year.clear()
 
 
 # ── Haiku entity extractor ────────────────────────────────────────────────────
@@ -39,16 +48,30 @@ def _get_haiku_client() -> anthropic.Anthropic:
     return _haiku_client
 
 
-def _extract_entities_llm(message: str) -> dict:
+def _detect_years(message: str, current_year: int = CURRENT_YEAR) -> list[int]:
+    """Extract explicit four-digit F1 seasons from the message, ascending and
+    deduped, restricted to the supported range [SEASON_MIN, current_year].
+    Returns [] when no in-range year is mentioned."""
+    found = {
+        int(m)
+        for m in re.findall(r"\b(19\d{2}|20\d{2})\b", message)
+        if SEASON_MIN <= int(m) <= current_year
+    }
+    return sorted(found)
+
+
+def _extract_entities_llm(message: str, year: int | None = None) -> dict:
     """
     Use Claude Haiku to extract canonical F1 entities from a free-text message.
     Handles nicknames, aliases, and paraphrasing that regex can't catch.
+    The driver/circuit prompt is built from the given season (defaults to the
+    active season) so historical rosters and calendars resolve correctly.
     Returns: {drivers: [3-letter codes], team: str|None, event_country: str|None, round: int|None}
     Falls back to empty dict on any error so regex path kicks in.
     """
     try:
-        drivers = _cached_drivers()
-        circuits = _cached_circuits()
+        drivers = _cached_drivers(year)
+        circuits = _cached_circuits(year)
 
         driver_lines = "\n".join(
             f"  {d.get('code', '')} | {d.get('full_name', '')} | {d.get('team', '')}"
@@ -263,10 +286,10 @@ def _detect_session_scope(normalized: str) -> tuple[str | None, str | None]:
     return session_type, scope
 
 
-def _match_drivers(normalized: str) -> list[dict]:
+def _match_drivers(normalized: str, year: int | None = None) -> list[dict]:
     matches = []
     seen = set()
-    for driver in _cached_drivers():
+    for driver in _cached_drivers(year):
         names = {
             _normalize(driver.get("full_name", "")),
             _normalize(driver.get("driver_id", "")),
@@ -290,13 +313,13 @@ def _match_drivers(normalized: str) -> list[dict]:
     return [driver for _, driver in matches]
 
 
-def _match_driver(normalized: str) -> dict | None:
-    matches = _match_drivers(normalized)
+def _match_driver(normalized: str, year: int | None = None) -> dict | None:
+    matches = _match_drivers(normalized, year)
     return matches[0] if matches else None
 
 
-def _match_team(normalized: str) -> str | None:
-    teams = sorted({driver.get("team", "") for driver in _cached_drivers() if driver.get("team")}, key=len, reverse=True)
+def _match_team(normalized: str, year: int | None = None) -> str | None:
+    teams = sorted({driver.get("team", "") for driver in _cached_drivers(year) if driver.get("team")}, key=len, reverse=True)
     aliases = {
         "merc": "Mercedes",
         "mercedes": "Mercedes",
@@ -325,18 +348,18 @@ def _match_team(normalized: str) -> str | None:
     return None
 
 
-def _match_event(normalized: str) -> dict | None:
+def _match_event(normalized: str, year: int | None = None) -> dict | None:
     from circuit_profiles import match_circuit_from_text
-    return match_circuit_from_text(normalized, _cached_circuits())
+    return match_circuit_from_text(normalized, _cached_circuits(year))
 
 
-def _fill_round_number_from_circuit(resolved: dict, normalized: str) -> dict:
+def _fill_round_number_from_circuit(resolved: dict, normalized: str, year: int | None = None) -> dict:
     """If round_number isn't set but a circuit/country/event reference is
-    present, look it up in the cached current-season schedule and fill in
+    present, look it up in the cached schedule for the given season and fill in
     round_number, event_name, country."""
     if resolved.get("round_number") is not None:
         return resolved
-    circuits = _cached_circuits()
+    circuits = _cached_circuits(year)
     if not circuits:
         return resolved
 
@@ -403,7 +426,17 @@ def _suggest_tool(entity_type: str | None, scope: str | None, session_type: str 
     return None
 
 
-def _detect_analysis_mode(normalized: str, matched_drivers: list[dict], session_type: str | None, matched_team: str | None = None) -> tuple[str | None, str | None]:
+def _detect_analysis_mode(normalized: str, matched_drivers: list[dict], session_type: str | None, matched_team: str | None = None, years: list[int] | None = None) -> tuple[str | None, str | None]:
+    # Same-entity cross-year comparison: exactly one entity (driver OR team) and
+    # two explicit seasons. A dedicated mode — the SINGLE entity is analyzed once
+    # per year, never duplicated into a two-driver self-battle. Checked first
+    # because two explicit years is a strong, unambiguous signal.
+    if years and len(years) == 2:
+        if len(matched_drivers) == 1:
+            return "cross_year", matched_drivers[0].get("full_name")
+        if matched_team and not matched_drivers:
+            return "cross_year", matched_team
+
     # Team performance mode (single team, no two-driver comparison)
     if matched_team and len(matched_drivers) < 2:
         team_fit_terms = any(phrase in normalized for phrase in (
@@ -471,32 +504,36 @@ def _base_context(message: str) -> dict:
     fp_number = _detect_fp_number(normalized)
     session_type, scope = _detect_session_scope(normalized)
 
+    # ── Season detection FIRST — entities/calendars are season-relative ───────
+    years = _detect_years(message)
+    primary_year = years[0] if years else active_season()
+
     # ── LLM extraction — handles nicknames, aliases, and paraphrasing ─────────
-    llm = _extract_entities_llm(message)
+    llm = _extract_entities_llm(message, year=primary_year)
 
     # Resolve driver codes → driver dicts; fall back to regex if LLM found none
-    driver_by_code = {d.get("code", "").upper(): d for d in _cached_drivers() if d.get("code")}
+    driver_by_code = {d.get("code", "").upper(): d for d in _cached_drivers(primary_year) if d.get("code")}
     matched_drivers: list[dict] = [
         driver_by_code[code.upper()]
         for code in (llm.get("drivers") or [])
         if code.upper() in driver_by_code
     ]
     if not matched_drivers:
-        matched_drivers = _match_drivers(normalized)
+        matched_drivers = _match_drivers(normalized, primary_year)
 
     # Team is only relevant when no single driver is identified
     driver = matched_drivers[0] if len(matched_drivers) == 1 else None
     if driver:
         team = None
     else:
-        team = llm.get("team") or _match_team(normalized)
+        team = llm.get("team") or _match_team(normalized, primary_year)
 
     # Resolve event: prefer LLM country/round match, fall back to regex
     event: dict | None = None
     llm_country = (llm.get("event_country") or "").strip()
     llm_round = llm.get("round")
     if llm_country or llm_round:
-        for c in _cached_circuits():
+        for c in _cached_circuits(primary_year):
             if llm_country and _normalize(c.get("country", "")) == _normalize(llm_country):
                 event = c
                 break
@@ -504,12 +541,12 @@ def _base_context(message: str) -> dict:
                 event = c
                 break
     if not event:
-        event = _match_event(normalized)
+        event = _match_event(normalized, primary_year)
 
     if scope == "circuit":
         analysis_mode, analysis_focus = "circuit_profile", None
     else:
-        analysis_mode, analysis_focus = _detect_analysis_mode(normalized, matched_drivers, session_type, team)
+        analysis_mode, analysis_focus = _detect_analysis_mode(normalized, matched_drivers, session_type, team, years)
 
     entity_type = None
     entity_name = None
@@ -544,6 +581,9 @@ def _base_context(message: str) -> dict:
         "session_type": session_type,
         "fp_number": fp_number,
         "scope": scope,
+        "year": primary_year,
+        "years": years,
+        "year_explicit": bool(years),
         "analysis_mode": analysis_mode,
         "analysis_focus": analysis_focus,
         "suggested_tool": _suggested_tool,
@@ -556,7 +596,7 @@ def _base_context(message: str) -> dict:
             analysis_mode is not None,
         ]),
     }
-    return _fill_round_number_from_circuit(base, normalized)
+    return _fill_round_number_from_circuit(base, normalized, primary_year)
 
 
 def _merge_with_previous_context(current: dict, previous: dict | None) -> dict:
@@ -568,6 +608,12 @@ def _merge_with_previous_context(current: dict, previous: dict | None) -> dict:
 
     merged = dict(current)
     used_previous = False
+
+    # Season carries forward only when the current message names no explicit
+    # year — a follow-up like "and the weather there" stays in the prior season.
+    if not current.get("year_explicit") and previous.get("year"):
+        merged["year"] = previous["year"]
+        merged["years"] = previous.get("years") or []
 
     # Fields that always carry forward (event/round/location context)
     unconditional_fields = ("event_name", "round_number", "country", "session_type", "scope")

@@ -24,12 +24,10 @@ def reset_resolver_caches():
     import resolver
     import circuits_cache
     circuits_cache.clear_circuits_cache()
-    resolver._drivers_cache = []
-    resolver._drivers_cache_time = 0.0
+    resolver.clear_drivers_cache()
     yield
     circuits_cache.clear_circuits_cache()
-    resolver._drivers_cache = []
-    resolver._drivers_cache_time = 0.0
+    resolver.clear_drivers_cache()
 
 
 @pytest.fixture

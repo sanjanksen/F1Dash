@@ -533,8 +533,7 @@ def test_speed_trap_scope_straight_line_language(mock_circuits, mock_drivers):
 def _capture_llm_system_prompt(message: str = "What did Lando do?") -> str:
     """Invoke _extract_entities_llm with a mocked Haiku client and return the system prompt argument."""
     import circuits_cache
-    resolver._drivers_cache = []
-    resolver._drivers_cache_time = 0.0
+    resolver.clear_drivers_cache()
     circuits_cache.clear_circuits_cache()
     captured = {}
 
@@ -761,3 +760,92 @@ def test_resolver_fills_round_number_when_llm_only_sets_country(mock_circuits, m
     resolved = resolver.resolve_query_context("how was qualifying", None)
     assert resolved.get("round_number") == 13
     assert resolved.get("country") == "Italy"
+
+
+# ── A7: multi-year season detection + year-aware entities ─────────────────────
+
+def test_detect_years_extracts_two_distinct_seasons():
+    from resolver import _detect_years
+    assert _detect_years("verstappen 2024 vs 2025", 2026) == [2024, 2025]
+
+
+def test_detect_years_filters_out_of_range_and_dedups():
+    from resolver import _detect_years
+    # 1999 < SEASON_MIN(2018); 2030 > current(2026); 2024 repeated
+    assert _detect_years("compare 1999 2030 2024 and 2024 again", 2026) == [2024]
+
+
+def test_detect_years_empty_when_no_year_mentioned():
+    from resolver import _detect_years
+    assert _detect_years("how did norris qualify at monaco", 2026) == []
+
+
+@patch('resolver._extract_entities_llm', return_value={})
+@patch('resolver.get_drivers')
+@patch('circuits_cache.get_circuits')
+def test_historical_year_resolves_round_against_that_season(mock_circuits, mock_drivers, mock_llm):
+    """A 2024 query must resolve the round against the 2024 calendar, which
+    differs from the current season's calendar."""
+    def circuits_for(year=None):
+        if year == 2024:
+            return [{"round": 6, "event_name": "Miami Grand Prix", "circuit_name": "Miami", "country": "United States"}]
+        return [{"round": 4, "event_name": "Miami Grand Prix", "circuit_name": "Miami", "country": "United States"}]
+    mock_circuits.side_effect = circuits_for
+    mock_drivers.return_value = [
+        {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
+    ]
+
+    result = resolver.resolve_query_context("How did Norris do at Miami in 2024?")
+
+    assert result["year"] == 2024
+    assert result["round_number"] == 6, f"expected 2024 round, got {result}"
+
+
+@patch('resolver.get_drivers', return_value=[])
+@patch('circuits_cache.get_circuits', return_value=[])
+def test_entity_extraction_receives_detected_season(mock_circuits, mock_drivers):
+    """The detected primary year must be passed into _extract_entities_llm so the
+    roster/calendar prompt is built from that season."""
+    captured = {}
+
+    def fake_llm(message, year=None):
+        captured["year"] = year
+        return {}
+
+    with patch('resolver._extract_entities_llm', side_effect=fake_llm):
+        resolver.resolve_query_context("how did verstappen do at monaco in 2024?")
+
+    assert captured["year"] == 2024
+
+
+@patch('resolver._extract_entities_llm', return_value={})
+@patch('resolver.get_drivers')
+@patch('circuits_cache.get_circuits', return_value=[])
+def test_single_driver_plus_two_years_is_cross_year_mode(mock_circuits, mock_drivers, mock_llm):
+    """One entity + two seasons → dedicated cross_year mode with a SINGULAR
+    entity and both years carried — never a two-driver self-battle."""
+    mock_drivers.return_value = [
+        {"full_name": "Max Verstappen", "code": "VER", "driver_id": "max_verstappen", "team": "Red Bull"},
+    ]
+
+    result = resolver.resolve_query_context("compare verstappen's 2024 and 2025 seasons")
+
+    assert result["analysis_mode"] == "cross_year"
+    assert result["years"] == [2024, 2025]
+    assert result["entity_type"] == "driver"
+    assert result["entity_code"] == "VER"
+    assert result["entity_codes"] == ["VER"], "cross_year must stay single-entity, not VER vs VER"
+
+
+@patch('resolver._extract_entities_llm', return_value={})
+@patch('resolver.get_drivers', return_value=[])
+@patch('circuits_cache.get_circuits')
+def test_year_carries_forward_when_followup_omits_year(mock_circuits, mock_drivers, mock_llm):
+    """A follow-up with no explicit year inherits the previous turn's season."""
+    mock_circuits.return_value = [
+        {"round": 13, "event_name": "Italian Grand Prix", "circuit_name": "Monza", "country": "Italy"},
+    ]
+    prev = resolver.resolve_query_context("what happened at Monza in 2024")
+    assert prev["year"] == 2024
+    follow = resolver.resolve_query_context("and the weather there", prev)
+    assert follow["year"] == 2024
