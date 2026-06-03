@@ -1380,3 +1380,20 @@ def test_analysis_prompt_has_off_era_static_knowledge_rule():
     from chat import _build_analysis_system_prompt
     p = _build_analysis_system_prompt([2024]).lower()
     assert "season_validity" in p
+
+
+# ── Codex fixes: suffix surfaces resolved season(s) + names the bad year ─────
+
+def test_request_suffix_includes_resolved_years_and_mode():
+    import chat
+    resolved = {"has_explicit_context": True, "year": 2024, "years": [2024, 2025], "analysis_mode": "cross_year"}
+    suffix = chat._build_request_system_suffix(resolved, None)
+    assert "2024" in suffix and "2025" in suffix
+    assert "cross_year" in suffix
+
+
+def test_unsupported_suffix_names_the_bad_year():
+    import chat
+    resolved = {"needs_clarification": "season_unsupported", "season_unsupported": 2010}
+    suffix = chat._build_request_system_suffix(resolved, None)
+    assert "2010" in suffix

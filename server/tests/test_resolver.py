@@ -875,3 +875,30 @@ def test_explicit_future_out_of_range_year_flags_season_unsupported(mock_c, mock
 def test_supported_year_not_flagged_unsupported(mock_c, mock_d, mock_llm):
     resolved = resolver.resolve_query_context("how did norris do in 2024?")
     assert resolved.get("needs_clarification") != "season_unsupported"
+
+
+# ── Codex fixes: mixed unsupported year + 2-driver-2-year ambiguity ─────────
+
+@patch('resolver._extract_entities_llm', return_value={})
+@patch('resolver.get_drivers', return_value=[])
+@patch('circuits_cache.get_circuits', return_value=[])
+def test_mixed_supported_and_unsupported_year_flags_unsupported(mock_c, mock_d, mock_llm):
+    """An out-of-range year named alongside a supported one must still flag
+    season_unsupported (don't silently serve only the in-range season)."""
+    resolved = resolver.resolve_query_context("compare 2024 and 2010 seasons")
+    assert resolved.get("needs_clarification") == "season_unsupported"
+    assert resolved.get("season_unsupported") == 2010
+
+
+@patch('resolver._extract_entities_llm', return_value={})
+@patch('resolver.get_drivers')
+@patch('circuits_cache.get_circuits', return_value=[])
+def test_two_drivers_plus_two_years_is_cross_year_ambiguous(mock_c, mock_d, mock_llm):
+    """Two drivers + two seasons can't be a single-entity cross_year and would
+    otherwise silently collapse to one season — flag for clarification."""
+    mock_d.return_value = [
+        {"full_name": "Max Verstappen", "code": "VER", "driver_id": "max_verstappen", "team": "Red Bull"},
+        {"full_name": "Lando Norris", "code": "NOR", "driver_id": "norris", "team": "McLaren"},
+    ]
+    resolved = resolver.resolve_query_context("compare verstappen in 2024 and norris in 2025")
+    assert resolved.get("needs_clarification") == "cross_year_ambiguous"

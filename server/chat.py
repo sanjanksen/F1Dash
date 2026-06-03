@@ -1873,6 +1873,9 @@ def _build_request_system_suffix(resolved: dict, preloaded: dict | None) -> str:
         f"- round_number: {resolved.get('round_number')}",
         f"- session_type: {resolved.get('session_type')}",
         f"- scope: {resolved.get('scope')}",
+        f"- year: {resolved.get('year')}",
+        f"- years: {resolved.get('years')}",
+        f"- analysis_mode: {resolved.get('analysis_mode')}",
         f"- suggested_tool: {resolved.get('suggested_tool')}",
         f"- resolution_confidence: {resolved.get('resolution_confidence')}",
         f"- routing_confidence: {resolved.get('routing_confidence')}",
@@ -1897,10 +1900,17 @@ def _build_request_system_suffix(resolved: dict, preloaded: dict | None) -> str:
             "Ask one short clarifying question to understand what the user is looking for. Do NOT call any tools yet."
         )
     elif needs_clarification == "season_unsupported":
+        bad_year = resolved.get("season_unsupported")
         lines.append(
-            f"⚠ CLARIFICATION NEEDED: The user asked about a season outside the supported range "
-            f"({SEASON_MIN}–{CURRENT_YEAR}). Tell them which seasons are available and ask which one they want. "
-            "Do NOT call any data tools."
+            f"⚠ CLARIFICATION NEEDED: The user named the {bad_year} season, which is outside the "
+            f"supported range ({SEASON_MIN}–{CURRENT_YEAR}). Tell them {bad_year} isn't available, "
+            f"state the supported range, and ask which season they want. Do NOT call any data tools."
+        )
+    elif needs_clarification == "cross_year_ambiguous":
+        lines.append(
+            "⚠ CLARIFICATION NEEDED: The user named two drivers AND two seasons, which is ambiguous "
+            "(per-driver-per-season pairing is unclear). Ask one short question to confirm the exact "
+            "comparison they want before calling any data tools."
         )
 
     if preloaded:

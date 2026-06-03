@@ -518,9 +518,9 @@ def _base_context(message: str) -> dict:
     # ── Season detection FIRST — entities/calendars are season-relative ───────
     years = _detect_years(message)
     primary_year = years[0] if years else active_season()
-    # Only flag an unsupported season when no supported year was named — a query
-    # like "2024 vs 2010" still gets served for the in-range 2024.
-    unsupported_year = None if years else _detect_unsupported_year(message)
+    # Flag ANY explicitly-named out-of-range season, even alongside a supported
+    # one — "2024 vs 2010" shouldn't be silently served as 2024 only.
+    unsupported_year = _detect_unsupported_year(message)
 
     # ── LLM extraction — handles nicknames, aliases, and paraphrasing ─────────
     llm = _extract_entities_llm(message, year=primary_year)
@@ -599,6 +599,9 @@ def _base_context(message: str) -> dict:
         "years": years,
         "year_explicit": bool(years),
         "season_unsupported": unsupported_year,
+        # Two entities + two seasons can't be a single-entity cross_year and
+        # would otherwise collapse to one season — flag for clarification.
+        "multi_entity_cross_year": len(matched_drivers) >= 2 and len(years) == 2,
         "analysis_mode": analysis_mode,
         "analysis_focus": analysis_focus,
         "suggested_tool": _suggested_tool,
@@ -621,6 +624,8 @@ def _merge_with_previous_context(current: dict, previous: dict | None) -> dict:
         current["used_previous_context"] = False
         if current.get("season_unsupported"):
             current["needs_clarification"] = "season_unsupported"
+        elif current.get("multi_entity_cross_year"):
+            current["needs_clarification"] = "cross_year_ambiguous"
         return current
 
     merged = dict(current)
@@ -698,6 +703,9 @@ def _detect_clarification_needed(resolved: dict) -> str | None:
     # supported one before routing anything.
     if resolved.get("season_unsupported"):
         return "season_unsupported"
+
+    if resolved.get("multi_entity_cross_year"):
+        return "cross_year_ambiguous"
 
     scope = resolved.get("scope")
     round_number = resolved.get("round_number")

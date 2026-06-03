@@ -48,7 +48,9 @@ def _season_window(resolved: dict | None) -> tuple[str, str]:
     ys = [y for y in ys if y]
     if not ys:
         ys = [CURRENT_YEAR]
-    return f"{min(ys)}-01-01", f"{max(ys) + 1}-12-31"
+    # End-of-day so the whole final day is included under a `<=` bound (a bare
+    # date casts to midnight, which would drop everything after 00:00 that day).
+    return f"{min(ys)}-01-01", f"{max(ys) + 1}-12-31T23:59:59Z"
 
 
 def should_retrieve_editorial(analysis_mode: str | None) -> bool:
@@ -119,6 +121,11 @@ def chunk_passes_subject_filter(
         for s in raw_subjects
         if s.get("kind") and s.get("ref")
     }
+    # The chunk carries no subject data to evaluate (the retrieval layer doesn't
+    # surface article_subjects yet) — we can't judge the intersection, so fall
+    # through to similarity rather than dropping every result.
+    if not chunk_subjects:
+        return True
     return bool(chunk_subjects & resolver_subjects)
 
 

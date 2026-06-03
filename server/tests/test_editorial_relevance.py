@@ -527,7 +527,7 @@ def test_gated_lookup_derives_window_from_multiple_years(monkeypatch):
     )
     assert captured["min_date"] == "2024-01-01"
     # max(years)+1 — a presser early next year still discusses the prior season
-    assert captured["max_date"] == "2026-12-31"
+    assert captured["max_date"] == "2026-12-31T23:59:59Z"
 
 
 def test_gated_lookup_window_single_year(monkeypatch):
@@ -546,4 +546,21 @@ def test_gated_lookup_window_single_year(monkeypatch):
         analysis_mode="driver_comparison",
     )
     assert captured["min_date"] == "2024-01-01"
-    assert captured["max_date"] == "2025-12-31"
+    assert captured["max_date"] == "2025-12-31T23:59:59Z"
+
+
+# ── Codex HIGH: subject filter must not drop chunks lacking subject data ─────
+
+def test_chunk_passes_when_chunk_carries_no_subject_data():
+    """Semantic/FTS results don't carry article_subjects yet. With a non-empty
+    resolver subject set the filter must NOT drop them — it can't evaluate the
+    intersection, so it falls through to similarity (was a total-drop regression
+    once build_resolver_subject_set started emitting real subjects)."""
+    chunk = {"chunk_text": "McLaren floor update", "similarity": 0.8}  # no article_subjects
+    subjects = frozenset({("driver", "NOR")})
+    assert chunk_passes_subject_filter(chunk, subjects)
+
+
+def test_chunk_passes_when_article_subjects_empty_list():
+    chunk = {"article_subjects": [], "similarity": 0.8}
+    assert chunk_passes_subject_filter(chunk, frozenset({("driver", "NOR")}))
