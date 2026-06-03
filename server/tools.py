@@ -226,6 +226,26 @@ def _require_args(args: dict, required: list[str], tool_name: str) -> None:
 
 
 def execute_tool(name: str, args: dict):
+    """Set the active season for the duration of one tool call, then dispatch.
+
+    `year` is popped into a copy (never mutating the caller's dict) and the
+    season is set/reset with a token in `finally` so it restores the exact
+    prior value. `year` is stripped before reaching the registry/legacy
+    dispatch so it never leaks into feat.execute(**args).
+    """
+    from f1_data import set_season, reset_season
+    args = args or {}
+    year = args.get("year")
+    call_args = {k: v for k, v in args.items() if k != "year"}
+    token = set_season(year) if year is not None else None
+    try:
+        return _execute_tool_inner(name, call_args)
+    finally:
+        if token is not None:
+            reset_season(token)
+
+
+def _execute_tool_inner(name: str, args: dict):
     # Registry dispatch (Phase B): if the tool is in FEATURE_REGISTRY,
     # validate required_args then call feature.execute(). Phase C3 adds
     # audit logging around the call so live-production decisions show up
@@ -320,21 +340,56 @@ from features.base import FEATURE_REGISTRY as _FEATURE_REGISTRY
 _discover_features()
 
 
+# Tools that must NOT get a `year` argument injected: either pure static
+# knowledge (no season fetch) or they already own their own season/date
+# handling (so injecting `year` would be a silent no-op).
+_YEAR_NOT_INJECTED = {
+    "get_driver_style_profile", "get_team_car_profile",      # pure static knowledge
+    "search_editorial_content",                              # own min_date/season window (B5)
+    "get_historical_circuit_performance",                    # already takes a `years` array
+    "get_season_schedule",                                   # gets `year` via its own schema (A6b)
+}
+
+
+def _year_property() -> dict:
+    return {
+        "type": "integer",
+        "description": (
+            f"F1 season year ({f1_data.SEASON_MIN}-{f1_data.CURRENT_YEAR}); "
+            "defaults to the season the question is about. Use different values "
+            "in separate calls to compare seasons."
+        ),
+    }
+
+
+def _inject_year(schema: dict, name: str) -> dict:
+    """Return a schema copy with a `year` property added when appropriate."""
+    if name in _YEAR_NOT_INJECTED:
+        return schema
+    schema = {**schema}
+    props = dict(schema.get("properties") or {})
+    props.setdefault("year", _year_property())
+    schema["properties"] = props
+    return schema
+
+
 def _feature_to_anthropic_schema(feat) -> dict:
+    base = feat.tool_schema or {"type": "object", "properties": {}}
     return {
         "name": feat.name,
         "description": feat.description or "",
-        "input_schema": feat.tool_schema or {"type": "object", "properties": {}},
+        "input_schema": _inject_year(base, feat.name),
     }
 
 
 def _feature_to_openai_schema(feat) -> dict:
+    base = feat.tool_schema or {"type": "object", "properties": {}}
     return {
         "type": "function",
         "function": {
             "name": feat.name,
             "description": feat.description or "",
-            "parameters": feat.tool_schema or {"type": "object", "properties": {}},
+            "parameters": _inject_year(base, feat.name),
         },
     }
 
@@ -353,3 +408,23 @@ for _name, _feat in _FEATURE_REGISTRY.items():
         OPENAI_TOOL_DEFINITIONS[_existing_openai[_name]] = _feature_to_openai_schema(_feat)
     else:
         OPENAI_TOOL_DEFINITIONS.append(_feature_to_openai_schema(_feat))
+
+
+# Inject `year` into the static (non-registry) season-specific tools too —
+# the DEEP_ANALYSIS primitives all read FastF1/OpenF1 session data and now
+# honor active_season(). Skip any registry-managed names (already injected
+# above) and the never-inject set.
+for _tdef in TOOL_DEFINITIONS:
+    _n = _tdef["name"]
+    if _n in _FEATURE_REGISTRY or _n in _YEAR_NOT_INJECTED:
+        continue
+    _tdef["input_schema"] = _inject_year(
+        _tdef.get("input_schema") or {"type": "object", "properties": {}}, _n
+    )
+for _odef in OPENAI_TOOL_DEFINITIONS:
+    _n = _odef["function"]["name"]
+    if _n in _FEATURE_REGISTRY or _n in _YEAR_NOT_INJECTED:
+        continue
+    _odef["function"]["parameters"] = _inject_year(
+        _odef["function"].get("parameters") or {"type": "object", "properties": {}}, _n
+    )

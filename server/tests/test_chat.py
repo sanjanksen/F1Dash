@@ -1279,3 +1279,33 @@ def test_make_mini_sector_heatmap_widget_returns_unavailable_shape():
 def test_system_prompt_mentions_compare_mini_sectors():
     import chat
     assert "compare_mini_sectors" in chat.SYSTEM_PROMPT
+
+
+def test_execute_analysis_tool_calls_per_future_season_isolation():
+    """Two concurrent tool calls with different years each see their own
+    active season inside their worker thread, with no leakage or RuntimeError
+    (Plan A6 — per-future copy_context + token reset)."""
+    import chat, tools, f1_data
+
+    barrier = threading.Barrier(2, timeout=2.0)
+    seen = {}
+    lock = threading.Lock()
+
+    def fake_inner(name, _args):
+        # Force overlap so a shared context would leak between threads.
+        barrier.wait()
+        with lock:
+            seen[name] = f1_data.active_season()
+        return {"name": name, "season": f1_data.active_season()}
+
+    with patch.object(tools, "_execute_tool_inner", side_effect=fake_inner):
+        evidence = chat._execute_analysis_tool_calls([
+            ("tool_a", {"year": 2024}),
+            ("tool_b", {"year": 2025}),
+        ])
+
+    assert seen == {"tool_a": 2024, "tool_b": 2025}
+    by_name = {item["result"]["name"]: item["result"]["season"] for item in evidence}
+    assert by_name == {"tool_a": 2024, "tool_b": 2025}
+    # Caller's season is restored to the default.
+    assert f1_data.active_season() == f1_data.CURRENT_YEAR

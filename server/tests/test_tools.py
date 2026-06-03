@@ -653,3 +653,34 @@ def test_execute_tool_compare_mini_sectors_dispatches(monkeypatch):
     assert captured["args"][1] == "NOR"
     assert captured["args"][2] == 21
     assert captured["args"][3] == 11
+
+
+# --- Per-call season + central schema injection (Plan A6) ---
+
+def test_execute_tool_season_per_call_immutable_args_registry(monkeypatch):
+    import tools, f1_data
+    seen = {}
+    feat = tools._FEATURE_REGISTRY["analyze_qualifying_battle"]
+    monkeypatch.setattr(
+        feat, "execute",
+        lambda **a: seen.update(season=f1_data.active_season(), got=dict(a)) or {"ok": 1},
+    )
+    args = {"round_number": 8, "driver_a": "VER", "driver_b": "NOR", "year": 2024}
+    tools.execute_tool("analyze_qualifying_battle", args)
+    assert seen["season"] == 2024 and "year" not in seen["got"]
+    assert f1_data.active_season() == f1_data.CURRENT_YEAR and "year" in args
+
+
+def test_season_tools_advertise_year_in_schema():
+    import tools
+    sch = next(t for t in tools.TOOL_DEFINITIONS if t["name"] == "analyze_qualifying_battle")
+    assert "year" in sch["input_schema"]["properties"]
+    sch2 = next(t for t in tools.TOOL_DEFINITIONS if t["name"] == "get_constructor_standings")
+    assert "year" in sch2["input_schema"]["properties"]
+
+
+def test_year_not_injected_for_static_knowledge_tools():
+    import tools
+    sch = next((t for t in tools.TOOL_DEFINITIONS if t["name"] == "get_driver_style_profile"), None)
+    if sch is not None:
+        assert "year" not in sch["input_schema"]["properties"]

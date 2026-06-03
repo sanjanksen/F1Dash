@@ -9,6 +9,7 @@ import json
 import os
 import logging
 import re
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 import anthropic
@@ -1630,8 +1631,10 @@ def _execute_analysis_tool_calls(tool_calls: list[tuple[str, dict]]) -> list[dic
 
     max_workers = min(MAX_DETERMINISTIC_TOOL_WORKERS, len(tool_calls))
     with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="f1dash-analysis-tool") as executor:
+        # One FRESH copied context per future so each worker thread gets an
+        # independent snapshot of the active season (never a shared context).
         futures = [
-            executor.submit(_execute_analysis_tool_call, tool_name, args)
+            executor.submit(contextvars.copy_context().run, _execute_analysis_tool_call, tool_name, args)
             for tool_name, args in tool_calls
         ]
         return [future.result() for future in futures]
@@ -1701,27 +1704,41 @@ def _prepare_resolved_context_from_previous(message: str, previous_context: dict
 
 
 def _preload_resolved_context(resolved: dict) -> dict | None:
-    preloaded = None
-    if resolved.get("routing_confidence") == "high":
-        args = _suggested_tool_args(resolved)
-        tool = resolved.get("suggested_tool")
-        if tool and args:
-            try:
-                logger.info("Preloading suggested tool: %s args=%s", tool, args)
-                preloaded = {
-                    "tool": tool,
-                    "args": args,
-                    "result": execute_tool(tool, args),
-                }
-            except Exception as exc:
-                logger.warning("Preload failed for tool %s args=%s error=%s", tool, args, exc)
-                preloaded = {
-                    "tool": tool,
-                    "args": args,
-                    "error": str(exc),
-                }
+    # Skip the single high-confidence preload for multi-year / cross-year
+    # contexts: the preloaded tool has no `year` support, so one current-year
+    # result would poison a season comparison. The agentic loop (A9 prompt)
+    # then drives per-year tool calls with explicit `year`.
+    if resolved.get("analysis_mode") == "cross_year" or len(resolved.get("years") or []) > 1:
+        return None
 
-    return preloaded
+    # This helper is also called outside answer_f1_payload's season wrapper
+    # (via _prepare_resolved_context_from_previous), so set/reset the season
+    # itself around the preload call.
+    from f1_data import set_season, reset_season
+    token = set_season(resolved.get("year") or CURRENT_YEAR)
+    try:
+        preloaded = None
+        if resolved.get("routing_confidence") == "high":
+            args = _suggested_tool_args(resolved)
+            tool = resolved.get("suggested_tool")
+            if tool and args:
+                try:
+                    logger.info("Preloading suggested tool: %s args=%s", tool, args)
+                    preloaded = {
+                        "tool": tool,
+                        "args": args,
+                        "result": execute_tool(tool, args),
+                    }
+                except Exception as exc:
+                    logger.warning("Preload failed for tool %s args=%s error=%s", tool, args, exc)
+                    preloaded = {
+                        "tool": tool,
+                        "args": args,
+                        "error": str(exc),
+                    }
+        return preloaded
+    finally:
+        reset_season(token)
 
 
 def _build_request_system_suffix(resolved: dict, preloaded: dict | None) -> str:
@@ -2131,22 +2148,27 @@ def answer_f1_payload(message: str, history: list[dict] | None = None) -> dict:
     history: list of prior {role, content} dicts from the conversation.
     Reads LLM_PROVIDER from the environment (default: 'anthropic').
     """
+    from f1_data import set_season, reset_season
     try:
         prior = history or []
         provider = os.environ.get("LLM_PROVIDER", "anthropic").lower()
         previous_context = resolve_context_from_history(prior)
         resolved = resolve_query_context(message, previous_context)
-        deterministic = _try_deterministic_analysis(message, prior, provider=provider, resolved_context=resolved)
-        if deterministic:
-            deterministic["valid_driver_codes"] = _valid_driver_codes()
-            return deterministic
-        preloaded = _preload_resolved_context(resolved)
-        if provider == "openai":
-            payload = _answer_openai(message, prior, resolved_context=resolved, preloaded_context=preloaded)
-        else:
-            payload = _answer_anthropic(message, prior, resolved_context=resolved, preloaded_context=preloaded)
-        payload["valid_driver_codes"] = _valid_driver_codes()
-        return payload
+        token = set_season(resolved.get("year") or CURRENT_YEAR)
+        try:
+            deterministic = _try_deterministic_analysis(message, prior, provider=provider, resolved_context=resolved)
+            if deterministic:
+                deterministic["valid_driver_codes"] = _valid_driver_codes()
+                return deterministic
+            preloaded = _preload_resolved_context(resolved)
+            if provider == "openai":
+                payload = _answer_openai(message, prior, resolved_context=resolved, preloaded_context=preloaded)
+            else:
+                payload = _answer_anthropic(message, prior, resolved_context=resolved, preloaded_context=preloaded)
+            payload["valid_driver_codes"] = _valid_driver_codes()
+            return payload
+        finally:
+            reset_season(token)
     except LLMTransientError as e:
         if e.kind == "rate_limit":
             msg = "The model is throttling right now — please retry in a moment."
