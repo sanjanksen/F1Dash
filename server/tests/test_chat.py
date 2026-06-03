@@ -1327,3 +1327,33 @@ def test_request_suffix_warns_on_unsupported_season():
     assert "season" in suffix.lower()
     assert str(chat.SEASON_MIN) in suffix
     assert "Do NOT call" in suffix
+
+
+# ── B3: era-aware analysis system prompt ────────────────────────────────────
+
+def test_analysis_prompt_single_2026_has_2026_energy():
+    from chat import _build_analysis_system_prompt
+    p = _build_analysis_system_prompt([2026])
+    assert "350 kW" in p, "2026 prompt must state the ~350 kW MGU-K figure"
+
+
+def test_analysis_prompt_single_2024_uses_ground_effect_not_2026():
+    from chat import _build_analysis_system_prompt
+    p = _build_analysis_system_prompt([2024])
+    assert "120 kW" in p
+    assert "DRS" in p
+    assert "350 kW" not in p, "a 2024 prompt must not cite the 2026 deployment figure"
+
+
+def test_analysis_prompt_mixed_era_qualifies_by_season():
+    from chat import _build_analysis_system_prompt
+    p = _build_analysis_system_prompt([2024, 2026])
+    assert "2024" in p and "2026" in p
+    assert "120 kW" in p and "350 kW" in p
+    low = p.lower()
+    assert "never attribute a 2026 concept" in low or "qualify every regulation mechanism by season" in low
+
+
+def test_analysis_system_prompt_constant_equals_current_year_build():
+    import chat
+    assert chat.ANALYSIS_SYSTEM_PROMPT == chat._build_analysis_system_prompt([chat.CURRENT_YEAR])

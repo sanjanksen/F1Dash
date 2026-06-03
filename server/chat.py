@@ -25,7 +25,6 @@ from tools import TOOL_DEFINITIONS, OPENAI_TOOL_DEFINITIONS, execute_tool
 from resolver import resolve_query_context, resolve_context_from_history, _cached_drivers
 from driver_styles import get_comparison_framing
 from circuit_profiles import get_circuit_profile
-from energy_2026 import get_energy_2026_knowledge
 from evidence_shaping import (
     CORNERING_TOOL_NAMES,
     reject_data_table_for_cornering,
@@ -765,11 +764,55 @@ Answer quality rules:
 - If you cannot determine which specific race or round the question refers to, ask ONE short clarifying question before calling any data tools. Do not guess a round number and do not call tools with a missing or uncertain race context.
 - If a tool result contains `"available": false` and a `guidance_for_model` field, follow that guidance verbatim. Never paper over the gap with invented characteristics."""
 
-def _build_analysis_system_prompt() -> str:
-    energy = get_energy_2026_knowledge()
-    energy_terms = "\n".join(f"  - {k}: {v}" for k, v in energy.get("terms", {}).items())
-    energy_rules = "\n".join(f"  - {r}" for r in energy.get("interpretation_rules", []))
-    energy_limits = "\n".join(f"  - {l}" for l in energy.get("limitations", []))
+def _format_energy_block(year: int) -> str:
+    """Era-appropriate energy knowledge for one season, formatted for the prompt."""
+    from regulations import era_knowledge, era_for_year, ERA_NEW_REGS_2026
+    k = era_knowledge(year)
+    facts = "\n".join(f"  - {f}" for f in k.get("known_facts", []))
+    terms = "\n".join(f"  - {key}: {v}" for key, v in k.get("terms", {}).items())
+    rules = "\n".join(f"  - {r}" for r in k.get("interpretation_rules", []))
+    limits = "\n".join(f"  - {l}" for l in k.get("limitations", []))
+    era_label = ("2026 regulations" if era_for_year(year) == ERA_NEW_REGS_2026
+                 else "2022–2025 ground-effect era (2014-gen power unit)")
+    return (
+        f"Known facts ({era_label}):\n{facts}\n\n"
+        f"Key terms:\n{terms}\n\n"
+        f"Interpretation rules:\n{rules}\n\n"
+        f"Limitations — always apply these:\n{limits}"
+    )
+
+
+def _build_energy_rules_section(years: list[int]) -> str:
+    """Energy/regulation rules for the analyzed season(s). One era → that era's
+    block; multiple eras → a per-season rulebook plus a cross-era qualifier so
+    the model never attributes a concept to the wrong regulation generation."""
+    from regulations import era_for_year
+    # One representative year per distinct era, in first-seen order.
+    per_era: list[tuple[str, int]] = []
+    seen_eras: set = set()
+    for y in years:
+        e = era_for_year(y)
+        if e not in seen_eras:
+            seen_eras.add(e)
+            per_era.append((e, y))
+
+    if len(per_era) == 1:
+        return "## Energy & Regulation Rules\n" + _format_energy_block(per_era[0][1])
+
+    blocks = [f"### Season {y}\n{_format_energy_block(y)}" for _, y in per_era]
+    qualifier = (
+        "\n\n**Mixed-era comparison rule:** This analysis spans multiple regulation eras. "
+        "Qualify every regulation mechanism by season; never attribute a 2026 concept "
+        "(override mode, active-aero Z-mode, ~350 kW deployment, MGU-H removal) to a pre-2026 "
+        "season, and never attribute MGU-H heat recovery or the 120 kW MGU-K cap to a 2026 car."
+    )
+    return "## Energy & Regulation Rules (multiple eras)\n" + "\n\n".join(blocks) + qualifier
+
+
+def _build_analysis_system_prompt(years: list[int] | None = None) -> str:
+    if not years:
+        years = [CURRENT_YEAR]
+    energy_section = _build_energy_rules_section(years)
 
     return f"""You are the analysis stage for an F1 product.
 
@@ -826,21 +869,7 @@ Use it as a starting hypothesis to test against the real data:
 - Use tyre_challenge as a framing hypothesis for degradation differences — verify against actual stint data before citing it
 - Never cite the circuit profile alone as evidence. It must be corroborated by a tool result to appear in primary_reason or secondary_reasons
 
-## 2026 Energy Rules
-Known facts:
-  - MGU-K output is ~350 kW (up from 120 kW previous era)
-  - Target ~8.5 MJ per lap of energy recuperation under braking
-  - No MGU-H — recovery is braking-centric
-  - At high speed, deployment can taper early so the car is at full throttle but no longer accelerating at the same rate
-
-Key terms:
-{energy_terms}
-
-Interpretation rules:
-{energy_rules}
-
-Limitations — always apply these:
-{energy_limits}
+{energy_section}
 
 ## Cornering Load & Corner Analysis Data
 When evidence contains results from `analyze_cornering_loads` or `analyze_race_cornering_profile`, you are writing about driving CHARACTER — not metrics. Use the F1 vocabulary below. Every number must serve a character description, not the other way around.
@@ -1988,6 +2017,15 @@ def _get_anthropic_client() -> anthropic.Anthropic:
     return _anthropic_client
 
 
+def _resolved_years(resolved: dict) -> list[int]:
+    """Seasons this analysis spans — the explicit years, else the single
+    resolved year, else the current season."""
+    ys = resolved.get("years") or []
+    if ys:
+        return ys
+    return [resolved.get("year") or CURRENT_YEAR]
+
+
 def _run_anthropic_analysis(question: str, resolved: dict, plan: dict, evidence: list[dict]) -> dict:
     client = _get_anthropic_client()
     response = _call_anthropic(
@@ -1996,7 +2034,7 @@ def _run_anthropic_analysis(question: str, resolved: dict, plan: dict, evidence:
         max_tokens=1200,
         system=[{
             "type": "text",
-            "text": ANALYSIS_SYSTEM_PROMPT,
+            "text": _build_analysis_system_prompt(_resolved_years(resolved)),
             "cache_control": {"type": "ephemeral"},
         }],
         messages=[{
@@ -2132,7 +2170,7 @@ def _run_openai_analysis(question: str, resolved: dict, plan: dict, evidence: li
         client,
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
+            {"role": "system", "content": _build_analysis_system_prompt(_resolved_years(resolved))},
             {"role": "user", "content": _build_analysis_user_prompt(question, resolved, plan, evidence)},
         ],
         response_format={"type": "json_object"},
