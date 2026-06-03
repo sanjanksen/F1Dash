@@ -1989,6 +1989,13 @@ def _try_deterministic_analysis(question: str, history: list[dict], *, provider:
         resolved = resolve_query_context(question, previous_context)
     else:
         resolved = resolved_context
+
+    # A blocking clarification means we must NOT answer deterministically — fall
+    # through to the agentic loop, which surfaces the clarification suffix and
+    # asks the user (e.g. an unsupported season, or two-driver+two-season ambiguity).
+    if resolved.get("needs_clarification") in ("season_unsupported", "cross_year_ambiguous"):
+        return None
+
     plan = _build_analysis_plan(question, resolved)
     if not plan:
         return None

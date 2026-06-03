@@ -1397,3 +1397,16 @@ def test_unsupported_suffix_names_the_bad_year():
     resolved = {"needs_clarification": "season_unsupported", "season_unsupported": 2010}
     suffix = chat._build_request_system_suffix(resolved, None)
     assert "2010" in suffix
+
+
+def test_deterministic_analysis_bails_before_planning_on_blocking_clarification(monkeypatch):
+    """A blocking clarification (e.g. cross_year_ambiguous) must skip the
+    deterministic path entirely so the agentic loop can ask — otherwise a
+    2-driver-2-year query builds a wrong single-year plan and answers anyway."""
+    import chat
+    called = []
+    monkeypatch.setattr(chat, "_build_analysis_plan", lambda *a, **k: called.append(1) or {})
+    resolved = {"needs_clarification": "cross_year_ambiguous", "analysis_mode": "driver_comparison"}
+    out = chat._try_deterministic_analysis("q", [], provider="anthropic", resolved_context=resolved)
+    assert out is None
+    assert not called, "must bail before building a plan"
