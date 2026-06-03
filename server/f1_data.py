@@ -74,12 +74,32 @@ def _session_cache_get(key):
         return entry
 
 
+def _session_cache_put_locked(key, value):
+    """Insert + LRU-evict. Caller MUST already hold _SESSION_CACHE_LOCK."""
+    _SESSION_CACHE[key] = value
+    _SESSION_CACHE.move_to_end(key)
+    while len(_SESSION_CACHE) > _SESSION_CACHE_MAX:
+        _SESSION_CACHE.popitem(last=False)
+
+
 def _session_cache_put(key, value):
     with _SESSION_CACHE_LOCK:
-        _SESSION_CACHE[key] = value
-        _SESSION_CACHE.move_to_end(key)
-        while len(_SESSION_CACHE) > _SESSION_CACHE_MAX:
-            _SESSION_CACHE.popitem(last=False)
+        _session_cache_put_locked(key, value)
+
+
+def _get_or_create_session_entry(key, factory):
+    """Single-flight get-or-create under ONE lock acquisition, so two concurrent
+    callers for the same key can never both create or clobber each other's entry.
+    `factory()` builds the entry dict and may raise — on failure nothing is
+    inserted. Returns (entry, created)."""
+    with _SESSION_CACHE_LOCK:
+        entry = _SESSION_CACHE.get(key)
+        if entry is not None:
+            _SESSION_CACHE.move_to_end(key)  # LRU on hit
+            return entry, False
+        entry = factory()                    # may raise; lock released, nothing inserted
+        _session_cache_put_locked(key, entry)
+        return entry, True
 
 
 class FastF1Error(RuntimeError):
@@ -126,9 +146,7 @@ def _load_session(round_number: int, session_type: str, *,
     season = active_season()
     cache_key = (season, round_number, normalized_session)
 
-    entry = _session_cache_get(cache_key)
-    newly_created = False
-    if entry is None:
+    def _make_entry():
         try:
             ff1_session = fastf1.get_session(season, round_number, normalized_session)
         except Exception as exc:
@@ -138,7 +156,7 @@ def _load_session(round_number: int, session_type: str, *,
                 session_type=session_type,
                 cause=exc,
             ) from exc
-        entry = {
+        return {
             "session": ff1_session,
             "laps": False,
             "telemetry": False,
@@ -146,8 +164,8 @@ def _load_session(round_number: int, session_type: str, *,
             "messages": False,
             "lock": threading.Lock(),
         }
-        _session_cache_put(cache_key, entry)
-        newly_created = True
+
+    entry, newly_created = _get_or_create_session_entry(cache_key, _make_entry)
 
     session = entry["session"]
     entry_lock = entry["lock"]
@@ -179,7 +197,8 @@ def _load_session(round_number: int, session_type: str, *,
         except Exception as exc:
             if newly_created:
                 with _SESSION_CACHE_LOCK:
-                    _SESSION_CACHE.pop(cache_key, None)
+                    if _SESSION_CACHE.get(cache_key) is entry:  # only remove OUR entry
+                        _SESSION_CACHE.pop(cache_key, None)
             raise FastF1Error(
                 f"FastF1 unavailable for round {round_number} session {session_type}",
                 round_number=round_number,

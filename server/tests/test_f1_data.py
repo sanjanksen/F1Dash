@@ -5209,38 +5209,122 @@ def test_session_cache_true_lru_eviction(monkeypatch):
     assert 3 in keys and 4 in keys
 
 
+def test_load_session_single_flight_under_concurrency(monkeypatch):
+    """Two concurrent loads of the SAME (season, round, session) must create the
+    FastF1 session only ONCE and share one cache entry. Regression guard for the
+    LRU-refactor split critical section (get under lock, create+put outside),
+    which let both threads miss and both create."""
+    import threading
+    import time
+
+    f1_data._clear_session_cache()
+    monkeypatch.setattr(f1_data, "_validate_session_availability", lambda *a, **k: None)
+
+    create_count = []
+    count_lock = threading.Lock()
+
+    def fake_get_session(year, rnd, sess):
+        with count_lock:
+            create_count.append(1)
+        time.sleep(0.05)  # widen the race window
+        m = MagicMock()
+        m.load = MagicMock(return_value=None)
+        return m
+
+    monkeypatch.setattr(f1_data.fastf1, "get_session", fake_get_session)
+
+    results = {}
+
+    def worker(i):
+        results[i] = f1_data._load_session(6, "R")
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert sum(create_count) == 1, "session must be created exactly once (single-flight)"
+    assert results[0] is results[1], "both callers must share the one cached session"
+
+
 # --- Audit: no stray CURRENT_YEAR season fetches (Plan A3) ---
 import re as _re_audit
 import pathlib as _pathlib_audit
 
-_AUDIT = {
-    "f1_data.py": {
-        "fetch_ok": ("active_season(",),
-        "allow_lines": ("CURRENT_YEAR = ", "_session_year", "current-season",
-                        "def get_historical_circuit_performance", "def analyze_team_circuit_fit"),
-    },
-    "openf1.py": {"allow_lines": ("import",)},
-}
+import ast as _ast_audit
+
+# Functions that legitimately still read CURRENT_YEAR for a historical WINDOW;
+# their round->circuit anchor conversion to active_season() is deferred to plan
+# task F2 (A8). Shrinks (and these get removed) when F2 lands.
+_DEFERRED_CURRENT_YEAR_FNS = {"get_historical_circuit_performance", "analyze_team_circuit_fit"}
+_FETCH_FUNCS = {"get_session", "get_event_schedule"}
 
 
-@pytest.mark.parametrize("fname,rule", list(_AUDIT.items()))
-def test_no_stray_current_year_fetch(fname, rule):
-    src = (_pathlib_audit.Path(__file__).parent.parent / fname).read_text().splitlines()
-    bad = []
-    in_allow_fn = False
-    for i, ln in enumerate(src, 1):
-        if any(a in ln for a in rule.get("allow_lines", ())):
-            in_allow_fn = ln.strip().startswith("def ")
-            continue
-        if in_allow_fn and ln.strip() and not ln[0].isspace():
-            in_allow_fn = False
-        if in_allow_fn:
-            continue
-        if "CURRENT_YEAR" in ln and _re_audit.search(
-            r"get_session\(|get_event_schedule\(|JOLPICA_BASE\}/\{CURRENT_YEAR|year=CURRENT_YEAR", ln
-        ):
-            bad.append(i)
-    assert not bad, f"{fname}: un-converted season fetch at {bad}"
+def _current_year_fetch_offenders(src: str) -> list[tuple[str, int]]:
+    """AST scan (multiline-safe, no whole-function skipping): find CURRENT_YEAR
+    used as a SEASON-FETCH argument — a positional arg to fastf1.get_session /
+    get_event_schedule, a `year=CURRENT_YEAR` kwarg, or inside a URL f-string
+    (…BASE…/{CURRENT_YEAR}/… .json). Returns (enclosing_function, lineno)."""
+    tree = _ast_audit.parse(src)
+    func_of: dict[int, str] = {}
+    for fn in _ast_audit.walk(tree):
+        if isinstance(fn, (_ast_audit.FunctionDef, _ast_audit.AsyncFunctionDef)):
+            for child in _ast_audit.walk(fn):
+                func_of.setdefault(id(child), fn.name)
+
+    def _is_cy(node) -> bool:
+        return isinstance(node, _ast_audit.Name) and node.id == "CURRENT_YEAR"
+
+    offenders: list[tuple[str, int]] = []
+    for node in _ast_audit.walk(tree):
+        hit = False
+        if isinstance(node, _ast_audit.Call):
+            callee = node.func.attr if isinstance(node.func, _ast_audit.Attribute) else getattr(node.func, "id", "")
+            if callee in _FETCH_FUNCS and any(_is_cy(a) for a in node.args):
+                hit = True
+            if any(kw.arg == "year" and _is_cy(kw.value) for kw in node.keywords):
+                hit = True
+        elif isinstance(node, _ast_audit.JoinedStr):
+            consts = "".join(v.value for v in node.values
+                             if isinstance(v, _ast_audit.Constant) and isinstance(v.value, str))
+            fmt_names = [v.value.id for v in node.values
+                         if isinstance(v, _ast_audit.FormattedValue) and isinstance(v.value, _ast_audit.Name)]
+            looks_like_url = ".json" in consts or any("BASE" in n for n in fmt_names)
+            if looks_like_url and any(_is_cy(v.value) for v in node.values
+                                      if isinstance(v, _ast_audit.FormattedValue)):
+                hit = True
+        if hit:
+            offenders.append((func_of.get(id(node), "<module>"), node.lineno))
+    return offenders
+
+
+@pytest.mark.parametrize("fname", ["f1_data.py", "openf1.py"])
+def test_no_stray_current_year_fetch(fname):
+    src = (_pathlib_audit.Path(__file__).parent.parent / fname).read_text()
+    offenders = [(fn, ln) for fn, ln in _current_year_fetch_offenders(src)
+                 if fn not in _DEFERRED_CURRENT_YEAR_FNS]
+    assert offenders == [], f"{fname}: un-converted CURRENT_YEAR season fetch at {offenders}"
+
+
+def test_audit_catches_multiline_and_in_function_strays():
+    """The hardened audit must catch a stray fetch even when it's MULTILINE and
+    INSIDE a function body — the cases the old line/whole-function scan missed."""
+    src = (
+        "import fastf1\n"
+        "CURRENT_YEAR = 2026\n"
+        "JOLPICA_BASE = 'x'\n"
+        "def some_fetcher(rnd):\n"
+        "    return fastf1.get_session(\n"
+        "        CURRENT_YEAR,\n"
+        "        rnd, 'R')\n"
+        "def url_fetcher(rnd):\n"
+        "    return f'{JOLPICA_BASE}/{CURRENT_YEAR}/{rnd}/results.json'\n"
+    )
+    offenders = _current_year_fetch_offenders(src)
+    fns = {fn for fn, _ in offenders}
+    assert "some_fetcher" in fns      # multiline get_session(CURRENT_YEAR, ...)
+    assert "url_fetcher" in fns       # CURRENT_YEAR in a JOLPICA URL f-string
 
 
 # --- get_circuits/get_drivers accept explicit year (Plan A4) ---
