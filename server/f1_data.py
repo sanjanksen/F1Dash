@@ -2,6 +2,8 @@
 import os
 import logging
 import threading
+import contextlib
+import contextvars
 import numbers
 import math
 import fastf1
@@ -23,7 +25,40 @@ fastf1.Cache.enable_cache(_CACHE_DIR)
 
 JOLPICA_BASE = "https://api.jolpi.ca/ergast/f1"
 CURRENT_YEAR = __import__('datetime').date.today().year
+SEASON_MIN = 2018
 logger = logging.getLogger(__name__)
+
+# Ambient season for the current request/tool call. The data layer reads this
+# via active_season() so any fetch can target a historical season without
+# threading a `year` argument through every function.
+_ACTIVE_SEASON: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "active_season", default=CURRENT_YEAR
+)
+
+
+def active_season() -> int:
+    """Return the season the current context should fetch data for."""
+    return _ACTIVE_SEASON.get()
+
+
+def set_season(year: int) -> contextvars.Token:
+    """Set the active season and return a token to restore the prior value."""
+    return _ACTIVE_SEASON.set(int(year))
+
+
+def reset_season(token: contextvars.Token) -> None:
+    """Restore the active season to the exact value before `set_season`."""
+    _ACTIVE_SEASON.reset(token)
+
+
+@contextlib.contextmanager
+def use_season(year: int):
+    """Context manager: run a block with `year` as the active season."""
+    token = set_season(year)
+    try:
+        yield
+    finally:
+        reset_season(token)
 
 _SESSION_CACHE: dict[tuple[int, int, str], dict] = {}
 _SESSION_CACHE_LOCK = threading.Lock()

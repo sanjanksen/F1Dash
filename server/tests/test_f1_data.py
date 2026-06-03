@@ -5133,3 +5133,38 @@ def test_cause_explanation_falls_back_to_distance_when_no_corner_or_label():
         # corner_name + location_label deliberately omitted (None default)
     )
     assert "3100" in text, f"Expected distance fallback; got: {text}"
+
+
+# --- Multi-year season support (Plan A1) ---
+
+def test_active_season_defaults_to_current_year():
+    assert f1_data.active_season() == f1_data.CURRENT_YEAR
+
+
+def test_set_reset_season_round_trip():
+    assert f1_data.active_season() == f1_data.CURRENT_YEAR
+    token = f1_data.set_season(2024)
+    assert f1_data.active_season() == 2024
+    f1_data.reset_season(token)
+    assert f1_data.active_season() == f1_data.CURRENT_YEAR
+
+
+def test_set_season_nesting_restores_exact_prior():
+    t1 = f1_data.set_season(2023)
+    assert f1_data.active_season() == 2023
+    t2 = f1_data.set_season(2025)
+    assert f1_data.active_season() == 2025
+    f1_data.reset_season(t2)
+    assert f1_data.active_season() == 2023
+    f1_data.reset_season(t1)
+    assert f1_data.active_season() == f1_data.CURRENT_YEAR
+
+
+def test_use_season_context_manager():
+    with f1_data.use_season(2022):
+        assert f1_data.active_season() == 2022
+    assert f1_data.active_season() == f1_data.CURRENT_YEAR
+
+
+def test_season_min_constant():
+    assert f1_data.SEASON_MIN == 2018
