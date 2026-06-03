@@ -55,3 +55,51 @@ def test_poll_skips_already_ingested_without_probing_or_fetching():
     assert probed == []  # never fetched — DB short-circuit
     assert out["skipped"] == len(pcp.CANDIDATE_SESSIONS)
     assert out["new_articles"] == 0
+
+
+def test_event_names_for_year_current_uses_live_schedule(monkeypatch):
+    """Current year → the live app schedule (date-filtered), unchanged for cron."""
+    monkeypatch.setattr(pcp, "_scheduled_past_events", lambda y: ["Live GP"])
+    assert pcp._event_names_for_year(pcp.CURRENT_YEAR) == ["Live GP"]
+
+
+def test_event_names_for_year_historical_uses_fastf1(monkeypatch):
+    """Prior years → FastF1's full historical schedule (calendars differ by year)."""
+    import fastf1
+
+    class _Col:
+        def __init__(self, v):
+            self._v = v
+
+        def tolist(self):
+            return self._v
+
+    class _Sched:
+        def __init__(self, names):
+            self._names = names
+
+        def __getitem__(self, key):
+            return _Col(self._names)
+
+    monkeypatch.setattr(
+        fastf1, "get_event_schedule",
+        lambda year, **kw: _Sched(["Bahrain Grand Prix", "Saudi Arabian Grand Prix"]),
+        raising=False,
+    )
+    assert pcp._event_names_for_year(2024) == ["Bahrain Grand Prix", "Saudi Arabian Grand Prix"]
+
+
+def test_backfill_seasons_runs_per_year_and_aggregates(monkeypatch):
+    """backfill_seasons polls each year once and sums the counts."""
+    seen = []
+
+    def fake_poll(year=None, **kw):
+        seen.append(year)
+        return {"new_articles": 5, "skipped": 2, "errors": 0, "details": []}
+
+    monkeypatch.setattr(pcp, "poll_press_conferences", fake_poll)
+    out = pcp.backfill_seasons([2024, 2025])
+
+    assert seen == [2024, 2025]
+    assert out["new_articles"] == 10 and out["skipped"] == 4
+    assert out["by_year"][2024]["new_articles"] == 5

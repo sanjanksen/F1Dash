@@ -84,8 +84,8 @@ def _already_ingested(url: str) -> bool:
 
 
 def _scheduled_past_events(year: int) -> list[str]:
-    """Event names whose weekend has already started — only those can have
-    transcripts. Falls back to all events if dates are unavailable."""
+    """Current-season event names whose weekend has already started — only those
+    can have transcripts. Falls back to all events if dates are unavailable."""
     try:
         from f1_data import get_circuits
         circuits = get_circuits()
@@ -98,6 +98,27 @@ def _scheduled_past_events(year: int) -> list[str]:
         for c in circuits
         if c.get("event_name") and (c.get("date") or "9999-99-99") <= today
     ]
+
+
+def _historical_events(year: int) -> list[str]:
+    """Full event list for a past season via FastF1 (every event is in the past,
+    so no date filter needed). Testing events are excluded."""
+    try:
+        import fastf1
+        sched = fastf1.get_event_schedule(year, include_testing=False)
+        return [str(n).strip() for n in sched["EventName"].tolist() if str(n).strip()]
+    except Exception as e:
+        logger.warning("press-conf: FastF1 schedule for %d failed: %s", year, type(e).__name__)
+        return []
+
+
+def _event_names_for_year(year: int) -> list[str]:
+    """Event names to probe for a season. The current year uses the live app
+    schedule filtered to events that have started; prior years use FastF1's full
+    historical schedule."""
+    if year == CURRENT_YEAR:
+        return _scheduled_past_events(year)
+    return _historical_events(year)
 
 
 def poll_press_conferences(
@@ -116,7 +137,7 @@ def poll_press_conferences(
         ingest = ingest_url
     year = year or CURRENT_YEAR
     if event_names is None:
-        event_names = _scheduled_past_events(year)
+        event_names = _event_names_for_year(year)
 
     new_articles = skipped = errors = 0
     details: list[dict] = []
@@ -149,3 +170,19 @@ def poll_press_conferences(
         "errors": errors,
         "details": details,
     }
+
+
+def backfill_seasons(years: list[int], **kwargs) -> dict[str, Any]:
+    """One-off backfill across multiple (typically historical) seasons. Runs the
+    poller per year and aggregates counts. NOT used by the cron — the scheduled
+    job stays current-year only; this is for a deliberate manual backfill."""
+    totals: dict[str, Any] = {"new_articles": 0, "skipped": 0, "errors": 0, "by_year": {}}
+    for year in years:
+        out = poll_press_conferences(year=year, **kwargs)
+        totals["new_articles"] += out["new_articles"]
+        totals["skipped"] += out["skipped"]
+        totals["errors"] += out["errors"]
+        totals["by_year"][year] = {
+            k: out[k] for k in ("new_articles", "skipped", "errors")
+        }
+    return totals
