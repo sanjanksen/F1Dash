@@ -6,6 +6,7 @@ import contextlib
 import contextvars
 import numbers
 import math
+from collections import OrderedDict
 import fastf1
 import requests
 import pandas as pd
@@ -60,8 +61,25 @@ def use_season(year: int):
     finally:
         reset_season(token)
 
-_SESSION_CACHE: dict[tuple[int, int, str], dict] = {}
+_SESSION_CACHE: "OrderedDict[tuple[int, int, str], dict]" = OrderedDict()
 _SESSION_CACHE_LOCK = threading.Lock()
+_SESSION_CACHE_MAX = 24
+
+
+def _session_cache_get(key):
+    with _SESSION_CACHE_LOCK:
+        entry = _SESSION_CACHE.get(key)
+        if entry is not None:
+            _SESSION_CACHE.move_to_end(key)  # true LRU on read
+        return entry
+
+
+def _session_cache_put(key, value):
+    with _SESSION_CACHE_LOCK:
+        _SESSION_CACHE[key] = value
+        _SESSION_CACHE.move_to_end(key)
+        while len(_SESSION_CACHE) > _SESSION_CACHE_MAX:
+            _SESSION_CACHE.popitem(last=False)
 
 
 class FastF1Error(RuntimeError):
@@ -105,31 +123,31 @@ def _load_session(round_number: int, session_type: str, *,
                   weather: bool = False, messages: bool = False):
     _validate_session_availability(round_number, session_type, telemetry=telemetry or laps or messages)
     normalized_session = str(session_type).strip().upper()
-    cache_key = (CURRENT_YEAR, round_number, normalized_session)
+    season = active_season()
+    cache_key = (season, round_number, normalized_session)
 
-    with _SESSION_CACHE_LOCK:
-        entry = _SESSION_CACHE.get(cache_key)
-        newly_created = False
-        if entry is None:
-            try:
-                ff1_session = fastf1.get_session(CURRENT_YEAR, round_number, normalized_session)
-            except Exception as exc:
-                raise FastF1Error(
-                    f"FastF1 unavailable for round {round_number} session {session_type}",
-                    round_number=round_number,
-                    session_type=session_type,
-                    cause=exc,
-                ) from exc
-            entry = {
-                "session": ff1_session,
-                "laps": False,
-                "telemetry": False,
-                "weather": False,
-                "messages": False,
-                "lock": threading.Lock(),
-            }
-            _SESSION_CACHE[cache_key] = entry
-            newly_created = True
+    entry = _session_cache_get(cache_key)
+    newly_created = False
+    if entry is None:
+        try:
+            ff1_session = fastf1.get_session(season, round_number, normalized_session)
+        except Exception as exc:
+            raise FastF1Error(
+                f"FastF1 unavailable for round {round_number} session {session_type}",
+                round_number=round_number,
+                session_type=session_type,
+                cause=exc,
+            ) from exc
+        entry = {
+            "session": ff1_session,
+            "laps": False,
+            "telemetry": False,
+            "weather": False,
+            "messages": False,
+            "lock": threading.Lock(),
+        }
+        _session_cache_put(cache_key, entry)
+        newly_created = True
 
     session = entry["session"]
     entry_lock = entry["lock"]

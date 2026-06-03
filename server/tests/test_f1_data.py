@@ -5168,3 +5168,42 @@ def test_use_season_context_manager():
 
 def test_season_min_constant():
     assert f1_data.SEASON_MIN == 2018
+
+
+# --- Per-season session cache + LRU (Plan A2) ---
+
+def test_load_session_uses_active_season():
+    mock_session = MagicMock()
+    with patch('f1_data._validate_session_availability'), \
+         patch('f1_data.fastf1.get_session', return_value=mock_session) as get_session_mock:
+        f1_data._clear_session_cache()
+        with f1_data.use_season(2024):
+            f1_data._load_session(1, 'R')
+    assert get_session_mock.call_args.args[0] == 2024
+
+
+def test_session_cache_true_lru_eviction(monkeypatch):
+    monkeypatch.setattr(f1_data, "_SESSION_CACHE_MAX", 3)
+    f1_data._clear_session_cache()
+    sessions = {}
+
+    def fake_get_session(year, rnd, sess):
+        m = MagicMock()
+        sessions[(year, rnd)] = m
+        return m
+
+    with patch('f1_data._validate_session_availability'), \
+         patch('f1_data.fastf1.get_session', side_effect=fake_get_session):
+        # Insert 3 distinct keys (rounds 1, 2, 3)
+        f1_data._load_session(1, 'R')
+        f1_data._load_session(2, 'R')
+        f1_data._load_session(3, 'R')
+        # Read key #1 (round 1) -> moves it to most-recently-used
+        f1_data._load_session(1, 'R')
+        # Insert a 4th key -> key #2 (round 2, least recently USED) is evicted
+        f1_data._load_session(4, 'R')
+
+    keys = {k[1] for k in f1_data._SESSION_CACHE.keys()}  # round numbers present
+    assert 2 not in keys, "round 2 should have been evicted (true LRU)"
+    assert 1 in keys, "round 1 was read recently and must survive"
+    assert 3 in keys and 4 in keys
