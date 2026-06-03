@@ -1318,10 +1318,11 @@ def _resolve_team(team_name: str) -> str | None:
     return None
 
 
-def get_drivers() -> list[dict]:
-    """Return all drivers in the current season with championship standings."""
+def get_drivers(year: int | None = None) -> list[dict]:
+    """Return all drivers in the given (or active) season with standings."""
+    season = year or active_season()
     resp = requests.get(
-        f"{JOLPICA_BASE}/{active_season()}/driverStandings.json?limit=30",
+        f"{JOLPICA_BASE}/{season}/driverStandings.json?limit=30",
         timeout=15,
     )
     resp.raise_for_status()
@@ -1375,9 +1376,9 @@ def get_driver_stats(driver_name: str) -> dict | None:
     }
 
 
-def get_circuits() -> list[dict]:
-    """Return the full season race schedule."""
-    schedule = fastf1.get_event_schedule(active_season(), include_testing=False)
+def get_circuits(year: int | None = None) -> list[dict]:
+    """Return the full season race schedule for the given (or active) season."""
+    schedule = fastf1.get_event_schedule(year or active_season(), include_testing=False)
     circuits = []
     for _, event in schedule.iterrows():
         circuits.append({

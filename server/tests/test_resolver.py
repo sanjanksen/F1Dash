@@ -535,8 +535,7 @@ def _capture_llm_system_prompt(message: str = "What did Lando do?") -> str:
     import circuits_cache
     resolver._drivers_cache = []
     resolver._drivers_cache_time = 0.0
-    circuits_cache._circuits_cache = []
-    circuits_cache._circuits_cache_time = 0.0
+    circuits_cache.clear_circuits_cache()
     captured = {}
 
     def _capture(**kwargs):
@@ -661,12 +660,11 @@ def test_sprint_quali_comparison_uses_sq_analysis(mock_circuits, mock_drivers, m
 
 def test_circuits_cache_ttl(monkeypatch):
     import circuits_cache
-    circuits_cache._circuits_cache = []
-    circuits_cache._circuits_cache_time = 0.0
+    circuits_cache.clear_circuits_cache()
 
     call_count = {"n": 0}
 
-    def fake_get_circuits():
+    def fake_get_circuits(year=None):
         call_count["n"] += 1
         return [{"round": call_count["n"], "event_name": f"Event {call_count['n']}", "country": "Test"}]
 
@@ -691,8 +689,7 @@ def test_circuits_cache_ttl(monkeypatch):
     assert call_count["n"] == 2
     assert third[0]["round"] == 2
 
-    circuits_cache._circuits_cache = []
-    circuits_cache._circuits_cache_time = 0.0
+    circuits_cache.clear_circuits_cache()
 
 
 class TestHasReferenceLanguage:

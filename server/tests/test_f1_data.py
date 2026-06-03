@@ -5241,3 +5241,65 @@ def test_no_stray_current_year_fetch(fname, rule):
         ):
             bad.append(i)
     assert not bad, f"{fname}: un-converted season fetch at {bad}"
+
+
+# --- get_circuits/get_drivers accept explicit year (Plan A4) ---
+
+def test_get_circuits_year_arg_overrides_active_season():
+    sched = MagicMock()
+    sched.iterrows.return_value = iter([])
+    with patch('f1_data.fastf1.get_event_schedule', return_value=sched) as m:
+        f1_data.get_circuits(2024)
+    assert m.call_args.args[0] == 2024
+
+
+def test_get_circuits_defaults_to_active_season():
+    sched = MagicMock()
+    sched.iterrows.return_value = iter([])
+    with patch('f1_data.fastf1.get_event_schedule', return_value=sched) as m:
+        with f1_data.use_season(2022):
+            f1_data.get_circuits()
+    assert m.call_args.args[0] == 2022
+
+
+def test_get_drivers_year_arg_overrides_active_season():
+    resp = MagicMock()
+    resp.json.return_value = {"MRData": {"StandingsTable": {"StandingsLists": []}}}
+    with patch('f1_data.requests.get', return_value=resp) as m:
+        f1_data.get_drivers(2023)
+    assert "/2023/" in m.call_args.args[0]
+
+
+# --- Season-keyed circuits cache + resolve_round (Plan A4) ---
+
+def test_cached_circuits_keyed_by_year():
+    import circuits_cache
+    circuits_cache.clear_circuits_cache()
+
+    def fake_get_circuits(year=None):
+        return [{"round": 1, "country": f"Country{year}", "event_name": "GP"}]
+
+    with patch('circuits_cache.get_circuits', fake_get_circuits):
+        c24 = circuits_cache._cached_circuits(2024)
+        c26 = circuits_cache._cached_circuits(2026)
+    assert c24 != c26
+    assert c24[0]["country"] == "Country2024"
+    assert c26[0]["country"] == "Country2026"
+
+
+def test_resolve_round_uses_year_schedule():
+    import circuits_cache
+    circuits_cache.clear_circuits_cache()
+
+    schedules = {
+        2024: [{"round": 8, "country": "Monaco", "event_name": "Monaco Grand Prix"}],
+        2026: [{"round": 6, "country": "Monaco", "event_name": "Monaco Grand Prix"}],
+    }
+
+    def fake_get_circuits(year=None):
+        return schedules[year]
+
+    with patch('circuits_cache.get_circuits', fake_get_circuits):
+        assert circuits_cache.resolve_round(2024, country="Monaco") == 8
+        assert circuits_cache.resolve_round(2026, country="Monaco") == 6
+        assert circuits_cache.resolve_round(2024, event_name="Monaco") == 8

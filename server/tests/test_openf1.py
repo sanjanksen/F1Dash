@@ -12,8 +12,7 @@ class FakeHTTPError(Exception):
 @patch("circuits_cache.get_circuits")
 @patch("openf1._openf1_get")
 def test_resolve_openf1_session(mock_openf1_get, mock_get_circuits):
-    circuits_cache._circuits_cache = []
-    circuits_cache._circuits_cache_time = 0.0
+    circuits_cache.clear_circuits_cache()
     mock_get_circuits.return_value = [
         {"round": 3, "event_name": "Japanese Grand Prix", "country": "Japan"},
     ]
@@ -109,8 +108,7 @@ def test_get_intervals(mock_resolve_session, mock_openf1_get):
 @patch('openf1._openf1_get')
 @patch('circuits_cache.get_circuits')
 def test_resolve_openf1_session_caches_schedule(mock_get_circuits, mock_openf1_get):
-    circuits_cache._circuits_cache = []
-    circuits_cache._circuits_cache_time = 0.0
+    circuits_cache.clear_circuits_cache()
     mock_get_circuits.return_value = [{"round": 3, "event_name": "Japanese Grand Prix", "country": "Japan"}]
     mock_openf1_get.return_value = [{"session_key": 321, "date_start": "2026-04-05T00:00:00"}]
 

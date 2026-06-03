@@ -23,13 +23,11 @@ def reset_resolver_caches():
     """Reset resolver module-level caches before each test to prevent leakage."""
     import resolver
     import circuits_cache
-    circuits_cache._circuits_cache = []
-    circuits_cache._circuits_cache_time = 0.0
+    circuits_cache.clear_circuits_cache()
     resolver._drivers_cache = []
     resolver._drivers_cache_time = 0.0
     yield
-    circuits_cache._circuits_cache = []
-    circuits_cache._circuits_cache_time = 0.0
+    circuits_cache.clear_circuits_cache()
     resolver._drivers_cache = []
     resolver._drivers_cache_time = 0.0
 
